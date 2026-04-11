@@ -90,12 +90,60 @@
     <p>Changelog for the RAPP Brainstem project.</p>
   </div>
 
+  <!-- ── v0.6.0 ── -->
+  <div class="release">
+    <div class="release-header">
+      <span class="release-version">v0.6.0</span>
+      <span class="release-date">April 11, 2026</span>
+      <span class="release-tag">Latest</span>
+    </div>
+    <div class="release-body">
+
+      <div class="highlight">
+        Account switching, auth reliability, and diagnostics privacy. You can now switch GitHub accounts without restarting, and the login flow handles wrong-account scenarios gracefully instead of hanging forever.
+      </div>
+
+      <h3>🔄 Account Switcher</h3>
+      <ul>
+        <li>New <strong>Switch Account</strong> option in the header — change GitHub accounts without restarting the server.</li>
+        <li>Clears all cached tokens (GitHub, Copilot, disk) and starts a fresh device code flow immediately.</li>
+      </ul>
+
+      <h3>🔐 Auth Race Condition Fix</h3>
+      <ul>
+        <li>Fixed: signing in with a non-Copilot account then switching to the correct account left the UI stuck on "Waiting for authorization..." forever.</li>
+        <li>Root cause: background poll thread and client poll raced to call <code>poll_device_code()</code>. Now uses a single-writer pattern — the bg thread is the sole caller, the client reads a shared result.</li>
+        <li><code>NO_COPILOT_ACCESS</code> errors now surface in the UI with the username and links to <strong>Switch Account</strong> or <strong>Sign up for Copilot</strong>.</li>
+        <li>Client-side poll now times out after 15 minutes (matching GitHub's device code expiry) instead of polling forever.</li>
+        <li>Stale Copilot session cache is cleared when starting a new login flow.</li>
+      </ul>
+
+      <h3>🏷️ Version in Header</h3>
+      <ul>
+        <li>The brainstem version now displays in the chat UI header — no more guessing which version you're running.</li>
+      </ul>
+
+      <h3>🔒 Diagnostics Privacy</h3>
+      <ul>
+        <li>The <strong>Get Help</strong> report now scrubs <code>user_code</code>, <code>device_code</code>, and <code>session_id</code> from diagnostics before publishing to GitHub issues.</li>
+      </ul>
+
+      <h3>🔧 Other Fixes</h3>
+      <ul>
+        <li>Friendly error message when GitHub API quota is exceeded.</li>
+        <li>Installer handles force-push divergence and kills existing server on port 7071 before starting.</li>
+        <li>400 error fallback and <code>gh</code> CLI issue creation when API token lacks repo scope.</li>
+        <li>Better error telemetry throughout the auth and diagnostics pipeline.</li>
+      </ul>
+
+    </div>
+  </div>
+
   <!-- ── v0.1.0 ── -->
   <div class="release">
     <div class="release-header">
       <span class="release-version">v0.1.0</span>
       <span class="release-date">March 5, 2026</span>
-      <span class="release-tag">Latest</span>
     </div>
     <div class="release-body">
 
