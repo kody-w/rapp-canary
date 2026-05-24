@@ -395,7 +395,9 @@
 
   /* ── Agent settings panel ── */
   .agents-wrapper { position: relative; }
-  #agents-panel {
+  .registry-wrapper { position: relative; }
+  #agents-panel,
+  #registry-panel {
     display: none;
     position: absolute; top: 100%; right: 0; margin-top: 6px;
     background: #161b22; border: 1px solid #30363d; border-radius: 10px;
@@ -404,8 +406,10 @@
     font-size: 13px;
     max-height: 400px; overflow-y: auto; overflow-x: hidden;
   }
-  #agents-panel.open { display: block; }
-  #agents-panel h3 {
+  #agents-panel.open,
+  #registry-panel.open { display: block; }
+  #agents-panel h3,
+  #registry-panel h3 {
     font-size: 13px; font-weight: 600; margin-bottom: 12px;
     display: flex; align-items: center; justify-content: space-between;
   }
@@ -469,7 +473,37 @@
   .rar-add-btn:hover { background: #2ea043; }
   .rar-add-btn:disabled { opacity: 0.6; cursor: default; }
   .rar-add-btn.added { background: transparent; color: #3fb950; border-color: #238636; }
-  
+  .rar-browse-all {
+    display: block; width: 100%; margin-top: 10px;
+    background: transparent; color: #58a6ff; border: 1px solid #30363d;
+    border-radius: 6px; padding: 7px; font-size: 11px; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .rar-browse-all:hover { border-color: #58a6ff; background: rgba(88,166,255,0.08); }
+  /* Featured group chips — single row you slide through horizontally */
+  .rar-groups {
+    display: flex; flex-wrap: nowrap; gap: 6px; margin: 8px 0 2px;
+    overflow-x: auto; overflow-y: hidden; padding-bottom: 6px;
+    scrollbar-width: thin; scrollbar-color: #30363d transparent;
+    -webkit-overflow-scrolling: touch;
+  }
+  .rar-groups::-webkit-scrollbar { height: 6px; }
+  .rar-groups::-webkit-scrollbar-thumb { background: #30363d; border-radius: 999px; }
+  .rar-groups::-webkit-scrollbar-track { background: transparent; }
+  .rar-group-chip {
+    flex: 0 0 auto; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #1c2128; color: #c9d1d9; border: 1px solid #30363d;
+    border-radius: 999px; padding: 5px 11px; font-size: 11.5px; line-height: 1;
+    cursor: pointer; transition: background 0.12s, border-color 0.12s, color 0.12s;
+  }
+  .rar-group-chip:hover { background: #21262d; border-color: #444c56; color: #e6edf3; }
+  .rar-group-chip.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  .rar-group-count { color: #6e7681; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  .rar-group-chip:hover .rar-group-count { color: #8b949e; }
+  .rar-group-chip.active .rar-group-count { color: rgba(255,255,255,0.7); }
+  .rar-group:not(:empty) { margin-top: 8px; }
+
   /* ── Drag & Drop Overlay ── */
   #drop-overlay {
     display: none; position: fixed; inset: 0;
@@ -542,6 +576,24 @@
     background: #f6f8fa;
     border: 1px solid #d0d7de;
   }
+  body.light-mode .msg.assistant .bubble th,
+  body.light-mode .msg.assistant .bubble td {
+    border-color: #d0d7de;
+  }
+  body.light-mode .msg.assistant .bubble th {
+    background: #eaeef2; color: #24292e;
+  }
+  body.light-mode .msg.assistant .bubble tr:nth-child(even) {
+    background: #eef1f4;
+  }
+  /* Agent activity box — light theme */
+  body.light-mode .agent-logs-wrapper { border-color: #d0d7de; }
+  body.light-mode .logs-label { background: #f6f8fa; color: #57606a; }
+  body.light-mode .logs-label:hover { background: #eaeef2; color: #24292e; }
+  body.light-mode .logs-label .agent-name { color: #8250df; }
+  body.light-mode .agent-logs {
+    background: #f6f8fa; color: #1a7f37; border-top-color: #d0d7de;
+  }
   body.light-mode .msg.assistant .avatar {
     background: #f6f8fa;
     border-color: #d0d7de;
@@ -577,12 +629,14 @@
   body.light-mode .model-notice {
     background: #f6f8fa; border-color: #d0d7de; color: #57606a;
   }
-  body.light-mode #agents-panel {
+  body.light-mode #agents-panel,
+  body.light-mode #registry-panel {
     background: #ffffff;
     border-color: #d0d7de;
     box-shadow: 0 8px 24px rgba(0,0,0,0.15);
   }
-  body.light-mode #agents-panel h3 {
+  body.light-mode #agents-panel h3,
+  body.light-mode #registry-panel h3 {
     border-bottom-color: #d0d7de;
     color: #24292e;
   }
@@ -606,6 +660,16 @@
     background: #ffffff; color: #24292e; border-color: #d0d7de;
   }
   body.light-mode #rar-search-input:focus { border-color: #0969da; }
+  body.light-mode .rar-browse-all { color: #0969da; border-color: #d0d7de; }
+  body.light-mode .rar-browse-all:hover { border-color: #0969da; background: rgba(9,105,218,0.06); }
+  body.light-mode .rar-groups { scrollbar-color: #d0d7de transparent; }
+  body.light-mode .rar-groups::-webkit-scrollbar-thumb { background: #d0d7de; }
+  body.light-mode .rar-group-chip { background: #f6f8fa; color: #424a53; border-color: #d0d7de; }
+  body.light-mode .rar-group-chip:hover { background: #eef1f4; border-color: #afb8c1; color: #24292e; }
+  body.light-mode .rar-group-chip.active { background: #0969da; border-color: #0969da; color: #fff; }
+  body.light-mode .rar-group-count { color: #8c959f; }
+  body.light-mode .rar-group-chip:hover .rar-group-count { color: #57606a; }
+  body.light-mode .rar-group-chip.active .rar-group-count { color: rgba(255,255,255,0.8); }
   body.light-mode .rar-results:not(:empty) { border-bottom-color: #d0d7de; }
   body.light-mode .rar-item { border-color: #d0d7de; }
   body.light-mode .rar-name { color: #24292e; }
@@ -714,12 +778,29 @@
       <span class="icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58a.996.996 0 00-1.41 0 .996.996 0 000 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37a.996.996 0 00-1.41 0 .996.996 0 000 1.41l1.06 1.06c.39.39 1.03.39 1.41 0a.996.996 0 000-1.41l-1.06-1.06zm1.06-10.96a.996.996 0 000-1.41.996.996 0 00-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36a.996.996 0 000-1.41.996.996 0 00-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z"/></svg></span>
     </button>
 
-    <button class="icon-btn" onclick="exportBook()" title="Export diagnostics (book.json)">
-      <span class="icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/></svg></span>
-    </button>
-    
+    <div class="registry-wrapper">
+      <button class="icon-btn" id="registry-btn" onclick="toggleRegistryPanel()" title="Browse the RAR agent registry">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/></svg></span>
+      </button>
+      <div id="registry-panel">
+        <h3>
+          <span class="icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/></svg></span>
+          RAR Agent Registry
+        </h3>
+        <div class="rar-search">
+          <input id="rar-search-input" type="text" placeholder="Search the RAR agent registry…"
+                 oninput="rarSearch()" autocomplete="off" spellcheck="false">
+        </div>
+        <div id="rar-results" class="rar-results"></div>
+        <div id="rar-featured" class="rar-featured"></div>
+        <div style="font-size:10px; color:#8b949e; margin-top:12px; text-align:center;">
+          Add an agent here, then manage it from the Agents panel.
+        </div>
+      </div>
+    </div>
+
     <div class="agents-wrapper">
-      <button class="icon-btn" id="agents-btn" onclick="toggleAgentsPanel()" title="Manage Agents">
+      <button class="icon-btn" id="agents-btn" onclick="toggleAgentsPanel()" title="Manage installed agents">
         <span class="icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg></span>
       </button>
       <div id="agents-panel">
@@ -727,11 +808,6 @@
           <span class="icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg></span>
           Installed Agents
         </h3>
-        <div class="rar-search">
-          <input id="rar-search-input" type="text" placeholder="Search the RAR agent registry…"
-                 oninput="rarSearch()" autocomplete="off" spellcheck="false">
-        </div>
-        <div id="rar-results" class="rar-results"></div>
         <ul class="agent-list" id="agent-list-ul">
           <!-- Populated by JS -->
         </ul>
@@ -755,9 +831,9 @@
         </h3>
         <label for="voice-provider">Provider</label>
         <select id="voice-provider" onchange="switchVoiceProvider()">
+          <option value="browser">Browser (free)</option>
           <option value="azure">Azure Speech</option>
           <option value="elevenlabs">ElevenLabs</option>
-          <option value="browser">Browser (free)</option>
         </select>
         <div id="azure-fields">
           <label for="az-speech-key">Speech API Key</label>
@@ -1079,6 +1155,12 @@
   checkHealth();
   healthInterval = setInterval(checkHealth, 5000);
 
+  // Pull featured agents from the RAR registry on every load for discoverability.
+  // Deferred so it runs after this script fully initializes (loadRarRegistry
+  // touches `let`-scoped state declared further down — calling it inline would
+  // hit the temporal dead zone and abort the rest of the script).
+  setTimeout(loadFeatured, 0);
+
   // ── Drag & Drop Agents ──
   const dropOverlay = document.getElementById('drop-overlay');
 
@@ -1140,7 +1222,7 @@
     document.body.classList.add('light-mode');
   }
 
-  // ── Agents Panel ──
+  // ── Agents Panel (installed *_agent.py files) ──
   function toggleAgentsPanel() {
     const p = document.getElementById('agents-panel');
     const open = p.classList.toggle('open');
@@ -1149,6 +1231,23 @@
   document.addEventListener('click', (e) => {
     const p = document.getElementById('agents-panel');
     const b = document.getElementById('agents-btn');
+    if (p.classList.contains('open') && !p.contains(e.target) && !b.contains(e.target)) {
+      p.classList.remove('open');
+    }
+  });
+
+  // ── Registry Panel (browse + add agents from the RAR catalog) ──
+  function toggleRegistryPanel() {
+    const p = document.getElementById('registry-panel');
+    const open = p.classList.toggle('open');
+    if (open) {
+      loadRarRegistry();  // warm the cache so the first search is instant
+      document.getElementById('rar-search-input').focus();
+    }
+  }
+  document.addEventListener('click', (e) => {
+    const p = document.getElementById('registry-panel');
+    const b = document.getElementById('registry-btn');
     if (p.classList.contains('open') && !p.contains(e.target) && !b.contains(e.target)) {
       p.classList.remove('open');
     }
@@ -1238,12 +1337,23 @@
   let rarLoading = null;      // in-flight promise, to dedupe concurrent loads
   let rarSearchTimer = null;
 
+  // Only standalone *_agent.py files can be hot-loaded. The registry also carries
+  // stacks/swarms (bundles, no single .py) and stub/card entries (.py.stub, .py.card,
+  // or scope-prefixed @ filenames) — none of those import cleanly, so drop them here.
+  function isLoadableAgent(a) {
+    const base = (a && a._file ? a._file : '').split('/').pop();
+    return base.endsWith('_agent.py') && !base.startsWith('@');
+  }
+
   function loadRarRegistry() {
     if (rarRegistry) return Promise.resolve(rarRegistry);
     if (rarLoading) return rarLoading;
     rarLoading = fetch(`${RAR_BASE}/registry.json`)
       .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(data => { rarRegistry = Array.isArray(data.agents) ? data.agents : []; return rarRegistry; })
+      .then(data => {
+        rarRegistry = (Array.isArray(data.agents) ? data.agents : []).filter(isLoadableAgent);
+        return rarRegistry;
+      })
       .finally(() => { rarLoading = null; });
     return rarLoading;
   }
@@ -1256,6 +1366,9 @@
   function runRarSearch() {
     const q = document.getElementById('rar-search-input').value.trim().toLowerCase();
     const results = document.getElementById('rar-results');
+    const featured = document.getElementById('rar-featured');
+    // Featured agents are the empty-state browse view — hide them once a search starts.
+    if (featured) featured.style.display = q ? 'none' : '';
     if (!q) { results.innerHTML = ''; return; }
     results.innerHTML = '<div class="rar-status">Searching the RAR registry…</div>';
     loadRarRegistry().then(agents => {
@@ -1288,31 +1401,145 @@
       results.appendChild(none);
       return;
     }
-    for (const a of matches) {
-      const item = document.createElement('div');
-      item.className = 'rar-item';
+    for (const a of matches) results.appendChild(buildRarItem(a));
+  }
 
-      const meta = document.createElement('div');
-      meta.className = 'rar-meta';
-      const name = document.createElement('div');
-      name.className = 'rar-name';
-      name.textContent = a.display_name || a.name || (a._file || '').split('/').pop();
-      const desc = document.createElement('div');
-      desc.className = 'rar-desc';
-      desc.textContent = a.description || '';
-      meta.appendChild(name);
-      if (desc.textContent) meta.appendChild(desc);
+  // Shared row used by both search results and the featured list.
+  function buildRarItem(a) {
+    const item = document.createElement('div');
+    item.className = 'rar-item';
 
-      const btn = document.createElement('button');
-      btn.className = 'rar-add-btn';
-      btn.textContent = 'Add';
-      btn.title = a._file || '';
-      btn.onclick = () => installRarAgent(a, btn);
+    const meta = document.createElement('div');
+    meta.className = 'rar-meta';
+    const name = document.createElement('div');
+    name.className = 'rar-name';
+    name.textContent = a.display_name || a.name || (a._file || '').split('/').pop();
+    const desc = document.createElement('div');
+    desc.className = 'rar-desc';
+    desc.textContent = a.description || '';
+    meta.appendChild(name);
+    if (desc.textContent) meta.appendChild(desc);
 
-      item.appendChild(meta);
-      item.appendChild(btn);
-      results.appendChild(item);
+    const btn = document.createElement('button');
+    btn.className = 'rar-add-btn';
+    btn.textContent = 'Add';
+    btn.title = a._file || '';
+    btn.onclick = () => installRarAgent(a, btn);
+
+    item.appendChild(meta);
+    item.appendChild(btn);
+    return item;
+  }
+
+  // ── Featured groups (empty-state discoverability) ──
+  // All categories ranked by size. Used both for the featured chips and, on
+  // expand, the full set.
+  function groupCounts(agents) {
+    const counts = {};
+    for (const a of agents) {
+      const c = a.category || 'general';
+      counts[c] = (counts[c] || 0) + 1;
     }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);   // biggest first
+  }
+  // Drop the bottom-quartile categories — tiny groups make noisy chips and
+  // aren't useful for browsing a large catalog.
+  function pickFeaturedGroups(agents) {
+    const entries = groupCounts(agents);
+    const vals = entries.map(e => e[1]).slice().sort((x, y) => x - y);
+    const p25 = vals[Math.floor(vals.length * 0.25)];      // bottom-25% cutoff value
+    return entries.filter(([, n]) => n >= p25);
+  }
+
+  function loadFeatured() {
+    const box = document.getElementById('rar-featured');
+    if (!box) return;
+    box.innerHTML = '<div class="rar-status">Loading agents…</div>';
+    loadRarRegistry().then(agents => {
+      // Don't clobber an in-progress search.
+      if (document.getElementById('rar-search-input').value.trim()) { box.innerHTML = ''; return; }
+      renderFeatured(agents);
+    }).catch(() => {
+      box.innerHTML = '<div class="rar-status" style="color:#f85149">Could not load agents.</div>';
+    });
+  }
+
+  // Progressive disclosure: start with the biggest groups as chips. Click a chip
+  // to list its agents; expand to reveal every group plus the full agent list.
+  function renderFeatured(agents) {
+    const box = document.getElementById('rar-featured');
+    box.innerHTML = '';
+
+    const label = document.createElement('div');
+    label.className = 'rar-section-label';
+    label.textContent = 'Browse by group';
+    box.appendChild(label);
+
+    const chips = document.createElement('div');
+    chips.className = 'rar-groups';
+    const list = document.createElement('div');     // single content region below the chips
+    list.className = 'rar-group';
+    const toggle = document.createElement('button');
+    toggle.className = 'rar-browse-all';
+
+    const renderAgents = (items, heading) => {
+      list.innerHTML = '';
+      const lbl = document.createElement('div');
+      lbl.className = 'rar-section-label';
+      lbl.textContent = heading;
+      list.appendChild(lbl);
+      const sorted = items.slice().sort((a, b) =>
+        (a.display_name || a.name || '').localeCompare(b.display_name || b.name || ''));
+      for (const a of sorted) list.appendChild(buildRarItem(a));
+    };
+
+    const makeChip = (cat, n) => {
+      const chip = document.createElement('button');
+      chip.className = 'rar-group-chip';
+      const nameEl = document.createElement('span');
+      nameEl.textContent = cat.replace(/_/g, ' ');
+      const countEl = document.createElement('span');
+      countEl.className = 'rar-group-count';
+      countEl.textContent = n;
+      chip.append(nameEl, countEl);
+      chip.onclick = () => {
+        const wasActive = chip.classList.contains('active');
+        chips.querySelectorAll('.rar-group-chip.active').forEach(c => c.classList.remove('active'));
+        if (wasActive) { list.innerHTML = ''; return; }   // toggle off → back to chips only
+        chip.classList.add('active');
+        renderAgents(agents.filter(a => (a.category || 'general') === cat),
+                     `${cat.replace(/_/g, ' ')} — ${n} agent${n === 1 ? '' : 's'}`);
+      };
+      return chip;
+    };
+
+    const featured = pickFeaturedGroups(agents);
+    const featuredCats = new Set(featured.map(e => e[0]));
+    for (const [cat, n] of featured) chips.appendChild(makeChip(cat, n));
+
+    // Long-tail categories, revealed only when expanded.
+    const rest = groupCounts(agents).filter(([c]) => !featuredCats.has(c));
+
+    let expanded = false;
+    const sync = () => { toggle.textContent = expanded ? 'Show less ▴' : `Browse all ${agents.length} agents ▾`; };
+    toggle.onclick = () => {
+      if (!expanded) {
+        // Reveal every remaining group, then list all agents below.
+        for (const [cat, n] of rest) chips.appendChild(makeChip(cat, n));
+        chips.querySelectorAll('.rar-group-chip.active').forEach(c => c.classList.remove('active'));
+        renderAgents(agents, `All agents — ${agents.length}`);
+        expanded = true;
+      } else {
+        chips.querySelectorAll('.rar-group-chip').forEach((c, i) => { if (i >= featured.length) c.remove(); });
+        chips.querySelectorAll('.rar-group-chip.active').forEach(c => c.classList.remove('active'));
+        list.innerHTML = '';
+        expanded = false;
+      }
+      sync();
+    };
+    sync();
+
+    box.append(chips, list, toggle);
   }
 
   async function installRarAgent(agent, btn) {
@@ -1523,8 +1750,12 @@
     if (logs) {
       const wrapper = document.createElement('div');
       wrapper.className = 'agent-logs-wrapper';
-      // Extract agent names from log lines like "[AgentName] result"
-      const agentNames = [...new Set((logs.match(/\[([^\]]+)\]/g) || []).map(m => m.slice(1, -1)))];
+      // Extract agent names from log lines like "[AgentName] result". Anchor to the
+      // start of a line so brackets inside the JSON result (e.g. a "stories": [...]
+      // array) aren't mistaken for agent names and dumped into the label.
+      const agentNames = [...new Set(
+        [...logs.matchAll(/^\s*\[([^\]\n]+)\]/gm)].map(m => m[1].trim())
+      )];
       const label = document.createElement('div');
       label.className = 'logs-label';
       const nameSpan = agentNames.length > 0
@@ -1673,7 +1904,7 @@
 
   // ── Voice (Azure Speech + ElevenLabs + browser fallback) ──
   let voiceMode = false;
-  let voiceProvider = localStorage.getItem('voice_provider') || 'azure';
+  let voiceProvider = localStorage.getItem('voice_provider') || 'browser';
 
   // Azure Speech state
   let azSpeechKey = localStorage.getItem('az_speech_key') || '';
@@ -1693,10 +1924,7 @@
   document.getElementById('az-speech-region').value = azSpeechRegion;
   document.getElementById('el-api-key').value = elApiKey;
   document.getElementById('el-model-select').value = elModel;
-  switchVoiceProvider();
-
-  if (azSpeechKey) loadAzureVoices();
-  if (elApiKey) loadElevenLabsVoices();
+  switchVoiceProvider();   // also loads voices for the active provider only
 
   // Auto-load config from server-side voice.zip (seeds UI if no localStorage yet)
   fetch(`${API}/voice/config`).then(r => r.json()).then(cfg => {
@@ -1737,9 +1965,7 @@
       document.getElementById('el-model-select').value = cfg.model;
       localStorage.setItem('el_model', cfg.model);
     }
-    switchVoiceProvider();
-    if (azSpeechKey) loadAzureVoices();
-    if (elApiKey) loadElevenLabsVoices();
+    switchVoiceProvider();   // loads voices for the active provider only
   }).catch(() => {});
 
   document.getElementById('az-speech-key').addEventListener('change', () => {
@@ -1755,6 +1981,10 @@
     const p = document.getElementById('voice-provider').value;
     document.getElementById('azure-fields').style.display = p === 'azure' ? 'block' : 'none';
     document.getElementById('elevenlabs-fields').style.display = p === 'elevenlabs' ? 'block' : 'none';
+    // Only fetch a provider's voice list when it's actually selected — otherwise a
+    // stale Azure/ElevenLabs key triggers a needless (and 401-prone) request on load.
+    if (p === 'azure' && azSpeechKey) loadAzureVoices();
+    else if (p === 'elevenlabs' && elApiKey) loadElevenLabsVoices();
   }
 
   function toggleVoicePanel() {
