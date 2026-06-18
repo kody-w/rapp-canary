@@ -1678,13 +1678,26 @@
       const d = await r.json();
       const sel = document.getElementById('model-select');
       sel.innerHTML = '';
+      const ids = [];
       (d.models || []).forEach(m => {
         const opt = document.createElement('option');
         opt.value = m.id; opt.textContent = m.name;
         if (m.id === d.current) opt.selected = true;
         sel.appendChild(opt);
+        ids.push(m.id);
       });
       modelsLoaded = true;
+      // Restore the model this browser last picked, across server restarts.
+      // /chat uses the server-global model, so re-sync the server (not just the dropdown).
+      const saved = localStorage.getItem('bs_model');
+      if (saved && ids.includes(saved) && saved !== d.current) {
+        sel.value = saved;
+        fetch(`${API}/models/set`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: saved })
+        }).catch(() => {});
+      }
     } catch {}
   }
 
@@ -1697,7 +1710,7 @@
       });
       const d = await r.json();
       if (d.error) alert(d.error);
-      else appendModelNotice(modelId);
+      else { localStorage.setItem('bs_model', modelId); appendModelNotice(modelId); }
     } catch (e) { alert('Failed to switch model: ' + e.message); }
   }
 
