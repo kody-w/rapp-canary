@@ -3,6 +3,7 @@
 .copilot_session
 .copilot_pending
 .brainstem_book.json
+.brainstem_model
 .env
 
 # Python

@@ -74,5 +74,5 @@ The `agents/experimental/` subdirectory exists for agents that should not be aut
 
 Configuration via `.env` (auto-created from `.env.example` by `start.sh`):
 - `GITHUB_TOKEN` — auto-detected from `gh` CLI if blank
-- `GITHUB_MODEL` — default `gpt-4o`, switchable at runtime via `/models/set`
+- `GITHUB_MODEL` — default `auto` (auto-selects the highest Claude Sonnet the account can use, else `gpt-4o`); or pin a specific id. A UI pick is persisted to `.brainstem_model` and overrides this. Switchable at runtime via `/models/set` (`auto` re-selects)
 - `SOUL_PATH`, `AGENTS_PATH`, `PORT`, `VOICE_MODE`

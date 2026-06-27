@@ -87,6 +87,6 @@ Each tier is self-contained. Users advance when they choose to.
 
 - **Python 3.11** target; venv at `~/.brainstem/venv`
 - **No API keys** for local dev — GitHub Copilot token exchange handles auth
-- **Config via `.env`** in `rapp_brainstem/` — `GITHUB_TOKEN`, `GITHUB_MODEL` (default `gpt-4o`), `SOUL_PATH`, `AGENTS_PATH`, `PORT` (default 7071)
+- **Config via `.env`** in `rapp_brainstem/` — `GITHUB_TOKEN`, `GITHUB_MODEL` (default `auto` — auto-selects the highest Claude Sonnet the account can use, else `gpt-4o`; UI picks persist to `.brainstem_model`), `SOUL_PATH`, `AGENTS_PATH`, `PORT` (default 7071)
 - Two install paths exist and must never cross-contaminate: brainstem (`install.sh`) and hippocampus (`community_rapp/install.sh`)
 - The landing page (`index.html`) and `docs/` are static HTML — no build step

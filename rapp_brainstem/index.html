@@ -1678,26 +1678,23 @@
       const d = await r.json();
       const sel = document.getElementById('model-select');
       sel.innerHTML = '';
-      const ids = [];
+      // "Auto" re-selects the highest Claude Sonnet the account can use and
+      // forgets any remembered manual pick.
+      const autoOpt = document.createElement('option');
+      autoOpt.value = 'auto';
+      autoOpt.textContent = 'Auto — highest Sonnet';
+      sel.appendChild(autoOpt);
       (d.models || []).forEach(m => {
         const opt = document.createElement('option');
-        opt.value = m.id; opt.textContent = m.name;
+        opt.value = m.id;
+        opt.textContent = m.available === false ? `${m.name} (not enabled)` : m.name;
         if (m.id === d.current) opt.selected = true;
         sel.appendChild(opt);
-        ids.push(m.id);
       });
       modelsLoaded = true;
-      // Restore the model this browser last picked, across server restarts.
-      // /chat uses the server-global model, so re-sync the server (not just the dropdown).
-      const saved = localStorage.getItem('bs_model');
-      if (saved && ids.includes(saved) && saved !== d.current) {
-        sel.value = saved;
-        fetch(`${API}/models/set`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: saved })
-        }).catch(() => {});
-      }
+      // The server persists the active model (a sticky pick, or the auto-selected
+      // Sonnet), so it is the source of truth — just mirror it locally.
+      if (d.current) localStorage.setItem('bs_model', d.current);
     } catch {}
   }
 
@@ -1709,8 +1706,17 @@
         body: JSON.stringify({ model: modelId })
       });
       const d = await r.json();
-      if (d.error) alert(d.error);
-      else { localStorage.setItem('bs_model', modelId); appendModelNotice(modelId); }
+      if (d.error) { alert(d.error); return; }
+      if (modelId === 'auto') {
+        // Server cleared the sticky pick and chose the best Sonnet; reflect it.
+        localStorage.removeItem('bs_model');
+        const sel = document.getElementById('model-select');
+        if (sel && d.model) sel.value = d.model;
+        if (d.model) appendModelNotice(d.model);
+      } else {
+        localStorage.setItem('bs_model', modelId);
+        appendModelNotice(modelId);
+      }
     } catch (e) { alert('Failed to switch model: ' + e.message); }
   }
 
