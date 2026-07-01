@@ -31,15 +31,40 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 
+# Banner/log lines contain emoji and em-dashes. On Windows a cp1252 console (or any
+# redirected/piped stdout) raises UnicodeEncodeError on the first such print and takes
+# the server down at startup. Re-encode stdout/stderr as UTF-8, replacing anything the
+# target can't represent, so a print can never crash the process. No-op where already
+# UTF-8 or where the stream predates reconfigure().
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 load_dotenv()
 
-app = Flask(__name__, static_folder=os.path.dirname(os.path.abspath(__file__)))
+# No static route: Flask's default static handler would otherwise serve the whole
+# brainstem directory (including .env with GITHUB_TOKEN, .copilot_token, etc.) over
+# the network at /<dirname>/<file>. index.html is served explicitly by the / route.
+app = Flask(__name__, static_folder=None)
 CORS(app)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-SOUL_PATH   = os.getenv("SOUL_PATH",   os.path.join(os.path.dirname(__file__), "soul.md"))
-AGENTS_PATH = os.getenv("AGENTS_PATH", os.path.join(os.path.dirname(__file__), "agents"))
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _resolve_under_base(value, default_name):
+    """Resolve a SOUL_PATH/AGENTS_PATH setting. A relative value (the shipped
+    .env.example uses ./soul.md, ./agents) resolves against the brainstem dir, not
+    the current working directory — so the server finds its soul and agents no matter
+    where it's launched from (CLI wrapper, cron, a different cwd)."""
+    if not value:
+        return os.path.join(_BASE_DIR, default_name)
+    return value if os.path.isabs(value) else os.path.join(_BASE_DIR, value)
+
+SOUL_PATH   = _resolve_under_base(os.getenv("SOUL_PATH"),   "soul.md")
+AGENTS_PATH = _resolve_under_base(os.getenv("AGENTS_PATH"), "agents")
 # Model selection precedence (see _auto_select_default_model below):
 #   1. .brainstem_model — a model picked in the UI, persisted across restarts
 #   2. GITHUB_MODEL pinned to a specific id (anything other than "auto")
@@ -49,7 +74,13 @@ MODEL_ENV    = (os.getenv("GITHUB_MODEL") or "").strip()
 MODEL_PINNED = bool(MODEL_ENV) and MODEL_ENV.lower() != "auto"
 MODEL        = MODEL_ENV if MODEL_PINNED else "gpt-4o"  # provisional; resolved below
 _SAFETY_NET_MODEL = "gpt-4o"
-PORT        = int(os.getenv("PORT", 7071))
+# A blank PORT= in .env yields "" — int("") raises at import and the server never
+# starts. Fall back to the default for anything non-numeric.
+try:
+    PORT = int((os.getenv("PORT") or "7071").strip())
+except ValueError:
+    print("[brainstem] Invalid PORT in environment — using default 7071")
+    PORT = 7071
 VOICE_MODE  = os.getenv("VOICE_MODE", "false").lower() == "true"
 VOICE_ZIP_PW = os.getenv("VOICE_ZIP_PASSWORD", "").encode() or None
 
@@ -57,6 +88,30 @@ _version_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSIO
 VERSION = open(_version_file, encoding="utf-8").read().strip() if os.path.exists(_version_file) else "0.0.0"
 
 COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
+
+
+def _atomic_write_json(path, data):
+    """Write JSON to `path` atomically: serialize to a temp file in the same
+    directory, then os.replace() it into place. A crash or concurrent reader never
+    sees a half-written file, so state files (tokens, caches, memories) can't be
+    truncated into corruption. os.replace is atomic on both POSIX and Windows.
+    Raises on failure so callers can decide how loud to be."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        # If os.replace succeeded the temp is gone; this only cleans up on failure.
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 AVAILABLE_MODELS = [
     {"id": "gpt-4.1",         "name": "GPT-4.1"},
@@ -92,8 +147,7 @@ def _load_sticky_model():
 def _save_sticky_model(model_id):
     """Persist a manual model choice so it stays the default across restarts."""
     try:
-        with open(_model_file, "w", encoding="utf-8") as f:
-            json.dump({"model": model_id}, f)
+        _atomic_write_json(_model_file, {"model": model_id})
     except Exception as e:
         print(f"[brainstem] Could not persist model choice: {e}")
 
@@ -356,8 +410,7 @@ def _tlog_save():
     try:
         with _flight_log_lock:
             snapshot = list(_flight_log)
-        with open(_flight_log_file, "w", encoding="utf-8") as f:
-            json.dump(snapshot, f)
+        _atomic_write_json(_flight_log_file, snapshot)
     except Exception:
         pass
 
@@ -428,14 +481,22 @@ def get_github_token():
     try:
         env = os.environ.copy()
         if sys.platform == "win32":
-            machine = os.environ.get("Path", "")
+            # gh may have been installed into a PATH entry that this long-running
+            # process didn't inherit. Rebuild PATH from the registry, but: (1) EXPAND
+            # REG_EXPAND_SZ values — raw reads return literal %SystemRoot%/%USERPROFILE%
+            # that resolve to nothing, dropping the WindowsApps dir where user-scope gh
+            # shims live; (2) APPEND to the current PATH instead of replacing it, so a
+            # session-prepended gh still resolves; (3) collapse to a single case variant
+            # so subprocess reads a deterministic value.
             try:
                 import winreg
+                parts = [os.environ.get("Path") or os.environ.get("PATH") or ""]
                 with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment") as key:
-                    machine = winreg.QueryValueEx(key, "Path")[0]
+                    parts.append(winreg.ExpandEnvironmentStrings(winreg.QueryValueEx(key, "Path")[0]))
                 with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
-                    user = winreg.QueryValueEx(key, "Path")[0]
-                env["Path"] = machine + ";" + user
+                    parts.append(winreg.ExpandEnvironmentStrings(winreg.QueryValueEx(key, "Path")[0]))
+                env.pop("PATH", None)
+                env["Path"] = ";".join(p for p in parts if p)
             except Exception:
                 pass
         result = subprocess.run(
@@ -460,8 +521,7 @@ def save_github_token(token, refresh_token=None):
         "refresh_token": refresh_token or existing.get("refresh_token"),
         "saved_at": time.time(),
     }
-    with open(_token_file, "w", encoding="utf-8") as f:
-        json.dump(data, f)
+    _atomic_write_json(_token_file, data)
     _tlog("auth.token_saved", {"prefix": token[:4], "has_refresh": bool(refresh_token)})
     print(f"[brainstem] GitHub token saved (prefix: {token[:4]}...)")
     # A fresh token may unlock new models — let the next request re-fetch the
@@ -515,14 +575,29 @@ def _load_copilot_cache():
 def _save_copilot_cache(token, endpoint, expires_at):
     """Cache Copilot API token to disk so it survives restarts."""
     try:
-        with open(_copilot_cache_file, "w", encoding="utf-8") as f:
-            json.dump({"token": token, "endpoint": endpoint, "expires_at": expires_at}, f)
+        _atomic_write_json(_copilot_cache_file, {"token": token, "endpoint": endpoint, "expires_at": expires_at})
     except Exception:
         pass
 
 # ── Copilot token exchange ────────────────────────────────────────────────────
 
 _copilot_token_cache = {"token": None, "endpoint": None, "expires_at": 0}
+# Serializes the token exchange so N concurrent expired-token requests don't all fire
+# the exchange at once (a refresh-token stampede that can burn the single-use refresh
+# token). One thread exchanges; the rest re-read the fresh cache.
+_copilot_token_lock = threading.Lock()
+
+def _invalidate_copilot_token():
+    """Drop the cached Copilot API token (memory + disk) so the next
+    get_copilot_token() performs a fresh exchange. Used when the API rejects the
+    cached token (401) even though its local expiry hadn't elapsed."""
+    global _copilot_token_cache
+    _copilot_token_cache = {"token": None, "endpoint": None, "expires_at": 0}
+    try:
+        if os.path.exists(_copilot_cache_file):
+            os.remove(_copilot_cache_file)
+    except OSError:
+        pass
 
 def _exchange_github_for_copilot(github_token):
     """Exchange a GitHub token for a Copilot API token. Returns (token, endpoint, expires_at) or raises."""
@@ -545,11 +620,23 @@ def _exchange_github_for_copilot(github_token):
 def get_copilot_token():
     """Exchange GitHub token for a short-lived Copilot API token."""
     global _copilot_token_cache
-    
-    # 1. Return in-memory cached token if still valid (with 60s buffer)
+
+    # 1. Return in-memory cached token if still valid (with 60s buffer). Lock-free
+    #    fast path — the overwhelming majority of calls hit a warm cache.
     if _copilot_token_cache["token"] and time.time() < _copilot_token_cache["expires_at"] - 60:
         return _copilot_token_cache["token"], _copilot_token_cache["endpoint"]
-    
+
+    # Cache is cold/expired: serialize so only one thread does the exchange.
+    with _copilot_token_lock:
+        # Re-check — another thread may have refreshed while we waited for the lock.
+        if _copilot_token_cache["token"] and time.time() < _copilot_token_cache["expires_at"] - 60:
+            return _copilot_token_cache["token"], _copilot_token_cache["endpoint"]
+        return _get_copilot_token_locked()
+
+def _get_copilot_token_locked():
+    """Refresh path for get_copilot_token, always run under _copilot_token_lock."""
+    global _copilot_token_cache
+
     # 2. Try disk-cached Copilot session token (survives restarts)
     disk_cache = _load_copilot_cache()
     if disk_cache:
@@ -557,7 +644,7 @@ def get_copilot_token():
         _tlog("auth.copilot_restored", {"expires_in": int(disk_cache['expires_at'] - time.time())})
         print(f"[brainstem] Copilot token restored from cache (expires in {int(disk_cache['expires_at'] - time.time())}s)")
         return disk_cache["token"], disk_cache["endpoint"]
-    
+
     # 3. Exchange GitHub token for Copilot token
     github_token = get_github_token()
     if not github_token:
@@ -638,8 +725,7 @@ def _save_pending_login():
     """Persist pending device code to disk so it survives server restarts."""
     try:
         if _pending_login:
-            with open(_pending_login_file, "w", encoding="utf-8") as f:
-                json.dump(_pending_login, f)
+            _atomic_write_json(_pending_login_file, _pending_login)
         elif os.path.exists(_pending_login_file):
             os.remove(_pending_login_file)
     except Exception:
@@ -825,9 +911,10 @@ def load_soul():
     if _soul_cache is not None:
         return _soul_cache
     if not os.path.exists(SOUL_PATH):
+        # Don't cache the fallback: the user may create soul.md after startup, and the
+        # next request should pick it up without needing a restart.
         print(f"[brainstem] Warning: soul file not found at {SOUL_PATH}, using default.")
-        _soul_cache = "You are a helpful AI assistant."
-        return _soul_cache
+        return "You are a helpful AI assistant."
     with open(SOUL_PATH, "r", encoding="utf-8") as f:
         _soul_cache = f.read().strip()
     print(f"[brainstem] Soul loaded: {SOUL_PATH}")
@@ -866,10 +953,13 @@ def _load_agent_from_file(filepath):
             break  # success
         except ModuleNotFoundError as e:
             missing = _extract_package_name(e)
-            if missing and attempt == 0:
-                _auto_install(missing)
-                continue  # retry after install
+            # Only retry if the install actually succeeds. A package that can't be
+            # installed is remembered (in _auto_install) so we don't re-run pip — a
+            # 60s-timeout subprocess — on every single /chat and /health request.
+            if missing and attempt == 0 and _auto_install(missing):
+                continue  # retry after a successful install
             print(f"[brainstem] Failed to load {filepath}: {e}")
+            break
         except Exception as e:
             print(f"[brainstem] Failed to load {filepath}: {e}")
             break
@@ -968,15 +1058,23 @@ def _extract_package_name(error):
     """Extract the pip-installable package name from a ModuleNotFoundError."""
     msg = str(error)
     # "No module named 'bs4'"
-    match = __import__("re").search(r"No module named '([^']+)'", msg)
+    match = re.search(r"No module named '([^']+)'", msg)
     if not match:
         return None
     mod = match.group(1).split(".")[0]
     return _PIP_MAP.get(mod, mod)
 
 
+# Packages a prior _auto_install could not install — never retried, so one
+# unresolvable agent import doesn't run pip (a 60s-timeout subprocess) on every request.
+_failed_installs = set()
+
+
 def _auto_install(package):
-    """Auto-install a pip package."""
+    """Auto-install a pip package. Returns True on success. A package that fails is
+    remembered and never retried (returns False immediately next time)."""
+    if package in _failed_installs:
+        return False
     print(f"[brainstem] Auto-installing dependency: {package}")
     try:
         result = subprocess.run(
@@ -987,10 +1085,12 @@ def _auto_install(package):
             print(f"[brainstem] Installed {package}")
             # Clear import caches so retry works
             importlib.invalidate_caches()
-        else:
-            print(f"[brainstem] Failed to install {package}: {result.stderr[:200]}")
+            return True
+        print(f"[brainstem] Failed to install {package}: {result.stderr[:200]}")
     except Exception as e:
         print(f"[brainstem] Failed to install {package}: {e}")
+    _failed_installs.add(package)
+    return False
 
 def load_agents():
     agents = {}
@@ -1031,6 +1131,24 @@ def call_copilot(messages, tools=None):
     print(f"[brainstem] API call: model={MODEL}, tools={len(tools) if tools else 0}, tool_choice={body.get('tool_choice', 'NONE')}")
 
     resp = requests.post(url, headers=headers, json=body, timeout=60)
+
+    # A cached Copilot token can be rejected server-side (401) before its local
+    # expiry elapses — early revocation, clock skew, or a session file carried over
+    # from another account. Invalidate it, exchange a fresh one, and retry ONCE so
+    # /chat self-heals instead of returning the same error for the token's whole
+    # remaining lifetime (~25 min).
+    if resp.status_code == 401:
+        _tlog("api.token_rejected_401", {"model": MODEL}, level="warn")
+        print("[brainstem] Copilot token rejected (401) — refreshing once and retrying")
+        _invalidate_copilot_token()
+        try:
+            copilot_token, endpoint = get_copilot_token()
+            url = f"{endpoint}/chat/completions"
+            headers["Authorization"] = f"Bearer {copilot_token}"
+            resp = requests.post(url, headers=headers, json=body, timeout=60)
+        except Exception as e:
+            print(f"[brainstem] Token refresh after 401 failed: {e}")
+
     if resp.status_code != 200:
         error_detail = resp.text[:500] if resp.text else "No details"
         _tlog("api.error", {"model": MODEL, "status": resp.status_code, "detail": error_detail[:300]}, level="error")
@@ -1064,6 +1182,13 @@ def call_copilot(messages, tools=None):
     # (e.g. 🧠 -> "ðŸ§ ", — -> "â€""). Force UTF-8 so resp.json() decodes correctly.
     resp.encoding = "utf-8"
     result = resp.json()
+
+    # A 200 with an empty/absent "choices" list (content-filtered prompts, some
+    # error-shaped 200s) would otherwise crash below on choices[0]. Fail with a
+    # descriptive error the /chat handler can surface instead of "list index out of
+    # range".
+    if not result.get("choices"):
+        raise RuntimeError(f"Model '{body['model']}' returned no choices: {json.dumps(result)[:200]}")
 
     # ── Normalize multi-choice responses ──────────────────────────────────────
     # Some models (e.g. Claude via Copilot API) split text and tool_calls into
@@ -1104,9 +1229,18 @@ def run_tool_calls(tool_calls, agents, session_id=None):
     results = []
     logs = []
     for tc in tool_calls:
-        fn_name = tc["function"]["name"]
+        # Defend against a malformed tool_call object so one bad entry can't KeyError
+        # the whole round after other tools have already run.
+        try:
+            fn_name = tc["function"]["name"]
+            tc_id = tc["id"]
+        except (KeyError, TypeError):
+            logs.append(f"[?] Skipped malformed tool call: {str(tc)[:80]}")
+            continue
         try:
             args = json.loads(tc["function"].get("arguments", "{}"))
+            if not isinstance(args, dict):
+                args = {}
         except Exception:
             args = {}
 
@@ -1125,7 +1259,7 @@ def run_tool_calls(tool_calls, agents, session_id=None):
             logs.append(result)
 
         results.append({
-            "tool_call_id": tc["id"],
+            "tool_call_id": tc_id,
             "role": "tool",
             "name": fn_name,
             "content": str(result)
@@ -1136,9 +1270,18 @@ def run_tool_calls(tool_calls, agents, session_id=None):
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    data = request.get_json(force=True) or {}
-    user_input = data.get("user_input", "").strip()
+    # silent=True → malformed JSON yields None (a clean JSON 400 below) instead of
+    # Werkzeug's HTML 400, which the web UI can't parse.
+    data = request.get_json(force=True, silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+    user_input = data.get("user_input", "")
+    if not isinstance(user_input, str):
+        return jsonify({"error": "user_input must be a string"}), 400
+    user_input = user_input.strip()
     history    = data.get("conversation_history", [])
+    if not isinstance(history, list):
+        history = []
     session_id = data.get("session_id") or str(uuid.uuid4())
 
     if not user_input:
@@ -1149,7 +1292,15 @@ def chat():
     try:
         soul   = load_soul()
         agents = load_agents()
-        tools  = [a.to_tool() for a in agents.values()] if agents else None
+        # Build tools per-agent so one agent with malformed metadata is skipped
+        # (and just not offered to the model) instead of 500-ing every /chat request.
+        tools = []
+        for a in agents.values():
+            try:
+                tools.append(a.to_tool())
+            except Exception as e:
+                print(f"[brainstem] Skipping agent with bad metadata ({getattr(a, 'name', '?')}): {e}")
+        tools = tools or None
 
         # ── Collect system context from any agent that provides it ──
         extra_context = ""
@@ -1189,7 +1340,20 @@ def chat():
                 break
 
         reply = msg.get("content") or ""
-        
+        # The model can still be asking for tools when the 3-round budget runs out,
+        # leaving reply empty. Make one final completion with no tools so it must
+        # answer in prose using the tool results it already has, rather than the user
+        # getting a blank response.
+        if not reply and msg.get("tool_calls"):
+            try:
+                final_response, responded_model = call_copilot(messages, tools=None)
+                reply = (final_response["choices"][0]["message"].get("content") or "").strip()
+            except Exception as e:
+                print(f"[brainstem] Final tool-less completion failed: {e}")
+        if not reply:
+            reply = ("I couldn't finish that within the available tool steps. "
+                     "Try rephrasing, or breaking it into smaller steps.")
+
         result = {
             "response": reply,
             "session_id": session_id,
@@ -1254,10 +1418,7 @@ def login_poll():
     """
     # Check if bg thread has completed (or errored)
     if _login_result:
-        result = _login_result.copy()
-        if result.get("status") == "error":
-            return jsonify(result)
-        return jsonify(result)
+        return jsonify(_login_result.copy())
 
     # Check if code has expired
     if _pending_login and time.time() >= _pending_login.get("expires_at", 0):
@@ -1501,6 +1662,10 @@ def agents_delete(filename):
     safe_name = werkzeug.utils.secure_filename(filename)
     if not safe_name.endswith('.py'):
         safe_name += '.py'
+    # basic_agent.py is the shared base class every agent imports — deleting it breaks
+    # all of them. It isn't a usable agent and the UI never lists it, so refuse.
+    if safe_name == "basic_agent.py":
+        return jsonify({"error": "basic_agent.py is the shared base class and cannot be deleted."}), 400
     filepath = os.path.join(AGENTS_PATH, safe_name)
     if os.path.exists(filepath):
         os.remove(filepath)
@@ -1532,13 +1697,19 @@ def agents_import():
         
     filepath = os.path.join(AGENTS_PATH, safe_name)
     f.save(filepath)
-    
-    # Reload agents to include the new one
+
+    # load_agents() swallows per-file errors (returns {} for a broken file), so it
+    # can't tell us whether THIS upload actually works. Load just this file and report
+    # honestly. The file is kept either way — agents/ is the user's workspace, and a
+    # broken file still needs to appear in the list so it can be removed.
     try:
-        load_agents()
+        loaded = _load_agent_from_file(filepath)
     except Exception as e:
-        return jsonify({"error": f"Uploaded but failed to load: {e}"}), 500
-        
+        loaded = {}
+        print(f"[brainstem] Imported {safe_name} but it failed to load: {e}")
+    if not loaded:
+        return jsonify({"error": f"Saved {safe_name}, but it did not load as an agent — check the file for errors."}), 200
+
     return jsonify({"status": "ok", "message": f"Agent {safe_name} imported successfully."})
 
 @app.route("/health", methods=["GET"])
@@ -1655,7 +1826,7 @@ def diagnostics_export():
             "copilot_cache_valid": bool(_copilot_token_cache["token"] and time.time() < _copilot_token_cache["expires_at"] - 60),
             "pending_login": bool(_pending_login),
         },
-        "agents_loaded": list(load_agents().keys()) if True else [],
+        "agents_loaded": list(load_agents().keys()),
         "events": events,
     }
 

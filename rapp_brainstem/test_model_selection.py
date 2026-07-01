@@ -6,7 +6,35 @@ Runs two ways:
     python  test_model_selection.py                  # standalone (no pytest needed)
 """
 import os
+import tempfile
 import brainstem as bs
+
+
+# ── Test isolation ────────────────────────────────────────────────────────────
+# These tests mutate module globals and call _save/_clear_sticky_model, which
+# writes/deletes .brainstem_model NEXT TO brainstem.py — i.e. the user's real
+# persisted model pick. Redirect that file to a throwaway path so a test run can
+# never touch real state, and snapshot the globals so the module is left exactly
+# as it was found. Works in both pytest and the standalone runner below.
+bs._model_file = os.path.join(tempfile.mkdtemp(prefix="bs-model-test-"), ".brainstem_model")
+
+_SNAPSHOT_ATTRS = ("MODEL", "MODEL_PINNED", "AVAILABLE_MODELS", "_models_fetched", "_default_model_selected")
+_ORIG_GLOBALS = {a: getattr(bs, a) for a in _SNAPSHOT_ATTRS}
+
+def _restore_globals():
+    for a, v in _ORIG_GLOBALS.items():
+        setattr(bs, a, v)
+    bs._clear_sticky_model()
+
+try:
+    import pytest
+
+    @pytest.fixture(autouse=True)
+    def _isolate_brainstem_state():
+        yield
+        _restore_globals()
+except ImportError:
+    pass
 
 
 # ── _sonnet_rank ──────────────────────────────────────────────────────────────
@@ -214,7 +242,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"  ERROR {fn.__name__}: {type(e).__name__}: {e}")
             failed += 1
-    # Clean up any stray state file.
-    bs._clear_sticky_model()
+        finally:
+            _restore_globals()   # keep each test hermetic in the standalone runner too
     print(f"\n{passed} passed, {failed} failed")
     raise SystemExit(1 if failed else 0)

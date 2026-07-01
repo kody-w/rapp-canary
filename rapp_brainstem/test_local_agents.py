@@ -420,25 +420,18 @@ class TestMemoryAgentIntegration(unittest.TestCase):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def test_manage_then_recall_memory(self):
-        """ManageMemory stores, ContextMemory recalls — both using local storage."""
-        # Download the real agents
-        import requests
-        base = "https://raw.githubusercontent.com/kody-w/AI-Agent-Templates/main/agents"
+        """ManageMemory stores, ContextMemory recalls — both using local storage.
 
-        for name in ["manage_memory_agent.py", "context_memory_agent.py"]:
-            resp = requests.get(f"{base}/{name}", timeout=10)
-            resp.encoding = "utf-8"  # the agent sources are UTF-8 (contain a • bullet)
-            # Write UTF-8 explicitly: on Windows the default open() encoding is
-            # cp1252, which would turn the • into a lone 0x95 byte that brainstem's
-            # UTF-8 _load_agent_from_file then rejects.
-            with open(os.path.join(self._tmp, name), "w", encoding="utf-8") as f:
-                f.write(resp.text)
-
+        Exercises the BUNDLED agents shipped in agents/ (no network): those are the
+        ones a real install actually runs, and this keeps the test hermetic/offline.
+        """
         import brainstem
 
-        # Load both agents
-        manage_agents = brainstem._load_agent_from_file(os.path.join(self._tmp, "manage_memory_agent.py"))
-        context_agents = brainstem._load_agent_from_file(os.path.join(self._tmp, "context_memory_agent.py"))
+        agents_dir = os.path.join(os.path.dirname(os.path.abspath(brainstem.__file__)), "agents")
+
+        # Load both bundled agents
+        manage_agents = brainstem._load_agent_from_file(os.path.join(agents_dir, "manage_memory_agent.py"))
+        context_agents = brainstem._load_agent_from_file(os.path.join(agents_dir, "context_memory_agent.py"))
 
         self.assertIn("ManageMemory", manage_agents)
         self.assertIn("ContextMemory", context_agents)

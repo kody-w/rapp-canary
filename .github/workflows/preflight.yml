@@ -1,0 +1,219 @@
+# Preflight — test a candidate branch "in the wild" BEFORE it reaches main.
+#
+# main is production: the install one-liners pull from it, so it can never break.
+# This workflow installs the CANDIDATE BRANCH on fresh Windows / macOS / Linux VMs
+# using the REAL, UNMODIFIED installers (install.ps1 under Windows PowerShell 5.1,
+# install.sh under bash), by pointing the installers' clone URL at a local bare
+# repo whose `main` ref is the candidate commit. Nothing in the sacred installers
+# changes — they believe they are installing production.
+#
+# Scenarios:
+#   fresh   — factory machine, no prior install (the new-user path)
+#   upgrade — machine already running REAL production main, upgraded to the
+#             candidate (the existing-user path; asserts soul/agents/.env survive)
+#
+# See RELEASING.md for the full release process this belongs to.
+
+name: preflight
+
+on:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Fast static checks: syntax, PS 5.1 compatibility, unit tests ────────────
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash syntax
+        run: |
+          bash -n install.sh
+          bash -n install.command
+          bash -n community_rapp/install.sh
+          bash -n rapp_brainstem/start.sh
+          bash tests/test_installer.sh
+
+      - name: PowerShell parse + PS 5.1 compatibility
+        shell: pwsh
+        run: |
+          $files = @('install.ps1', 'rapp_brainstem/start.ps1', 'community_rapp/install.ps1', 'deploy.ps1')
+          $bad = $false
+          foreach ($f in $files) {
+            $errs = $null
+            [System.Management.Automation.Language.Parser]::ParseFile("$PWD/$f", [ref]$null, [ref]$errs) | Out-Null
+            if ($errs) { $errs | ForEach-Object { Write-Host "::error file=$f,line=$($_.Extent.StartLineNumber)::$($_.Message)" }; $bad = $true }
+            else { Write-Host "parse ok: $f" }
+          }
+          if ($bad) { exit 1 }
+          # Windows PowerShell 5.1 is what real users run — reject PS7-only syntax.
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $settings = @{ Rules = @{ PSUseCompatibleSyntax = @{ Enable = $true; TargetVersions = @('5.1', '7.0') } } }
+          $findings = $files | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Settings $settings }
+          $findings | Format-Table -AutoSize | Out-String | Write-Host
+          if ($findings | Where-Object RuleName -eq 'PSUseCompatibleSyntax') { exit 1 }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: python compile + unit tests
+        working-directory: rapp_brainstem
+        run: |
+          python -m py_compile brainstem.py local_storage.py agents/*.py
+          pip install -q -r requirements.txt pytest
+          python -m pytest test_local_agents.py test_model_selection.py test_polish.py -q
+
+  # ── Real installs on fresh VMs, both platforms, fresh + upgrade ─────────────
+  e2e:
+    needs: static
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        scenario: [fresh, upgrade]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # upgrade scenario needs real origin/main as the baseline
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # The fake origin: a bare repo whose `main` IS the candidate commit.
+      # url.insteadOf makes the unmodified installers clone/fetch it instead of GitHub.
+      - name: point installers at the candidate (fake origin)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BARE="$RUNNER_TEMP/fake-origin.git"
+          git clone --bare . "$BARE"
+          git -C "$BARE" update-ref refs/heads/main "$GITHUB_SHA"
+          git -C "$BARE" symbolic-ref HEAD refs/heads/main
+          # Preserve the real production tip so the upgrade scenario can start there.
+          git -C "$BARE" update-ref refs/heads/production-baseline "$(git rev-parse origin/main)"
+          BARE_URL="file://$(echo "$BARE" | sed 's|\\|/|g; s|^\([A-Za-z]\):|/\1:|')"
+          git config --global "url.${BARE_URL}.insteadOf" "https://github.com/kody-w/rapp-installer.git"
+          echo "BARE=$BARE" >> "$GITHUB_ENV"
+
+      - name: seed existing production install (upgrade only)
+        if: matrix.scenario == 'upgrade'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone "$BARE" "$HOME/.brainstem/src"
+          git -C "$HOME/.brainstem/src" reset --hard origin/production-baseline
+          # A real user's fingerprints: custom agent, edited soul, edited .env
+          cat > "$HOME/.brainstem/src/rapp_brainstem/agents/preflight_custom_agent.py" <<'EOF'
+          from agents.basic_agent import BasicAgent
+          class PreflightCustomAgent(BasicAgent):
+              def __init__(self):
+                  self.name = 'PreflightCustom'
+                  self.metadata = {"name": self.name, "description": "preflight marker agent",
+                                   "parameters": {"type": "object", "properties": {}, "required": []}}
+                  super().__init__(name=self.name, metadata=self.metadata)
+              def perform(self, **kwargs):
+                  return "preflight-marker"
+          EOF
+          echo "" >> "$HOME/.brainstem/src/rapp_brainstem/soul.md"
+          echo "PREFLIGHT-SOUL-MARKER" >> "$HOME/.brainstem/src/rapp_brainstem/soul.md"
+          printf 'GITHUB_MODEL=auto\nPORT=7071\n# PREFLIGHT-ENV-MARKER\n' > "$HOME/.brainstem/src/rapp_brainstem/.env"
+
+      # Auth + remote-version checks must fail FAST and GRACEFULLY (that graceful
+      # degradation is itself part of what we're testing). Black-hole the endpoints.
+      - name: block network auth endpoints (unix)
+        if: runner.os != 'Windows'
+        run: printf '127.0.0.1 github.com\n127.0.0.1 raw.githubusercontent.com\n' | sudo tee -a /etc/hosts
+
+      - name: block network auth endpoints (windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: Add-Content -Path "$env:SystemRoot\System32\drivers\etc\hosts" -Value "127.0.0.1 github.com", "127.0.0.1 raw.githubusercontent.com"
+
+      - name: run the real installer (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -x
+          # `script` allocates a pty — the installer launches the server exactly as
+          # it would in a user's terminal. Run it in the background and poll below.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            script -q "$RUNNER_TEMP/install.log" bash install.sh &
+          else
+            script -qec "bash install.sh" "$RUNNER_TEMP/install.log" &
+          fi
+          echo $! > "$RUNNER_TEMP/installer.pid"
+
+      - name: run the real installer (windows, PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # Same decode path as `irm | iex`: UTF-8 content executed by 5.1.
+          $script = Get-Content -Raw -Encoding UTF8 install.ps1
+          $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+          Start-Process powershell -ArgumentList '-ExecutionPolicy','Bypass','-EncodedCommand',$enc `
+            -RedirectStandardOutput "$env:RUNNER_TEMP\install.log" `
+            -RedirectStandardError "$env:RUNNER_TEMP\install.err" -NoNewWindow
+
+      - name: wait for a serving brainstem, then assert
+        shell: bash
+        run: |
+          set -uo pipefail
+          BRANCH_VERSION="$(tr -d '[:space:]' < rapp_brainstem/VERSION)"
+          for i in $(seq 1 120); do
+            sleep 5
+            if curl -sf "http://localhost:7071/health" -o "$RUNNER_TEMP/health.json"; then break; fi
+            if [ "$i" = 120 ]; then echo "server never came up"; cat "$RUNNER_TEMP/install.log" 2>/dev/null | tail -60; exit 1; fi
+          done
+          cat "$RUNNER_TEMP/health.json"
+          python3 - "$RUNNER_TEMP/health.json" "$BRANCH_VERSION" <<'EOF'
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          assert d.get("status") in ("ok", "unauthenticated"), d
+          assert d.get("version") == sys.argv[2], f'server v{d.get("version")} != candidate v{sys.argv[2]}'
+          assert "ContextMemory" in (d.get("agents") or []), d.get("agents")
+          print("health OK:", d.get("status"), "v" + d.get("version"))
+          EOF
+          # The web UI must serve, and /chat must fail as JSON, never crash.
+          # Fetch to a file first — `curl | grep -q` SIGPIPEs curl (grep closes the
+          # pipe on match) and Actions' default `set -o pipefail` would flag it.
+          curl -sf http://localhost:7071/ -o "$RUNNER_TEMP/index.html"
+          grep -q "RAPP Brainstem" "$RUNNER_TEMP/index.html"
+          curl -sf http://localhost:7071/models >/dev/null
+          curl -s -X POST http://localhost:7071/chat -H 'Content-Type: application/json' \
+            -d '{"user_input":"preflight ping"}' | python3 -c "import json,sys; d=json.load(sys.stdin); print('chat contract OK:', list(d)[:3])"
+
+      - name: assert user files survived the upgrade
+        if: matrix.scenario == 'upgrade'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -f "$HOME/.brainstem/src/rapp_brainstem/agents/preflight_custom_agent.py"
+          grep -q "PREFLIGHT-SOUL-MARKER" "$HOME/.brainstem/src/rapp_brainstem/soul.md"
+          grep -q "PREFLIGHT-ENV-MARKER" "$HOME/.brainstem/src/rapp_brainstem/.env"
+          curl -sf http://localhost:7071/health | python3 -c "
+          import json,sys; d=json.load(sys.stdin)
+          assert 'PreflightCustom' in (d.get('agents') or []), d.get('agents')
+          print('custom agent survived upgrade')"
+
+      - name: collect installer log
+        if: always()
+        shell: bash
+        run: |
+          echo "── install.log ──"; tail -100 "$RUNNER_TEMP/install.log" 2>/dev/null || true
+          echo "── install.err ──"; tail -40 "$RUNNER_TEMP/install.err" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preflight-${{ matrix.os }}-${{ matrix.scenario }}
+          path: ${{ runner.temp }}/install.*
+          if-no-files-found: ignore

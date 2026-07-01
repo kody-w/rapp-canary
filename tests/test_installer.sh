@@ -89,14 +89,16 @@ else
     fail "skill.md missing YAML frontmatter"
 fi
 
-TIER_COUNT=$(grep -c "## .* Tier" "$REPO_ROOT/skill.md" || true)
+TIER_COUNT=$(grep -cE "^## Tier [0-9]" "$REPO_ROOT/skill.md" || true)
 if [ "$TIER_COUNT" -ge 3 ]; then
     pass "skill.md has all 3 tiers"
 else
     fail "skill.md missing tier content (found $TIER_COUNT)"
 fi
 
-PAUSE_COUNT=$(grep -c "⏸️" "$REPO_ROOT/skill.md" || true)
+# Pause points are the per-tier gates that stop autonomous execution and hand back
+# to the user ("Do not proceed…", "Wait for…", "Only pause and ask…").
+PAUSE_COUNT=$(grep -cE "Do not proceed|Wait for|Only pause" "$REPO_ROOT/skill.md" || true)
 if [ "$PAUSE_COUNT" -ge 3 ]; then
     pass "skill.md has $PAUSE_COUNT pause points"
 else
@@ -121,7 +123,11 @@ echo ""
 
 echo "--- index.html ---"
 
-if grep -q "Brainstem" "$REPO_ROOT/index.html" && grep -q "Spinal Cord" "$REPO_ROOT/index.html" && grep -q "Nervous System" "$REPO_ROOT/index.html"; then
+# The landing page names Tier 2 by its installer path ("Hippocampus") or its tier
+# metaphor ("Spinal Cord") — accept either so a vocabulary choice doesn't fail the test.
+if grep -q "Brainstem" "$REPO_ROOT/index.html" \
+   && { grep -q "Spinal Cord" "$REPO_ROOT/index.html" || grep -q "Hippocampus" "$REPO_ROOT/index.html"; } \
+   && grep -q "Nervous System" "$REPO_ROOT/index.html"; then
     pass "index.html has all 3 tiers"
 else
     fail "index.html missing tier content"
@@ -193,7 +199,7 @@ else
     fail "requirements.txt missing"
 fi
 
-for endpoint in "/chat" "/health" "/login" "/models" "/repos"; do
+for endpoint in "/chat" "/health" "/login" "/models" "/agents" "/version"; do
     if grep -q "\"$endpoint\"" "$REPO_ROOT/rapp_brainstem/brainstem.py"; then
         pass "brainstem.py has $endpoint endpoint"
     else
@@ -201,7 +207,8 @@ for endpoint in "/chat" "/health" "/login" "/models" "/repos"; do
     fi
 done
 
-if grep -q "def perform" "$REPO_ROOT/rapp_brainstem/basic_agent.py" && grep -q "def to_tool" "$REPO_ROOT/rapp_brainstem/basic_agent.py"; then
+# BasicAgent lives in agents/ (also mirrored to the repo copy the shim loads).
+if grep -q "def perform" "$REPO_ROOT/rapp_brainstem/agents/basic_agent.py" && grep -q "def to_tool" "$REPO_ROOT/rapp_brainstem/agents/basic_agent.py"; then
     pass "basic_agent.py has perform() and to_tool()"
 else
     fail "basic_agent.py missing required methods"
@@ -209,52 +216,39 @@ fi
 
 echo ""
 
-# ── onboarding agent tests ───────────────────────────────────────────────────
+# ── bundled agents ────────────────────────────────────────────────────────────
 
-echo "--- onboarding agent ---"
+echo "--- bundled agents ---"
 
-if grep -q "OnboardingGuide" "$REPO_ROOT/rapp_brainstem/agents/hello_agent.py"; then
-    pass "onboarding agent has OnboardingGuide class"
-else
-    fail "onboarding agent missing OnboardingGuide class"
-fi
+# Each bundled agent file must define a class that loads and exposes a valid tool
+# schema. This is the contract every *_agent.py must satisfy to be discoverable.
+for agent_file in manage_memory_agent context_memory_agent hacker_news_agent; do
+    if [ -f "$REPO_ROOT/rapp_brainstem/agents/${agent_file}.py" ]; then
+        pass "bundled agent present: ${agent_file}.py"
+    else
+        fail "bundled agent missing: ${agent_file}.py"
+    fi
+done
 
-if grep -q "skill.md" "$REPO_ROOT/rapp_brainstem/agents/hello_agent.py"; then
-    pass "onboarding agent reads skill.md"
-else
-    fail "onboarding agent should read skill.md"
-fi
-
-if grep -q "state.json" "$REPO_ROOT/rapp_brainstem/agents/hello_agent.py"; then
-    pass "onboarding agent reads saved state"
-else
-    fail "onboarding agent should read user progress state"
-fi
-
-# Test that the agent actually loads and runs
+# Drive the REAL loader (which registers the utils/basic_agent shims the memory
+# agents import) so this exercises the same path a live /chat request would. The
+# `|| true` keeps a failure reportable instead of aborting the whole suite under set -e.
 AGENT_TEST=$(cd "$REPO_ROOT/rapp_brainstem" && python3 -c "
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath('.')))
+import sys
 sys.path.insert(0, '.')
-from agents.hello_agent import OnboardingAgent
-a = OnboardingAgent()
-assert a.name == 'OnboardingGuide'
-tool = a.to_tool()
-assert tool['type'] == 'function'
-result = a.perform(topic='overview')
-assert 'Tier 1' in result and 'Tier 2' in result and 'Tier 3' in result
-result = a.perform(topic='agents')
-assert 'BasicAgent' in result
-result = a.perform(topic='next')
-assert len(result) > 0
-result = a.perform(topic='install')
-assert 'skill.md' in result and 'curl' in result and 'irm' in result
+import brainstem
+agents = brainstem.load_agents()
+names = set(agents)
+assert 'ManageMemory' in names and 'ContextMemory' in names, names
+for a in agents.values():
+    t = a.to_tool()
+    assert t['type'] == 'function' and t['function']['name'], t
 print('ok')
-" 2>&1)
-if [ "$AGENT_TEST" = "ok" ]; then
-    pass "onboarding agent loads, runs, and returns correct content"
+" 2>&1) || true
+if [ "$(printf '%s' "$AGENT_TEST" | tail -1)" = "ok" ]; then
+    pass "bundled agents load and expose valid tool schemas"
 else
-    fail "onboarding agent runtime test failed: $AGENT_TEST"
+    fail "bundled agent runtime test failed: $AGENT_TEST"
 fi
 
 echo ""

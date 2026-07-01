@@ -9,25 +9,46 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";
 # Ensure UTF-8 output from Python
 $env:PYTHONUTF8 = "1"
 
-# Check Python is available
-$py = Get-Command python -ErrorAction SilentlyContinue
+# Resolve a REAL Python 3 (not the Windows Store execution-alias stub, which is a
+# valid "command" but only prints "Python was not found" and opens the Store).
+$py = $null
+foreach ($cmd in @("python", "python3")) {
+    try {
+        $out = & $cmd --version 2>&1
+        if ($LASTEXITCODE -eq 0 -and $out -match "Python 3\.") { $py = $cmd; break }
+    } catch {}
+}
 if (-not $py) {
-    Write-Host "ERROR: Python not found on PATH. Install Python 3.10+ from https://python.org" -ForegroundColor Red
+    Write-Host "ERROR: Python 3 not found on PATH. Install Python 3.11+ from https://python.org" -ForegroundColor Red
+    Write-Host "       (Check 'Add Python to PATH' during install.)" -ForegroundColor Yellow
     exit 1
 }
 
-# Install deps if needed
-try {
-    python -c "import flask, requests, dotenv" 2>$null
-} catch {
-    Write-Host "Installing dependencies..." -ForegroundColor Yellow
-    python -m pip install -r requirements.txt -q
+# Create .env from the example on first run (parity with start.sh).
+if ((-not (Test-Path ".env")) -and (Test-Path ".env.example")) {
+    Copy-Item ".env.example" ".env"
 }
-# Double-check after install
-$depCheck = python -c "import flask, requests, dotenv" 2>&1
-if ($LASTEXITCODE -ne 0) {
+
+# Dependency check. Run under EAP=Continue: at the script's global EAP=Stop, a native
+# command writing to stderr (which a missing import does) is promoted to a TERMINATING
+# error on Windows PowerShell 5.1 and would abort the launcher before it could install.
+function Test-Deps {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $py -c "import flask, flask_cors, requests, dotenv" 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
+if (-not (Test-Deps)) {
     Write-Host "Installing dependencies..." -ForegroundColor Yellow
-    python -m pip install -r requirements.txt -q
+    & $py -m pip install -r requirements.txt -q
+    if (-not (Test-Deps)) {
+        & $py -m pip install -r requirements.txt
+    }
 }
 
 # Check gh CLI (optional — the web login flow works without it)
@@ -40,4 +61,4 @@ if ($gh) {
 
 Write-Host ""
 Write-Host "Starting RAPP Brainstem..." -ForegroundColor Cyan
-python brainstem.py
+& $py brainstem.py
