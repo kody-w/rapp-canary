@@ -5,6 +5,15 @@
 
 $ErrorActionPreference = "Stop"
 
+# Force TLS 1.2 for every web request in this session. Stock Windows PowerShell 5.1
+# on older builds negotiates TLS 1.0 by default, which GitHub and raw.githubusercontent
+# now refuse — the download would fail with an opaque "could not create SSL/TLS secure
+# channel". Additive and harmless where 1.2 is already the default.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = `
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {}
+
 $BRAINSTEM_HOME = "$env:USERPROFILE\.brainstem"
 $BRAINSTEM_BIN = "$env:USERPROFILE\.local\bin"
 $REPO_URL = "https://github.com/kody-w/rapp-installer.git"
@@ -75,6 +84,27 @@ function Install-WithWinget {
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 }
 
+function Resolve-PythonExe {
+    # Return a real Python 3 executable. Prefer the one Check-Prerequisites already
+    # validated ($script:PythonExe); otherwise probe — this matters on the
+    # "already up to date" fast path, which skips Check-Prerequisites and would
+    # otherwise fall back to a bare "python" that may be the Windows Store alias
+    # stub (it prints "Python was not found" and opens the Store instead of running).
+    if ($script:PythonExe) { return $script:PythonExe }
+    foreach ($cmd in @("python3", "python")) {
+        try {
+            $out = & $cmd --version 2>&1
+            if ($LASTEXITCODE -eq 0 -and $out -match "Python 3\.(\d+)") {
+                $script:PythonExe = $cmd
+                return $cmd
+            }
+        } catch {}
+    }
+    $direct = "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe"
+    if (Test-Path $direct) { $script:PythonExe = $direct; return $direct }
+    return "python"
+}
+
 function Check-Prerequisites {
     Write-Host "Checking prerequisites..."
 
@@ -83,7 +113,7 @@ function Check-Prerequisites {
         winget --version 2>&1 | Out-Null
     } catch {
         Write-Host "  [X] winget not found — this installer requires Windows 10 1709+ or Windows 11" -ForegroundColor Red
-        exit 1
+        throw "winget not found"
     }
 
     # Git
@@ -102,7 +132,7 @@ function Check-Prerequisites {
             Write-Host "  [OK] Git installed" -ForegroundColor Green
         } catch {
             Write-Host "  [X] Git install failed — install manually from https://git-scm.com" -ForegroundColor Red
-            exit 1
+            throw "Git install failed"
         }
     }
 
@@ -184,7 +214,7 @@ function Check-Prerequisites {
         if (-not $pythonOk) {
             Write-Host "  [X] Python install failed — install from https://python.org" -ForegroundColor Red
             Write-Host "      Make sure to check 'Add Python to PATH' during install" -ForegroundColor Yellow
-            exit 1
+            throw "Python 3.11+ install failed"
         }
     }
 
@@ -290,7 +320,7 @@ function Install-Brainstem {
         git clone --quiet $REPO_URL "$BRAINSTEM_HOME\src" 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  [X] Failed to clone repository" -ForegroundColor Red
-            exit 1
+            throw "git clone failed"
         }
     }
     Write-Host "  [OK] Source code ready" -ForegroundColor Green
@@ -298,19 +328,28 @@ function Install-Brainstem {
 
 function Run-PipInstall {
     $reqFile = "$BRAINSTEM_HOME\src\rapp_brainstem\requirements.txt"
-    $py = if ($script:PythonExe) { $script:PythonExe } else { "python" }
-    # Pass the argument line as a single quoted string. Start-Process -ArgumentList with an
-    # ARRAY joins elements with spaces but does not re-quote an element that itself contains
-    # spaces, so a $reqFile path containing a space (e.g. C:\Users\First Last\...) would be
-    # split and pip would fail with "Could not open requirements file".
-    $proc = Start-Process -FilePath $py -ArgumentList "-m pip install -r `"$reqFile`"" -NoNewWindow -Wait -PassThru
-    if ($proc.ExitCode -ne 0) {
-        $proc = Start-Process -FilePath $py -ArgumentList "-m pip install -r `"$reqFile`" --user" -NoNewWindow -Wait -PassThru
+    $py = Resolve-PythonExe
+    # Use the call operator, NOT Start-Process (same reasoning as Check-PythonDeps):
+    # the call operator quotes a $reqFile path containing spaces correctly, and it
+    # needs no console attachment — Start-Process -NoNewWindow -Wait can block
+    # forever in consoleless sessions (CI, some terminal hosts). Drop
+    # ErrorActionPreference to Continue locally so pip's stderr progress lines are
+    # not promoted to a terminating NativeCommandError under the script's global
+    # $ErrorActionPreference = 'Stop'.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $py -m pip install -r $reqFile 2>&1 | ForEach-Object { "$_" }
+        if ($LASTEXITCODE -ne 0) {
+            & $py -m pip install -r $reqFile --user 2>&1 | ForEach-Object { "$_" }
+        }
+    } finally {
+        $ErrorActionPreference = $prev
     }
 }
 
 function Check-PythonDeps {
-    $py = if ($script:PythonExe) { $script:PythonExe } else { "python" }
+    $py = Resolve-PythonExe
     # Use the call operator, NOT Start-Process -ArgumentList. Start-Process joins array
     # arguments with spaces but does not re-quote an element that itself contains spaces,
     # so "-c", "import flask, flask_cors, ..." reached python as the tokens
@@ -350,12 +389,14 @@ function Install-CLI {
         New-Item -ItemType Directory -Force -Path $BRAINSTEM_BIN | Out-Null
     }
 
-    # Batch wrapper (works in cmd.exe and PowerShell)
-    $py = if ($script:PythonExe) { $script:PythonExe } else { "python" }
+    # Batch wrapper (works in cmd.exe and PowerShell). Quote the interpreter path —
+    # the direct-path fallback (…\First Last\AppData\…\python.exe) contains spaces and
+    # would otherwise split into a broken command.
+    $py = Resolve-PythonExe
     $cmdContent = @"
 @echo off
 cd /d "$BRAINSTEM_HOME\src\rapp_brainstem"
-$py brainstem.py %*
+"$py" brainstem.py %*
 "@
     Set-Content -Path "$BRAINSTEM_BIN\brainstem.cmd" -Value $cmdContent
 
@@ -530,7 +571,7 @@ function Launch-Brainstem {
     # Open browser after a delay
     Start-Job -ScriptBlock { Start-Sleep -Seconds 3; Start-Process "http://localhost:7071" } | Out-Null
 
-    $py = if ($script:PythonExe) { $script:PythonExe } else { "python" }
+    $py = Resolve-PythonExe
     & $py brainstem.py
 }
 
@@ -566,4 +607,18 @@ function Main {
     Launch-Brainstem
 }
 
-Main
+# Invoked as `irm … | iex`, a bare `exit`/uncaught throw terminates the USER'S whole
+# PowerShell session — the window closes and the error vanishes. Catch here so a
+# failure prints an actionable message and control returns to their prompt instead.
+try {
+    Main
+} catch {
+    Write-Host ""
+    Write-Host "  [X] Install failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "      Nothing was launched. Fix the issue above and re-run the installer." -ForegroundColor Yellow
+    Write-Host "      Need help? Open an issue at https://github.com/kody-w/rapp-installer/issues" -ForegroundColor Gray
+    Write-Host ""
+    # `irm | iex` has no $PSCommandPath — return to the prompt quietly. A file-based
+    # run (CI, a saved script) must still report failure through the exit code.
+    if ($PSCommandPath) { exit 1 }
+}
