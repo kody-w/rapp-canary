@@ -108,8 +108,9 @@ For risky changes, before merging:
 VERSION=X.Y.Z   # bump rapp_brainstem/VERSION in a release commit on the branch
 echo "$VERSION" > rapp_brainstem/VERSION
 cp install.sh docs/install.sh              # GitHub Pages serves docs/ — the advertised
-cp install.cmd docs/install.cmd            # one-liners pull THESE mirrors, so a release
-cp install.command docs/install.command    # touching an installer must sync them
+cp install.ps1 docs/install.ps1            # one-liners pull THESE mirrors, so a release
+cp install.cmd docs/install.cmd            # touching an installer must sync them
+cp install.command docs/install.command
 git commit -am "release: v$VERSION"
 git push                                   # CI preflight runs once more on the final bytes
 

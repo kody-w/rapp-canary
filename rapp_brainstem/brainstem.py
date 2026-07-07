@@ -163,7 +163,7 @@ def _clear_sticky_model():
 # A persisted manual pick wins over the env default resolved above.
 MODEL = _load_sticky_model() or MODEL
 
-# ── Sonnet auto-selection ─────────────────────────────────────────────────────
+# ── Claude model auto-selection ─────────────────────────────────────────────────────
 # Anthropic "reasoning" variant markers Copilot appends (e.g.
 # claude-3.7-sonnet-thought). Stripped so a reasoning variant ranks identically
 # to its base generation; _auto_select_default_model breaks the tie toward base.
@@ -542,7 +542,7 @@ def save_github_token(token, refresh_token=None):
     _tlog("auth.token_saved", {"prefix": token[:4], "has_refresh": bool(refresh_token)})
     print(f"[brainstem] GitHub token saved (prefix: {token[:4]}...)")
     # A fresh token may unlock new models — let the next request re-fetch the
-    # catalog and re-run Sonnet auto-selection (covers logging in after startup).
+    # catalog and re-run model auto-selection (covers logging in after startup).
     global _models_fetched, _default_model_selected
     _models_fetched = False
     _default_model_selected = False
@@ -1498,7 +1498,7 @@ def list_models():
 def set_model():
     """Change the active model. A specific pick is persisted (.brainstem_model) so
     it stays the default across restarts; "auto" forgets the pick and re-selects
-    the highest available Claude Sonnet."""
+    the fastest available Claude (highest Haiku, falling back to Sonnet)."""
     global MODEL, _default_model_selected
     data = request.get_json(force=True) or {}
     new_model = data.get("model", "").strip()

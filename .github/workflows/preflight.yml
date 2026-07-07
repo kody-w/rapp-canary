@@ -44,6 +44,21 @@ jobs:
           bash -n tests/test_installer.sh
           bash -n tests/preflight_local.sh
 
+      # GitHub Pages serves /docs, so the ADVERTISED one-liners pull the docs/
+      # mirrors, not the root installers. A release that touches an installer
+      # but skips the RELEASING.md sync step ships stale bytes to real users
+      # while main looks correct (happened on v0.6.4 — issue #19).
+      - name: docs/ Pages mirrors in sync
+        run: |
+          rc=0
+          for f in install.sh install.ps1 install.cmd install.command; do
+            if ! cmp -s "$f" "docs/$f"; then
+              echo "::error file=docs/$f::docs/$f is stale — run the RELEASING.md sync step (cp $f docs/$f)"
+              rc=1
+            fi
+          done
+          exit $rc
+
       - name: PowerShell parse + PS 5.1 compatibility
         shell: pwsh
         run: |
