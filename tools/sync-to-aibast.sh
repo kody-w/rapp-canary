@@ -54,12 +54,17 @@ SYNCED_TEXT=()   # files eligible for rewrite
 REWRITES=()      # from|to pairs, in manifest order
 REPORTS=()
 
-is_text() { case "$1" in *.zip|*.png|*.jpg|*.gif|*.ico) return 1;; *) return 0;; esac; }
+is_text() { case "$1" in *.zip|*.png|*.jpg|*.gif|*.ico|*.pyc) return 1;; *) return 0;; esac; }
+
+# Build artifacts never sync — they can carry pre-rewrite strings (a compiled
+# .pyc holds brainstem.py's source URLs) and would trip the leak guard.
+RSYNC_EXCLUDES=(--exclude='.git' --exclude='__pycache__' --exclude='*.pyc' --exclude='.pytest_cache' --exclude='venv' --exclude='.venv')
 
 collect_dir_files() { # record every file rsynced from a dir, for the rewrite pass
     local dir="$1"
     while IFS= read -r -d '' f; do
         local rel="${f#"$SRC"/}"
+        case "$rel" in */__pycache__/*|*.pyc|*/.pytest_cache/*) continue;; esac
         is_text "$rel" && SYNCED_TEXT+=("$rel")
     done < <(find "$SRC/$dir" -type f -print0)
 }
@@ -70,7 +75,7 @@ while read -r directive a b; do
         verbatim)
             if [ -d "$SRC/$a" ]; then
                 mkdir -p "$TARGET/$a"
-                rsync -a --delete --exclude='.git' "$SRC/$a/" "$TARGET/$a/"
+                rsync -a --delete "${RSYNC_EXCLUDES[@]}" "$SRC/$a/" "$TARGET/$a/"
                 collect_dir_files "${a%/}"
                 say "  ${GREEN}✓${NC} verbatim ${a} (dir)"
             elif [ -f "$SRC/$a" ]; then
