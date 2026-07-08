@@ -962,9 +962,9 @@
 
 <footer>
   <div id="starter-prompts">
-    <button class="starter-btn" onclick="useStarter('What exactly can you do?')">What can you do?</button>
-    <button class="starter-btn" onclick="useStarter('Help me build a new tool.')">Help me build a new tool</button>
-    <button class="starter-btn" onclick="useStarter('How do I manage my agent files?')">How do I manage agents?</button>
+    <button class="starter-btn" onclick="useStarter('What can you do?', 'What exactly can you do?')">What can you do?</button>
+    <button class="starter-btn" onclick="useStarter('What do you remember?')">What do you remember?</button>
+    <button class="starter-btn" onclick="useStarter('What should I do next?', 'What are the absolute coolest, most mind-blowing, out of the box, prompts that will really show off the power? Give me 10.')">What should I do next?</button>
   </div>
   <div class="toolbar-row">
     <div class="left">
@@ -1948,9 +1948,14 @@
     document.getElementById('typing-indicator')?.remove();
   }
 
-  function useStarter(text) {
-    document.getElementById('input').value = text;
+  // A starter pill can show one thing in the transcript (its label) while POSTing
+  // another (its prompt). Set here, consumed exactly once by the next sendMessage().
+  let starterPayloadOverride = null;
+
+  function useStarter(label, prompt) {
+    document.getElementById('input').value = label;
     document.getElementById('starter-prompts').classList.add('hidden-prompts');
+    starterPayloadOverride = (prompt != null) ? prompt : label;
     sendMessage();
   }
 
@@ -1962,7 +1967,12 @@
     const text = input.value.trim();
     if (!text) return;
 
-    clog('chat.send', { input_len: text.length, history_len: history.length });
+    // `text` is what the user sees (bubble + transcript); `payload` is what /chat
+    // receives. They differ only for starter pills; the override is consumed once.
+    const payload = (starterPayloadOverride != null) ? starterPayloadOverride : text;
+    starterPayloadOverride = null;
+
+    clog('chat.send', { input_len: payload.length, history_len: history.length });
 
     // Immediately hide prompts on any send
     document.getElementById('starter-prompts')?.classList.add('hidden-prompts');
@@ -1978,7 +1988,7 @@
     appendTyping();
 
     try {
-      const body = { user_input: text, conversation_history: history };
+      const body = { user_input: payload, conversation_history: history };
       if (sessionId) body.session_id = sessionId;
 
       const r = await fetch(`${API}/chat`, {
