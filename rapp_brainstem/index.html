@@ -956,15 +956,16 @@
         <li><strong>Add Skills</strong>: Drag and drop any <code>.py</code> agent file directly onto this window to instantly teach me new things.</li>
       </ul>
       <p><em>Click one of the prompts below to get started!</em></p>
+      <p><button class="tour-invite" onclick="startTour()">🧬 New here? Take the First Interview — a 5-minute guided tour</button></p>
     </div>
   </div>
 </div>
 
 <footer>
   <div id="starter-prompts">
-    <button class="starter-btn" onclick="useStarter('What exactly can you do?')">What can you do?</button>
-    <button class="starter-btn" onclick="useStarter('Help me build a new tool.')">Help me build a new tool</button>
-    <button class="starter-btn" onclick="useStarter('How do I manage my agent files?')">How do I manage agents?</button>
+    <button class="starter-btn" onclick="useStarter('What can you do?', 'What exactly can you do?')">What can you do?</button>
+    <button class="starter-btn" onclick="useStarter('What do you remember?')">What do you remember?</button>
+    <button class="starter-btn" onclick="useStarter('What should I do next?', 'What are the absolute coolest, most mind-blowing, out of the box, prompts that will really show off the power? Give me 10.')">What should I do next?</button>
   </div>
   <div class="toolbar-row">
     <div class="left">
@@ -978,6 +979,7 @@
       <button class="toolbar-link" onclick="document.getElementById('chat-import').click()" title="Import transcript">Import</button>
       <input type="file" id="chat-import" accept=".json" style="display:none" onchange="importChat(event)">
       <button class="toolbar-link" onclick="clearChat()">Clear</button>
+      <button class="toolbar-link" onclick="startTour()" title="The First Interview — a 5-minute guided tour on the live brainstem">🧬 Tour</button>
       <a class="toolbar-link" href="https://blazingbeard.github.io/quests/rapp-brainstem.html" target="_blank" title="Guided training quest with checkpoints">📚 Tutorial</a>
       <button class="toolbar-link" onclick="shareWithAdmin()" title="Share diagnostics with admin for help" style="color:#f0883e">🆘 Get Help</button>
       <button class="toolbar-link dev-only" onclick="toggleDevMode()" id="dev-toggle">Dev</button>
@@ -1948,9 +1950,14 @@
     document.getElementById('typing-indicator')?.remove();
   }
 
-  function useStarter(text) {
-    document.getElementById('input').value = text;
+  // A starter pill can show one thing in the transcript (its label) while POSTing
+  // another (its prompt). Set here, consumed exactly once by the next sendMessage().
+  let starterPayloadOverride = null;
+
+  function useStarter(label, prompt) {
+    document.getElementById('input').value = label;
     document.getElementById('starter-prompts').classList.add('hidden-prompts');
+    starterPayloadOverride = (prompt != null) ? prompt : label;
     sendMessage();
   }
 
@@ -1962,7 +1969,12 @@
     const text = input.value.trim();
     if (!text) return;
 
-    clog('chat.send', { input_len: text.length, history_len: history.length });
+    // `text` is what the user sees (bubble + transcript); `payload` is what /chat
+    // receives. They differ only for starter pills; the override is consumed once.
+    const payload = (starterPayloadOverride != null) ? starterPayloadOverride : text;
+    starterPayloadOverride = null;
+
+    clog('chat.send', { input_len: payload.length, history_len: history.length });
 
     // Immediately hide prompts on any send
     document.getElementById('starter-prompts')?.classList.add('hidden-prompts');
@@ -1978,7 +1990,7 @@
     appendTyping();
 
     try {
-      const body = { user_input: text, conversation_history: history };
+      const body = { user_input: payload, conversation_history: history };
       if (sessionId) body.session_id = sessionId;
 
       const r = await fetch(`${API}/chat`, {
@@ -2561,6 +2573,7 @@
             <li><strong>Add Skills</strong>: Drag and drop any <code>.py</code> agent file directly onto this window to instantly teach me new things.</li>
           </ul>
           <p><em>Click one of the prompts below to get started!</em></p>
+          <p><button class="tour-invite" onclick="startTour()">🧬 New here? Take the First Interview — a 5-minute guided tour</button></p>
         </div>
       </div>
     `;
@@ -2637,6 +2650,347 @@
     };
     reader.readAsText(file);
   }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // The First Interview — an optional guided tour overlaid on the live UI.
+  // Pure observer: it never clicks, sends, or changes anything for the user.
+  // Every hook below is a 1:1 pass-through; exit the tour and nothing about
+  // the page differs from stock. Entry points: 🧬 Tour (toolbar) + welcome.
+  // ══════════════════════════════════════════════════════════════════════
+  (function () {
+    const LS_STEP = 'rapp_tour_step', LS_DONE = 'rapp_tour_done';
+    const MEMORY_FILES = ['context_memory_agent.py', 'manage_memory_agent.py', 'basic_agent.py'];
+
+    document.head.insertAdjacentHTML('beforeend', `<style id="tour-css">
+      .tour-invite { background: none; border: 1px dashed #58a6ff; color: #58a6ff; border-radius: 8px;
+        padding: 6px 12px; cursor: pointer; font-size: 13px; }
+      .tour-invite:hover { background: rgba(88,166,255,.1); }
+      #tour-hole { position: fixed; z-index: 9990; pointer-events: none; border-radius: 10px;
+        box-shadow: 0 0 0 100vmax rgba(0,0,0,.55); transition: all .25s ease; }
+      #tour-ring { position: fixed; z-index: 9991; pointer-events: none; border: 2px solid #58a6ff;
+        border-radius: 12px; animation: tour-pulse 1.6s ease-in-out infinite; transition: all .25s ease; }
+      @keyframes tour-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(88,166,255,.55); }
+        50% { box-shadow: 0 0 0 9px rgba(88,166,255,0); } }
+      #tour-card { position: fixed; z-index: 9995; width: min(390px, calc(100vw - 32px));
+        background: #161b22; border: 1px solid #30363d; border-radius: 12px; color: #e6edf3;
+        box-shadow: 0 12px 40px rgba(0,0,0,.55); font-size: 14px; line-height: 1.5; transition: all .25s ease; }
+      body.light-mode #tour-card { background: #ffffff; border-color: #d0d7de; color: #1f2328; }
+      #tour-card .tc-head { display: flex; align-items: center; justify-content: space-between;
+        padding: 10px 14px 0 14px; font-size: 11px; color: #8b949e; }
+      #tour-card .tc-head button { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 12px; }
+      #tour-card .tc-head button:hover { color: #f85149; }
+      #tour-card .tc-body { padding: 4px 16px 8px 16px; }
+      #tour-card .tc-body h3 { margin: 4px 0 6px 0; font-size: 15px; }
+      #tour-card .tc-body em { color: #8b949e; }
+      #tour-card .tc-hint { margin: 8px 16px 0 16px; padding: 8px 10px; border-radius: 8px;
+        background: rgba(88,166,255,.12); color: #58a6ff; font-size: 13px; }
+      #tour-card .tc-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 14px 12px 14px; }
+      #tour-card .tc-next { background: #238636; color: #fff; border: none; border-radius: 8px;
+        padding: 7px 16px; cursor: pointer; font-size: 13px; font-weight: 600; }
+      #tour-card .tc-next:hover { background: #2ea043; }
+    </style>`);
+
+    let idx = -1, steps = [], hole, ring, card, posTimer = null, surgeryFile = null, waitingChat = false;
+
+    const $ = (s) => document.querySelector(s);
+    const pill = (n) => document.querySelectorAll('#starter-prompts .starter-btn')[n - 1] || null;
+    const clearBtn = () => [...document.querySelectorAll('.toolbar-link')].find(b => b.textContent.trim() === 'Clear') || null;
+    const showPills = () => document.getElementById('starter-prompts')?.classList.remove('hidden-prompts');
+    const openPanel = () => { const p = $('#agents-panel'); if (p && !p.classList.contains('open')) { p.classList.add('open'); loadAgentsList(); } };
+    const esc = (s) => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
+
+    async function agentFiles() {
+      try { const r = await fetch(`${API}/agents`); const d = await r.json(); return (d.files || []).map(f => f.filename); }
+      catch { return null; }
+    }
+
+    function buildUi() {
+      if (card) return;
+      hole = document.createElement('div'); hole.id = 'tour-hole';
+      ring = document.createElement('div'); ring.id = 'tour-ring';
+      card = document.createElement('div'); card.id = 'tour-card';
+      card.innerHTML = '<div class="tc-head"><span class="tc-step"></span><button title="Exit the tour">✕ exit tour</button></div>' +
+        '<div class="tc-body"></div><div class="tc-hint" style="display:none"></div>' +
+        '<div class="tc-foot" style="display:none"><button class="tc-next">Continue →</button></div>';
+      card.querySelector('.tc-head button').onclick = () => endTour(false);
+      card.querySelector('.tc-next').onclick = () => advance();
+      document.body.append(hole, ring, card);
+    }
+
+    function position() {
+      if (!card) return;
+      const st = steps[idx]; if (!st) return;
+      const t = st.target ? st.target() : null;
+      const r = t ? t.getBoundingClientRect() : null;
+      if (r && r.width > 0) {
+        hole.style.display = ring.style.display = 'block';
+        const pad = 6;
+        [hole, ring].forEach(el => {
+          el.style.left = (r.left - pad) + 'px'; el.style.top = (r.top - pad) + 'px';
+          el.style.width = (r.width + pad * 2) + 'px'; el.style.height = (r.height + pad * 2) + 'px';
+        });
+        const ch = card.offsetHeight, cw = card.offsetWidth;
+        let top = (r.top - ch - 16 > 8) ? r.top - ch - 16 : Math.min(r.bottom + 16, innerHeight - ch - 8);
+        let left = Math.max(8, Math.min(r.left + r.width / 2 - cw / 2, innerWidth - cw - 8));
+        card.style.top = top + 'px'; card.style.left = left + 'px';
+      } else {
+        hole.style.display = ring.style.display = 'none';
+        card.style.top = Math.max(8, innerHeight / 2 - card.offsetHeight / 2) + 'px';
+        card.style.left = Math.max(8, innerWidth / 2 - card.offsetWidth / 2) + 'px';
+      }
+    }
+
+    function render() {
+      const st = steps[idx];
+      card.querySelector('.tc-step').textContent = `The First Interview — step ${idx + 1} of ${steps.length}`;
+      card.querySelector('.tc-body').innerHTML = st.html;
+      const hint = card.querySelector('.tc-hint');
+      if (st.hint) { hint.innerHTML = '👉 ' + st.hint; hint.style.display = 'block'; } else hint.style.display = 'none';
+      card.querySelector('.tc-foot').style.display = st.next ? 'flex' : 'none';
+      position();
+    }
+
+    function setStep(i) {
+      idx = i;
+      if (idx >= steps.length) return endTour(true);
+      localStorage.setItem(LS_STEP, String(idx));
+      waitingChat = false;
+      const st = steps[idx];
+      if (st.onEnter) st.onEnter();
+      render();
+    }
+    function advance() { setStep(idx + 1); }
+
+    // Show a reaction to what actually happened, then wait for Continue.
+    function react(html) {
+      const st = steps[idx];
+      st.html = html; st.hint = null; st.next = true; st.wait = null;
+      render();
+    }
+
+    function endTour(finished) {
+      localStorage.removeItem(LS_STEP);
+      if (finished) localStorage.setItem(LS_DONE, '1');
+      clearInterval(posTimer); posTimer = null;
+      [hole, ring, card].forEach(el => el && el.remove());
+      hole = ring = card = null; idx = -1;
+    }
+
+    function defineSteps() {
+      steps = [
+        {
+          html: `<h3>Have you ever seen Blade Runner?</h3>
+            <p>In the movie, nobody trusts a replicant's word — they sit it down and <strong>interview</strong> it against a baseline. That's exactly how you work with this thing.</p>
+            <p>What just hatched on your machine is an innocent organism. It has capabilities, but you shouldn't take its word for anything. In the next five minutes you'll interview it, teach it, take part of its brain out, and put it back — <em>for real, on the live brainstem. Nothing in this tour is simulated.</em></p>`,
+          next: true
+        },
+        {
+          html: `<h3>1 · Ask for its résumé</h3>
+            <p>Every interview starts the same way: <em>what can you do?</em> It will hand you a résumé — a list of claimed capabilities.</p>`,
+          hint: `Click the glowing <strong>What can you do?</strong> button.`,
+          target: () => pill(1), onEnter: showPills, wait: 'assistant',
+          reactHtml: `<h3>That's its résumé.</h3>
+            <p>Read it. Notice it claims it can <strong>remember things</strong>. Never trust a résumé — we're going to take it up on that, right now.</p>`
+        },
+        {
+          html: `<h3>2 · Introduce yourself</h3>
+            <p>Same as meeting a new coworker. Tell it your name and one thing about you — <em>"Remember, my name is … and I …"</em></p>
+            <p>Don't worry about spelling. It reads between the lines.</p>`,
+          hint: `Type your introduction in the message box and hit Send.`,
+          target: () => $('#input'), wait: 'assistant',
+          reactMemory: true
+        },
+        {
+          html: `<h3>3 · Wipe the slate</h3>
+            <p>Conversations here are <strong>ephemeral</strong> — short-term memory. Clearing the chat is like walking away and coming back tomorrow: the conversation is gone, and only what it <em>chose to remember</em> survives.</p>`,
+          hint: `Click <strong>Clear</strong> in the toolbar below.`,
+          target: () => clearBtn(), wait: 'clear'
+        },
+        {
+          html: `<h3>4 · Make it prove itself</h3>
+            <p>New conversation. Zero context. If its memory is real, it doesn't need this conversation to know you.</p>`,
+          hint: `Click <strong>What do you remember?</strong>`,
+          target: () => pill(2), onEnter: showPills, wait: 'assistant',
+          reactHtml: `<h3>It proved it.</h3>
+            <p>Fresh conversation — and it still knows you. That loop — <strong>claim → test → verify</strong> — is the Blade Runner baseline, and it's how you'll evaluate everything this thing ever tells you. It can't gaslight you, because you never take its word for it.</p>`
+        },
+        {
+          html: `<h3>5 · Crack it open</h3>
+            <p>So far you've talked to the front of it. Now let's look inside its skull.</p>`,
+          hint: `Click the <strong>⊕ button</strong> in the top-right toolbar.`,
+          target: () => $('#agents-btn'), wait: 'panel',
+          reactHtml: `<h3>These aren't settings. They're its brain.</h3>
+            <p>Every capability is <strong>one Python file on your machine</strong> — a document, like a Word doc for AI. This list is <em>everything</em> it can do. If it's not in this list, it can't do it. That's your governance layer, and you own it.</p>`
+        },
+        {
+          html: ``, // filled at onEnter with the surgery file name
+          hint: ``,
+          target: () => $('#agent-list-ul'), panel: true, wait: 'export',
+          onEnter: function () {
+            openPanel();
+            this.html = `<h3>6 · Brain surgery — back up the lobe</h3>
+              <p>See <strong>${esc(surgeryFile || '')}</strong>? We're about to remove a piece of its brain while it's awake — so first, back it up. Export downloads the agent as a file. Keep track of where it lands (usually Downloads).</p>`;
+            this.hint = `Click <strong>Export</strong> on the <strong>${esc(surgeryFile || '')}</strong> row.`;
+          }
+        },
+        {
+          html: ``, hint: ``,
+          target: () => $('#agent-list-ul'), panel: true, wait: 'deleted',
+          onEnter: function () {
+            openPanel();
+            this.html = `<h3>7 · Now take it out</h3>
+              <p>Delete it. Yes, really — the patient stays awake the whole time, and you have the backup.</p>`;
+            this.hint = `Click <strong>Delete</strong> on <strong>${esc(surgeryFile || '')}</strong> and confirm.`;
+          },
+          reactHtml: `<h3>You just removed part of a running brain.</h3>
+            <p>No restart. No error. It simply doesn't have that capability anymore — and here's the important part: <em>it will be honest about that.</em> Let's check.</p>`
+        },
+        {
+          html: `<h3>8 · Interview the patient</h3>
+            <p>Ask it to use the capability you just removed — for example: <em>"get my latest hacker news"</em>.</p>`,
+          hint: `Type the request and hit Send.`,
+          target: () => $('#input'), wait: 'assistant',
+          reactHtml: `<h3>It told you the truth.</h3>
+            <p>No fake news, no bluffing — it can't do what isn't in its brain, and it says so. A <strong>naive AI that's honest about its limits</strong> is an AI you can trust in front of a customer. Forgetting a capability is as important as having one.</p>`
+        },
+        {
+          html: `<h3>9 · The transplant</h3>
+            <p>That file you exported? It's not a backup. It's <strong>how agents travel</strong>. Someone can send you one in Teams, you drag it in, and their workflow becomes your workflow.</p>`,
+          hint: `Drag the exported <strong>.py</strong> file from your Downloads and drop it <strong>anywhere on this window</strong>.`,
+          target: () => $('#chat'), wait: 'dropped',
+          reactHtml: `<h3>💥 Hot-loaded. Live. No restart.</h3>
+            <p>Like the Matrix — <em>"I know kung fu."</em> One dragged file and the capability is back in its brain. This is how you'll share agents with your whole team: trade them like Pokémon cards.</p>`
+        },
+        {
+          html: `<h3>10 · Trust, but verify</h3>
+            <p>You know the loop by now. It has the capability back — take it up on it.</p>`,
+          hint: `Ask for the news again.`,
+          target: () => $('#input'), wait: 'assistant',
+          reactHtml: `<h3>Full circle.</h3>
+            <p>Claim → test → verify. You've now done real brain surgery on a live AI and interviewed the patient the whole way through — the violinist kept playing.</p>`
+        },
+        {
+          html: `<h3>11 · The menu of backflips</h3>
+            <p>Last thing. Whenever you're standing on the mountaintop wondering <em>"okay… what do I do now?"</em> — there's a button for that. It makes the brainstem show off everything it can do with whatever you've loaded.</p>`,
+          hint: `Click <strong>What should I do next?</strong>`,
+          target: () => pill(3), onEnter: showPills, wait: 'assistant',
+          reactHtml: `<h3>🧠 You now know AI.</h3>
+            <p>That's the entire method — and it never changes, no matter how good the models get:</p>
+            <p><strong>Interview it. Teach it. Correct it. Trade agents.</strong></p>
+            <p>When you're ready for the deep end: the <strong>VS Code button</strong> up top opens the operating room, where GitHub Copilot becomes your brain surgeon — building agents on this brainstem while you watch. The brainstem can't even tell Copilot and you apart.</p>
+            <p>Now point it at your problems.</p>`,
+          last: true
+        }
+      ];
+    }
+
+    async function pickSurgeryFile() {
+      const files = await agentFiles();
+      if (!files) return null;
+      if (files.includes('hacker_news_agent.py')) return 'hacker_news_agent.py';
+      return files.find(f => !MEMORY_FILES.includes(f)) || null;
+    }
+
+    window.startTour = async function (fromStep) {
+      defineSteps();
+      surgeryFile = await pickSurgeryFile();
+      if (!surgeryFile) {
+        // No removable agent to operate on — skip the surgery arc (steps 6-10).
+        steps = steps.slice(0, 6).concat(steps.slice(11));
+      }
+      buildUi();
+      if (!posTimer) posTimer = setInterval(position, 250);
+      setStep(Number.isInteger(fromStep) ? fromStep : 0);
+    };
+
+    // ── Observers (all pass-through; zero behavior change when tour is off) ──
+    const _appendMsg = window.appendMsg;
+    window.appendMsg = function (role, text, logs) {
+      const w = _appendMsg(role, text, logs);
+      try { onMsg(role, text, logs, w); } catch (e) { console.error('[tour]', e); }
+      return w;
+    };
+    const _clearChat = window.clearChat;
+    window.clearChat = function () {
+      const r = _clearChat();
+      try { if (idx >= 0 && steps[idx]?.wait === 'clear') advance(); } catch (e) { console.error('[tour]', e); }
+      return r;
+    };
+
+    function onMsg(role, text, logs, wrapEl) {
+      if (idx < 0) return;
+      const st = steps[idx];
+      if (role === 'user') { if (st.wait === 'assistant') waitingChat = true; return; }
+      if (st.wait !== 'assistant' || !waitingChat) return;
+      if (role === 'system') {
+        // Error/system bubbles are appended empty and get their HTML set right
+        // after — read the rendered text a tick later.
+        setTimeout(() => {
+          const t = (wrapEl && wrapEl.textContent) || text || '';
+          if (/sign in|not signed in|not authenticated|could not reach/i.test(t) && card) {
+            const hint = card.querySelector('.tc-hint');
+            hint.innerHTML = '⚠️ Looks like the brainstem needs a sign-in or a restart (see the message above). The tour will wait — redo this step once it\'s back.';
+            hint.style.display = 'block'; waitingChat = true;
+          }
+        }, 80);
+        return;
+      }
+      if (role !== 'assistant') return;
+      waitingChat = false;
+      if (st.reactMemory) {
+        // Peek at the just-rendered message for a memory-agent internal thought.
+        const lastLogs = document.querySelector('#chat .msg.assistant:last-of-type .agent-logs');
+        if (lastLogs && /manage.?memory/i.test(lastLogs.textContent)) {
+          react(`<h3>It just had a thought. You can see it.</h3>
+            <p>Under the reply there's a line: <strong>▶ agent called ManageMemory</strong>. Click it open. That's an internal thought — <em>it doesn't know you can read this.</em> It decided, on its own, what about you was worth keeping.</p>
+            <p>True story from the person who built this: he told it his son's name, and it <em>didn't</em> save it. Asked why: <em>"I'm a business AI — that felt personal."</em> He corrected it once — "family matters, remember it" — and it never forgot again.</p>
+            <p>You're not configuring software. <strong>You're onboarding an employee.</strong></p>`);
+        } else {
+          react(`<h3>Interesting — it chose NOT to save that.</h3>
+            <p>No memory agent fired. That's not a bug — <strong>forgetting is a decision too</strong>, the same way you don't memorize everything a stranger says. It judged your message wasn't worth long-term memory.</p>
+            <p>You can overrule it — say <em>"remember that — it matters to me"</em> and watch the ▶ agent line appear under its reply. Correcting its judgment is exactly how you train it. That's the whole relationship.</p>`);
+        }
+        return;
+      }
+      if (st.reactHtml) react(st.reactHtml); else if (!st.next) advance();
+    }
+
+    // Panel-open detection (step 5) + keep panel open during surgery steps.
+    document.addEventListener('click', () => {
+      if (idx < 0) return;
+      setTimeout(() => {
+        const st = steps[idx]; if (!st) return;
+        const open = $('#agents-panel')?.classList.contains('open');
+        if (st.wait === 'panel' && open) { if (st.reactHtml) react(st.reactHtml); else advance(); }
+        if (st.panel && !open) openPanel();
+      }, 60);
+    }, true);
+
+    // Export-click detection (step 6): the user's real click on the row's Export.
+    document.addEventListener('click', (e) => {
+      if (idx < 0 || steps[idx]?.wait !== 'export') return;
+      const b = e.target.closest('.export-btn'); if (!b || b.classList.contains('del-btn')) return;
+      const row = e.target.closest('li');
+      if (row && surgeryFile && row.textContent.includes(surgeryFile)) advance();
+    }, true);
+
+    // Deletion + drop detection: poll the live /agents list while relevant.
+    setInterval(async () => {
+      if (idx < 0 || !surgeryFile) return;
+      const st = steps[idx]; if (!st) return;
+      if (st.wait !== 'deleted' && st.wait !== 'dropped') return;
+      const files = await agentFiles(); if (!files) return;
+      const present = files.includes(surgeryFile);
+      if (st.wait === 'deleted' && !present) { st.reactHtml ? react(st.reactHtml) : advance(); }
+      if (st.wait === 'dropped' && present) { st.reactHtml ? react(st.reactHtml) : advance(); }
+    }, 900);
+
+    // Resume a tour that was mid-flight (e.g. the user refreshed the page).
+    const saved = localStorage.getItem(LS_STEP);
+    if (saved !== null && !localStorage.getItem(LS_DONE)) {
+      setTimeout(() => window.startTour(parseInt(saved, 10) || 0), 600);
+    }
+  })();
 </script>
 </body>
 </html>

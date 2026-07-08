@@ -518,5 +518,227 @@ class TestFetchCopilotModels(unittest.TestCase):
         self.assertEqual(self.brainstem.AVAILABLE_MODELS, sentinel)
 
 
+class TestAgentQuarantine(unittest.TestCase):
+    """Hot-load boundary: a tool-illegal cartridge is quarantined (skipped, logged
+    once, surfaced in /health) instead of poisoning the tools array and 400-ing every
+    /chat. See issue #33 — a machine-generated cartridge carried a human display name
+    ('Tech Reviewer') as self.name and silently killed all chats on v0.6.7."""
+
+    GOOD_AGENT = '''
+from agents.basic_agent import BasicAgent
+
+class GoodReviewerAgent(BasicAgent):
+    def __init__(self):
+        self.name = "GoodReviewer"
+        self.metadata = {
+            "name": self.name,
+            "description": "A well-formed agent",
+            "parameters": {"type": "object", "properties": {"q": {"type": "string"}}, "required": []}
+        }
+        super().__init__(name=self.name, metadata=self.metadata)
+
+    def perform(self, **kwargs):
+        return "ok"
+'''
+
+    def _bad_name_agent(self, name):
+        """A cartridge whose class name is fine but self.name is tool-illegal."""
+        return f'''
+from agents.basic_agent import BasicAgent
+
+class TechReviewerAgent(BasicAgent):
+    def __init__(self):
+        self.name = {name!r}
+        self.metadata = {{
+            "name": self.name,
+            "description": "Cartridge carrying a human display name",
+            "parameters": {{"type": "object", "properties": {{}}, "required": []}}
+        }}
+        super().__init__(name=self.name, metadata=self.metadata)
+
+    def perform(self, **kwargs):
+        return "ok"
+'''
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        import brainstem
+        import local_storage
+        self.brainstem = brainstem
+        self._orig_agents_path = brainstem.AGENTS_PATH
+        brainstem.AGENTS_PATH = self._tmp
+        self._orig_data_dir = local_storage._DATA_DIR
+        local_storage._DATA_DIR = self._tmp
+        brainstem._shims_registered = False
+        # Isolate quarantine + flight-log state so memoization/log assertions are clean.
+        self._orig_quar = dict(brainstem._quarantined_agents)
+        self._orig_logged = set(brainstem._quarantine_logged)
+        brainstem._quarantined_agents.clear()
+        brainstem._quarantine_logged.clear()
+        with brainstem._flight_log_lock:
+            self._orig_flight = list(brainstem._flight_log)
+            brainstem._flight_log.clear()
+        self.app = brainstem.app
+        self.app.testing = True
+        self.client = self.app.test_client()
+
+    def tearDown(self):
+        import local_storage
+        self.brainstem.AGENTS_PATH = self._orig_agents_path
+        local_storage._DATA_DIR = self._orig_data_dir
+        self.brainstem._quarantined_agents.clear()
+        self.brainstem._quarantined_agents.update(self._orig_quar)
+        self.brainstem._quarantine_logged.clear()
+        self.brainstem._quarantine_logged.update(self._orig_logged)
+        with self.brainstem._flight_log_lock:
+            self.brainstem._flight_log[:] = self._orig_flight
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _write(self, filename, code):
+        path = os.path.join(self._tmp, filename)
+        with open(path, "w") as f:
+            f.write(code)
+        return path
+
+    def test_bad_name_quarantined_good_still_loads(self):
+        """A space in name (the canonical bad case) is quarantined; a healthy agent
+        in the same directory still loads in the same sweep."""
+        bad = self._write("tech_reviewer_agent.py", self._bad_name_agent("Tech Reviewer"))
+        self._write("good_reviewer_agent.py", self.GOOD_AGENT)
+
+        agents = self.brainstem.load_agents()
+
+        self.assertIn("GoodReviewer", agents)
+        self.assertNotIn("Tech Reviewer", agents)
+        self.assertIn(bad, self.brainstem._quarantined_agents)
+        self.assertEqual(self.brainstem._quarantined_agents[bad]["class"], "TechReviewerAgent")
+        self.assertIn("tool-safe", self.brainstem._quarantined_agents[bad]["reason"])
+
+    def test_quarantined_absent_from_tools(self):
+        """The quarantined cartridge never reaches the tools array shipped to Copilot."""
+        self._write("tech_reviewer_agent.py", self._bad_name_agent("Tech Reviewer"))
+        self._write("good_reviewer_agent.py", self.GOOD_AGENT)
+
+        agents = self.brainstem.load_agents()
+        # Build tools exactly like the /chat handler does.
+        tools = [a.to_tool() for a in agents.values()]
+        names = [t["function"]["name"] for t in tools]
+
+        self.assertIn("GoodReviewer", names)
+        self.assertNotIn("Tech Reviewer", names)
+        # Every shipped tool name is tool-safe — nothing that could 400 the request.
+        for n in names:
+            self.assertRegex(n, r"^[a-zA-Z0-9_-]+$")
+
+    def test_health_lists_quarantined_with_reason(self):
+        """/health surfaces the quarantined cartridge with file, class, and reason."""
+        self._write("tech_reviewer_agent.py", self._bad_name_agent("Tech Reviewer"))
+
+        resp = self.client.get("/health")
+        data = resp.get_json()
+
+        self.assertIn("quarantined", data)
+        entry = next((q for q in data["quarantined"] if q["file"] == "tech_reviewer_agent.py"), None)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["class"], "TechReviewerAgent")
+        self.assertIn("tool-safe", entry["reason"])
+
+    def test_health_quarantined_empty_when_clean(self):
+        """With only healthy agents, /health reports an empty quarantine list."""
+        self._write("good_reviewer_agent.py", self.GOOD_AGENT)
+
+        resp = self.client.get("/health")
+        data = resp.get_json()
+
+        self.assertEqual(data.get("quarantined"), [])
+
+    def test_repeated_sweeps_do_not_duplicate_log(self):
+        """load_agents() runs on every /chat — the same bad cartridge is flight-logged
+        exactly once per process, not on every sweep, while the registry stays current."""
+        bad = self._write("tech_reviewer_agent.py", self._bad_name_agent("Tech Reviewer"))
+
+        self.brainstem.load_agents()
+        self.brainstem.load_agents()
+        self.brainstem.load_agents()
+
+        with self.brainstem._flight_log_lock:
+            warns = [
+                e for e in self.brainstem._flight_log
+                if e.get("type") == "agent.quarantined"
+                and e.get("data", {}).get("file") == "tech_reviewer_agent.py"
+            ]
+        self.assertEqual(len(warns), 1)
+        self.assertEqual(warns[0]["level"], "warn")
+        # The registry still reflects it after every sweep, even though the log didn't repeat.
+        self.assertIn(bad, self.brainstem._quarantined_agents)
+
+    def test_empty_name_quarantined(self):
+        """An empty name is quarantined (not a non-empty string)."""
+        bad = self._write("empty_name_agent.py", self._bad_name_agent(""))
+
+        agents = self.brainstem.load_agents()
+
+        self.assertEqual(agents, {})
+        self.assertIn(bad, self.brainstem._quarantined_agents)
+        self.assertIn("non-empty", self.brainstem._quarantined_agents[bad]["reason"])
+
+    def test_non_dict_metadata_quarantined(self):
+        """Non-dict metadata is quarantined (name is valid, so metadata is the cause)."""
+        code = '''
+from agents.basic_agent import BasicAgent
+
+class BadMetaAgent(BasicAgent):
+    def __init__(self):
+        self.name = "BadMeta"
+        self.metadata = ["not", "a", "dict"]
+        super().__init__(name=self.name, metadata=self.metadata)
+
+    def perform(self, **kwargs):
+        return "ok"
+'''
+        bad = self._write("bad_meta_agent.py", code)
+
+        agents = self.brainstem.load_agents()
+
+        self.assertNotIn("BadMeta", agents)
+        self.assertIn(bad, self.brainstem._quarantined_agents)
+        self.assertIn("metadata is not a dict", self.brainstem._quarantined_agents[bad]["reason"])
+
+    def test_missing_parameters_is_lenient(self):
+        """Missing 'parameters' is fine — BasicAgent defaults it; the agent loads clean."""
+        code = '''
+from agents.basic_agent import BasicAgent
+
+class NoParamsAgent(BasicAgent):
+    def __init__(self):
+        self.name = "NoParams"
+        self.metadata = {"name": self.name, "description": "no parameters key"}
+        super().__init__(name=self.name, metadata=self.metadata)
+
+    def perform(self, **kwargs):
+        return "ok"
+'''
+        self._write("no_params_agent.py", code)
+
+        agents = self.brainstem.load_agents()
+
+        self.assertIn("NoParams", agents)
+        self.assertEqual(self.brainstem._quarantine_snapshot(), [])
+
+    def test_fixed_cartridge_leaves_quarantine_next_sweep(self):
+        """The registry is rebuilt each sweep — a repaired cartridge stops being quarantined."""
+        path = self._write("tech_reviewer_agent.py", self._bad_name_agent("Tech Reviewer"))
+        self.brainstem.load_agents()
+        self.assertIn(path, self.brainstem._quarantined_agents)
+
+        # Repair the same file to a tool-safe name and re-sweep.
+        self._write("tech_reviewer_agent.py", self._bad_name_agent("TechReviewer"))
+        agents = self.brainstem.load_agents()
+
+        self.assertIn("TechReviewer", agents)
+        self.assertNotIn(path, self.brainstem._quarantined_agents)
+        self.assertEqual(self.brainstem._quarantine_snapshot(), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

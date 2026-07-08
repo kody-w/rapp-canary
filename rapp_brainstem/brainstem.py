@@ -943,10 +943,89 @@ def load_soul():
 # ── Agent loader ──────────────────────────────────────────────────────────────
 
 
+# ── Hot-load boundary validation & quarantine ────────────────────────────────
+#
+# load_agents() ships EVERY agent's to_tool() in one tools array on every /chat.
+# A cartridge that registers a tool-illegal name (e.g. "Tech Reviewer" — a space)
+# or malformed parameters makes the Copilot API 400 the WHOLE request, silently
+# killing every chat. The loader is the gate: validate at registration and, on a
+# violation, quarantine the cartridge (skip it, keep the rest working) instead of
+# poisoning the tools array. Validation failure is always a skip, never a raise.
+
+_AGENT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+# Cartridges that failed validation, rebuilt each load_agents() sweep:
+# {agent_file: {"class": cls_name, "reason": str}}.
+_quarantined_agents = {}
+_quarantine_lock = threading.Lock()
+# (file, reason) pairs already flight-logged. load_agents() runs on every /chat, so
+# without this the same warn would be recorded on every request — memoize per process.
+_quarantine_logged = set()
+
+
+def _validate_agent_instance(instance):
+    """Validate a freshly-instantiated agent at the hot-load boundary. Returns None
+    when it is safe to register, else a human-readable reason string. Never raises."""
+    name = getattr(instance, "name", None)
+    if not isinstance(name, str) or not name:
+        return "name is missing or not a non-empty string"
+    if not _AGENT_NAME_RE.match(name):
+        return f"name {name!r} is not tool-safe (must match ^[a-zA-Z0-9_-]+$)"
+
+    metadata = getattr(instance, "metadata", None)
+    if not isinstance(metadata, dict):
+        return "metadata is not a dict"
+
+    # Missing parameters is fine — BasicAgent.to_tool() defaults it. When present it
+    # must be a well-formed JSON-schema object: a dict with type == "object" and,
+    # when given, a dict "properties".
+    params = metadata.get("parameters")
+    if params is not None:
+        if not isinstance(params, dict):
+            return "metadata['parameters'] is not a dict"
+        if params.get("type") != "object":
+            return "metadata['parameters'].type must be 'object'"
+        props = params.get("properties")
+        if props is not None and not isinstance(props, dict):
+            return "metadata['parameters'].properties must be a dict"
+    return None
+
+
+def _quarantine_agent(filepath, cls_name, reason):
+    """Record a cartridge that failed validation and flight-log it exactly once per
+    (file, reason) per process (load_agents() runs on every /chat)."""
+    key = (filepath, reason)
+    with _quarantine_lock:
+        _quarantined_agents[filepath] = {"class": cls_name, "reason": reason}
+        first_time = key not in _quarantine_logged
+        if first_time:
+            _quarantine_logged.add(key)
+    if first_time:
+        _tlog(
+            "agent.quarantined",
+            {"file": os.path.basename(filepath), "class": cls_name, "reason": reason},
+            level="warn",
+        )
+        print(f"[brainstem] Quarantined agent {cls_name} in {os.path.basename(filepath)}: {reason}")
+
+
+def _quarantine_snapshot():
+    """Current quarantine registry as a JSON-safe list for /health ([] when clean)."""
+    with _quarantine_lock:
+        return [
+            {"file": os.path.basename(f), "class": info.get("class"), "reason": info.get("reason")}
+            for f, info in _quarantined_agents.items()
+        ]
+
+
 def _load_agent_from_file(filepath):
     """Load agent classes from a single .py file. Returns dict of name→instance.
     Auto-installs missing pip packages and shims cloud deps to local storage."""
     agents = {}
+    # Fresh verdict on every load — drop any stale quarantine entry for this file so
+    # a fixed cartridge stops showing as quarantined.
+    with _quarantine_lock:
+        _quarantined_agents.pop(filepath, None)
     brainstem_dir = os.path.dirname(os.path.abspath(__file__))
     if brainstem_dir not in sys.path:
         sys.path.insert(0, brainstem_dir)
@@ -969,6 +1048,14 @@ def _load_agent_from_file(filepath):
                     and not attr.startswith("_")
                 ):
                     instance = cls()
+                    # Hot-load boundary: a tool-illegal name or malformed metadata
+                    # would ship into the tools array and 400 every /chat. On a
+                    # violation, quarantine (skip) this class; healthy classes in the
+                    # same file/sweep keep loading.
+                    reason = _validate_agent_instance(instance)
+                    if reason:
+                        _quarantine_agent(filepath, cls.__name__, reason)
+                        continue
                     agents[instance.name] = instance
             break  # success
         except ModuleNotFoundError as e:
@@ -1122,6 +1209,12 @@ def load_agents():
         for name, instance in loaded.items():
             agents[name] = instance
             print(f"[brainstem] Agent loaded: {name}")
+
+    # Rebuild the quarantine registry to this sweep: drop entries for files that are
+    # gone (deleted/renamed). Each present file was just re-validated above.
+    with _quarantine_lock:
+        for gone in [f for f in _quarantined_agents if f not in files]:
+            _quarantined_agents.pop(gone, None)
 
     print(f"[brainstem] {len(agents)} agent(s) ready.")
     return agents
@@ -1764,6 +1857,7 @@ def health():
             "voice_mode": VOICE_MODE,
             "soul":   SOUL_PATH if soul_ok else "missing",
             "agents": list(agents.keys()),
+            "quarantined": _quarantine_snapshot(),
             "copilot": "\u2713" if copilot_ok else "pending",
             "brainstem_dir": os.path.dirname(os.path.abspath(__file__)),
         })
@@ -1774,6 +1868,7 @@ def health():
             "model":  MODEL,
             "soul":   SOUL_PATH if soul_ok else "missing",
             "agents": list(agents.keys()),
+            "quarantined": _quarantine_snapshot(),
         })
 
 @app.route("/debug/auth", methods=["GET"])

@@ -58,7 +58,7 @@ Each tier is self-contained. Users advance when they choose to.
 
 ## Brainstem Server (rapp_brainstem/)
 
-**Single-file server**: All logic lives in `brainstem.py` (~1100 lines) — auth, routing, LLM calls, agent orchestration. Keep it that way.
+**Single-file server**: All logic lives in `brainstem.py` (~2,000 lines) — auth, routing, LLM calls, agent orchestration. Keep it that way.
 
 **Request flow (POST /chat)**: Load soul.md -> discover agents from `agents/*_agent.py` -> call Copilot API with tools -> execute tool calls via agent `.perform()` -> loop up to 3 rounds -> return response.
 
