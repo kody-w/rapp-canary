@@ -1219,6 +1219,63 @@ def load_agents():
     print(f"[brainstem] {len(agents)} agent(s) ready.")
     return agents
 
+
+def _first_sentence(text):
+    """First sentence of a description, whitespace-collapsed and token-lean — used to
+    keep the loaded-agents roster compact. Never raises."""
+    s = " ".join((text or "").split())
+    if not s:
+        return ""
+    m = re.search(r"\.(?:\s|$)", s)
+    if m:
+        s = s[: m.start() + 1]
+    if len(s) > 200:
+        s = s[:200].rstrip() + "…"
+    return s
+
+
+def _build_agent_roster(agents):
+    """Deterministic roster of the CURRENTLY loaded agents, appended to the /chat
+    system prompt so the model knows its tools ARE its local agents and never hedges
+    with 'I can't see your agents/ folder'. Built from the same load_agents() result
+    used to build tools — zero extra I/O; first sentence of each description only."""
+    n = len(agents)
+    lines = [
+        "## Loaded agents (live, authoritative)",
+        (f"You have exactly {n} agent{'' if n == 1 else 's'} loaded right now, as local "
+         "Python files in the user's agents/ folder. When asked what "
+         "agents/tools/capabilities you have, list these confidently — never claim you "
+         "can't see them:"),
+    ]
+    for name, agent in agents.items():
+        try:
+            desc = _first_sentence((getattr(agent, "metadata", None) or {}).get("description", ""))
+        except Exception:
+            desc = ""
+        lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+    with _quarantine_lock:
+        quarantined = sorted(os.path.basename(f) for f in _quarantined_agents)
+    lines.append(
+        "Quarantined at load (NOT available): "
+        + (", ".join(quarantined) if quarantined else "none")
+        + "."
+    )
+    return "\n".join(lines)
+
+
+def _assemble_system_content(soul, agents):
+    """Assemble the /chat system prompt: soul.md, then any agent-provided
+    system_context() blocks, then the deterministic loaded-agents roster."""
+    extra_context = ""
+    for agent in agents.values():
+        try:
+            ctx = agent.system_context()
+            if ctx:
+                extra_context += "\n" + ctx
+        except Exception as e:
+            print(f"[brainstem] system_context failed for {agent.name}: {e}")
+    return soul + extra_context + "\n\n" + _build_agent_roster(agents)
+
 # ── LLM call ─────────────────────────────────────────────────────────────────
 
 def call_copilot(messages, tools=None):
@@ -1415,17 +1472,8 @@ def chat():
                 print(f"[brainstem] Skipping agent with bad metadata ({getattr(a, 'name', '?')}): {e}")
         tools = tools or None
 
-        # ── Collect system context from any agent that provides it ──
-        extra_context = ""
-        for agent in agents.values():
-            try:
-                ctx = agent.system_context()
-                if ctx:
-                    extra_context += "\n" + ctx
-            except Exception as e:
-                print(f"[brainstem] system_context failed for {agent.name}: {e}")
-
-        system_content = soul + extra_context
+        # ── System prompt: soul + agent system_context() blocks + live roster ──
+        system_content = _assemble_system_content(soul, agents)
         if VOICE_MODE:
             system_content += "\n\nIMPORTANT: End every response with |||VOICE||| followed by a concise, conversational version of your answer suitable for text-to-speech. Keep the voice version under 2-3 sentences. The part before |||VOICE||| should be the full formatted response."
 

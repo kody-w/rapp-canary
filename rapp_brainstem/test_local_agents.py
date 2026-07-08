@@ -740,5 +740,152 @@ class NoParamsAgent(BasicAgent):
         self.assertEqual(self.brainstem._quarantine_snapshot(), [])
 
 
+class TestAgentRoster(unittest.TestCase):
+    """The /chat system prompt appends a deterministic roster of the CURRENTLY loaded
+    agents so the model knows its tools ARE its local agents and never hedges with
+    'I can't see your agents/ folder'. The roster is built from the same load_agents()
+    result used for tools — zero extra I/O — with only the first sentence of each
+    description (token-lean). See fix/agent-roster-and-tour-polish."""
+
+    def _agent(self, class_name, name, description):
+        """A well-formed cartridge with the given tool name and description."""
+        return f'''
+from agents.basic_agent import BasicAgent
+
+class {class_name}(BasicAgent):
+    def __init__(self):
+        self.name = {name!r}
+        self.metadata = {{
+            "name": self.name,
+            "description": {description!r},
+            "parameters": {{"type": "object", "properties": {{}}, "required": []}}
+        }}
+        super().__init__(name=self.name, metadata=self.metadata)
+
+    def perform(self, **kwargs):
+        return "ok"
+'''
+
+    def _bad_name_agent(self, name):
+        """A cartridge whose class name is fine but self.name is tool-illegal (a space),
+        so load_agents() quarantines it instead of loading it."""
+        return f'''
+from agents.basic_agent import BasicAgent
+
+class BrokenAgent(BasicAgent):
+    def __init__(self):
+        self.name = {name!r}
+        self.metadata = {{
+            "name": self.name,
+            "description": "A cartridge with a tool-illegal name",
+            "parameters": {{"type": "object", "properties": {{}}, "required": []}}
+        }}
+        super().__init__(name=self.name, metadata=self.metadata)
+
+    def perform(self, **kwargs):
+        return "ok"
+'''
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        import brainstem
+        import local_storage
+        self.brainstem = brainstem
+        self._orig_agents_path = brainstem.AGENTS_PATH
+        brainstem.AGENTS_PATH = self._tmp
+        self._orig_data_dir = local_storage._DATA_DIR
+        local_storage._DATA_DIR = self._tmp
+        brainstem._shims_registered = False
+        # Isolate the process-global quarantine + flight-log state so the roster's
+        # "quarantined" line is deterministic regardless of other tests / prior sweeps.
+        self._orig_quar = dict(brainstem._quarantined_agents)
+        self._orig_logged = set(brainstem._quarantine_logged)
+        brainstem._quarantined_agents.clear()
+        brainstem._quarantine_logged.clear()
+        with brainstem._flight_log_lock:
+            self._orig_flight = list(brainstem._flight_log)
+            brainstem._flight_log.clear()
+
+    def tearDown(self):
+        import local_storage
+        self.brainstem.AGENTS_PATH = self._orig_agents_path
+        local_storage._DATA_DIR = self._orig_data_dir
+        self.brainstem._quarantined_agents.clear()
+        self.brainstem._quarantined_agents.update(self._orig_quar)
+        self.brainstem._quarantine_logged.clear()
+        self.brainstem._quarantine_logged.update(self._orig_logged)
+        with self.brainstem._flight_log_lock:
+            self.brainstem._flight_log[:] = self._orig_flight
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _write(self, filename, code):
+        path = os.path.join(self._tmp, filename)
+        with open(path, "w") as f:
+            f.write(code)
+        return path
+
+    def test_roster_block_present_in_assembled_prompt(self):
+        """The assembled system prompt keeps the soul and appends the roster block,
+        with only the first sentence of each description (token-lean)."""
+        self._write("alpha_agent.py",
+                    self._agent("AlphaAgent", "Alpha",
+                                "Alpha handles the first task. This trailing sentence must be trimmed."))
+        self._write("beta_agent.py",
+                    self._agent("BetaAgent", "Beta", "Beta handles the second task."))
+
+        agents = self.brainstem.load_agents()
+        prompt = self.brainstem._assemble_system_content("SOUL-SENTINEL", agents)
+
+        self.assertIn("SOUL-SENTINEL", prompt)  # soul is preserved verbatim
+        self.assertIn("## Loaded agents (live, authoritative)", prompt)
+        self.assertIn("You have exactly 2 agents loaded right now", prompt)
+        self.assertIn("- Alpha: Alpha handles the first task.", prompt)
+        # First sentence only — the second sentence is dropped to stay token-lean.
+        self.assertNotIn("This trailing sentence must be trimmed", prompt)
+        # Clean case: nothing quarantined.
+        self.assertIn("Quarantined at load (NOT available): none.", prompt)
+
+    def test_roster_contains_each_loaded_agent_name(self):
+        """Every loaded agent is enumerated by name in the roster."""
+        self._write("alpha_agent.py", self._agent("AlphaAgent", "Alpha", "First."))
+        self._write("beta_agent.py", self._agent("BetaAgent", "Beta", "Second."))
+        self._write("gamma_agent.py", self._agent("GammaAgent", "Gamma", "Third."))
+
+        agents = self.brainstem.load_agents()
+        prompt = self.brainstem._assemble_system_content("SOUL", agents)
+
+        for name in ("Alpha", "Beta", "Gamma"):
+            self.assertIn(name, agents)
+            self.assertIn(f"- {name}:", prompt)
+
+    def test_roster_lists_quarantined_file_as_unavailable(self):
+        """A cartridge quarantined at load is surfaced in the roster as NOT available,
+        by filename, while healthy agents in the same sweep still appear."""
+        self._write("alpha_agent.py", self._agent("AlphaAgent", "Alpha", "First."))
+        self._write("broken_agent.py", self._bad_name_agent("Broken Name"))
+
+        agents = self.brainstem.load_agents()
+        prompt = self.brainstem._assemble_system_content("SOUL", agents)
+
+        self.assertIn("- Alpha:", prompt)
+        self.assertNotIn("Broken Name", prompt)  # quarantined — not a live tool
+        self.assertIn("Quarantined at load (NOT available): broken_agent.py.", prompt)
+
+    def test_roster_reflects_agent_hot_added_between_assemblies(self):
+        """Agents reload from disk every /chat — a file added between two assemblies
+        shows up in the second roster with no restart."""
+        self._write("alpha_agent.py", self._agent("AlphaAgent", "Alpha", "First."))
+        first = self.brainstem._assemble_system_content("SOUL", self.brainstem.load_agents())
+        self.assertIn("You have exactly 1 agent loaded right now", first)
+        self.assertIn("- Alpha:", first)
+        self.assertNotIn("- Beta:", first)
+
+        self._write("beta_agent.py", self._agent("BetaAgent", "Beta", "Second."))
+        second = self.brainstem._assemble_system_content("SOUL", self.brainstem.load_agents())
+        self.assertIn("You have exactly 2 agents loaded right now", second)
+        self.assertIn("- Alpha:", second)
+        self.assertIn("- Beta:", second)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

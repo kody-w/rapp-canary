@@ -953,17 +953,17 @@
       <ul>
         <li><strong>Chat</strong>: Just ask me questions below to start building and researching!</li>
         <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>
-        <li><strong>Add Skills</strong>: Drag and drop any <code>.py</code> agent file directly onto this window to instantly teach me new things.</li>
+        <li><strong>Add Agents</strong>: Drag and drop any <code>.py</code> agent file directly onto this window to instantly teach me new things.</li>
       </ul>
       <p><em>Click one of the prompts below to get started!</em></p>
-      <p><button class="tour-invite" onclick="startTour()">🧬 New here? Take the First Interview — a 5-minute guided tour</button></p>
+      <p><button class="starter-btn tour-invite" onclick="startTour()">✨ New here? Take the 5-minute guided tour</button></p>
     </div>
   </div>
 </div>
 
 <footer>
   <div id="starter-prompts">
-    <button class="starter-btn" onclick="useStarter('What can you do?', 'What exactly can you do?')">What can you do?</button>
+    <button class="starter-btn" onclick="useStarter('What can you do?', 'What can you do? Answer short and punchy: one intro line, then up to 6 bullets (one line each) naming your loaded agents and what they do, then one suggested next step. Under 120 words total.')">What can you do?</button>
     <button class="starter-btn" onclick="useStarter('What do you remember?')">What do you remember?</button>
     <button class="starter-btn" onclick="useStarter('What should I do next?', 'What are the absolute coolest, most mind-blowing, out of the box, prompts that will really show off the power? Give me 10.')">What should I do next?</button>
   </div>
@@ -979,7 +979,6 @@
       <button class="toolbar-link" onclick="document.getElementById('chat-import').click()" title="Import transcript">Import</button>
       <input type="file" id="chat-import" accept=".json" style="display:none" onchange="importChat(event)">
       <button class="toolbar-link" onclick="clearChat()">Clear</button>
-      <button class="toolbar-link" onclick="startTour()" title="The First Interview — a 5-minute guided tour on the live brainstem">🧬 Tour</button>
       <a class="toolbar-link" href="https://blazingbeard.github.io/quests/rapp-brainstem.html" target="_blank" title="Guided training quest with checkpoints">📚 Tutorial</a>
       <button class="toolbar-link" onclick="shareWithAdmin()" title="Share diagnostics with admin for help" style="color:#f0883e">🆘 Get Help</button>
       <button class="toolbar-link dev-only" onclick="toggleDevMode()" id="dev-toggle">Dev</button>
@@ -1912,8 +1911,11 @@
       logBox.className = 'agent-logs collapsed';
       logBox.textContent = logs;
       label.onclick = () => {
-        logBox.classList.toggle('collapsed');
+        const opened = logBox.classList.toggle('collapsed') === false;
         label.querySelector('.arrow').classList.toggle('open');
+        // An expanded thought below the fold is invisible — bring it into view.
+        if (opened) requestAnimationFrame(() =>
+          logBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
       };
       wrapper.appendChild(label);
       wrapper.appendChild(logBox);
@@ -2570,10 +2572,10 @@
           <ul>
             <li><strong>Chat</strong>: Just ask me questions below to start building and researching!</li>
             <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>
-            <li><strong>Add Skills</strong>: Drag and drop any <code>.py</code> agent file directly onto this window to instantly teach me new things.</li>
+            <li><strong>Add Agents</strong>: Drag and drop any <code>.py</code> agent file directly onto this window to instantly teach me new things.</li>
           </ul>
           <p><em>Click one of the prompts below to get started!</em></p>
-          <p><button class="tour-invite" onclick="startTour()">🧬 New here? Take the First Interview — a 5-minute guided tour</button></p>
+          <p><button class="starter-btn tour-invite" onclick="startTour()">✨ New here? Take the 5-minute guided tour</button></p>
         </div>
       </div>
     `;
@@ -2662,32 +2664,39 @@
     const MEMORY_FILES = ['context_memory_agent.py', 'manage_memory_agent.py', 'basic_agent.py'];
 
     document.head.insertAdjacentHTML('beforeend', `<style id="tour-css">
-      .tour-invite { background: none; border: 1px dashed #58a6ff; color: #58a6ff; border-radius: 8px;
-        padding: 6px 12px; cursor: pointer; font-size: 13px; }
-      .tour-invite:hover { background: rgba(88,166,255,.1); }
-      #tour-hole { position: fixed; z-index: 9990; pointer-events: none; border-radius: 10px;
-        box-shadow: 0 0 0 100vmax rgba(0,0,0,.55); transition: all .25s ease; }
-      #tour-ring { position: fixed; z-index: 9991; pointer-events: none; border: 2px solid #58a6ff;
-        border-radius: 12px; animation: tour-pulse 1.6s ease-in-out infinite; transition: all .25s ease; }
-      @keyframes tour-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(88,166,255,.55); }
-        50% { box-shadow: 0 0 0 9px rgba(88,166,255,0); } }
-      #tour-card { position: fixed; z-index: 9995; width: min(390px, calc(100vw - 32px));
+      .tour-invite { margin-top: 2px; }
+      #tour-hole { position: fixed; z-index: 9990; pointer-events: none;
+        box-shadow: 0 0 0 100vmax rgba(1, 4, 9, .6); transition: all .2s ease; }
+      #tour-ring { position: fixed; z-index: 9991; pointer-events: none; border: 1px solid #58a6ff;
+        box-shadow: 0 0 0 3px rgba(88,166,255,.25); transition: all .2s ease; }
+      #tour-card { position: fixed; z-index: 9995; width: min(400px, calc(100vw - 32px));
         background: #161b22; border: 1px solid #30363d; border-radius: 12px; color: #e6edf3;
-        box-shadow: 0 12px 40px rgba(0,0,0,.55); font-size: 14px; line-height: 1.5; transition: all .25s ease; }
-      body.light-mode #tour-card { background: #ffffff; border-color: #d0d7de; color: #1f2328; }
+        box-shadow: 0 8px 30px rgba(1,4,9,.7); font-size: 14px; line-height: 1.6; transition: top .2s ease, left .2s ease; }
+      body.light-mode #tour-card { background: #ffffff; border-color: #d0d7de; color: #1f2328; box-shadow: 0 8px 30px rgba(31,35,40,.15); }
+      #tour-card .tc-bar { height: 2px; background: #21262d; border-radius: 12px 12px 0 0; overflow: hidden; }
+      #tour-card .tc-bar > div { height: 100%; background: #1f6feb; transition: width .3s ease; }
       #tour-card .tc-head { display: flex; align-items: center; justify-content: space-between;
-        padding: 10px 14px 0 14px; font-size: 11px; color: #8b949e; }
-      #tour-card .tc-head button { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 12px; }
-      #tour-card .tc-head button:hover { color: #f85149; }
-      #tour-card .tc-body { padding: 4px 16px 8px 16px; }
-      #tour-card .tc-body h3 { margin: 4px 0 6px 0; font-size: 15px; }
-      #tour-card .tc-body em { color: #8b949e; }
-      #tour-card .tc-hint { margin: 8px 16px 0 16px; padding: 8px 10px; border-radius: 8px;
-        background: rgba(88,166,255,.12); color: #58a6ff; font-size: 13px; }
-      #tour-card .tc-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 14px 12px 14px; }
-      #tour-card .tc-next { background: #238636; color: #fff; border: none; border-radius: 8px;
-        padding: 7px 16px; cursor: pointer; font-size: 13px; font-weight: 600; }
-      #tour-card .tc-next:hover { background: #2ea043; }
+        padding: 12px 18px 0 18px; font-size: 10px; color: #8b949e;
+        text-transform: uppercase; letter-spacing: .12em; }
+      #tour-card .tc-head button { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 12px; padding: 0; }
+      #tour-card .tc-head button:hover { color: #e6edf3; }
+      body.light-mode #tour-card .tc-head button:hover { color: #1f2328; }
+      #tour-card .tc-body { padding: 2px 18px 6px 18px; }
+      #tour-card .tc-body h3 { margin: 8px 0 6px 0; font-size: 18px; font-weight: 650; letter-spacing: -.01em; line-height: 1.3; }
+      #tour-card .tc-body em { color: #8b949e; font-style: normal; }
+      #tour-card .tc-body p { margin: 0 0 8px 0; color: #9ea7b3; font-size: 13.5px; }
+      body.light-mode #tour-card .tc-body p { color: #57606a; }
+      #tour-card .tc-quote { margin: 10px 0 8px 0; padding: 2px 0 2px 12px; border-left: 3px solid #30363d;
+        font-size: 12.5px; font-style: italic; color: #8b949e; line-height: 1.5; }
+      #tour-card .tc-punch { color: #e6edf3; font-weight: 600; font-size: 13.5px; }
+      body.light-mode #tour-card .tc-punch { color: #1f2328; }
+      #tour-card .tc-hint { margin: 4px 16px 4px 16px; padding: 8px 12px; border-radius: 8px;
+        background: #0d1117; border: 1px solid #21262d; color: #58a6ff; font-size: 13px; }
+      body.light-mode #tour-card .tc-hint { background: #f6f8fa; border-color: #d0d7de; }
+      #tour-card .tc-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 6px 16px 14px 16px; }
+      #tour-card .tc-next { background: #1f6feb; color: #fff; border: none; border-radius: 8px;
+        padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 600; transition: background 0.15s; }
+      #tour-card .tc-next:hover { background: #388bfd; }
     </style>`);
 
     let idx = -1, steps = [], hole, ring, card, posTimer = null, surgeryFile = null, waitingChat = false;
@@ -2709,7 +2718,8 @@
       hole = document.createElement('div'); hole.id = 'tour-hole';
       ring = document.createElement('div'); ring.id = 'tour-ring';
       card = document.createElement('div'); card.id = 'tour-card';
-      card.innerHTML = '<div class="tc-head"><span class="tc-step"></span><button title="Exit the tour">✕ exit tour</button></div>' +
+      card.innerHTML = '<div class="tc-bar"><div></div></div>' +
+        '<div class="tc-head"><span class="tc-step"></span><button title="Exit the tour">✕</button></div>' +
         '<div class="tc-body"></div><div class="tc-hint" style="display:none"></div>' +
         '<div class="tc-foot" style="display:none"><button class="tc-next">Continue →</button></div>';
       card.querySelector('.tc-head button').onclick = () => endTour(false);
@@ -2724,14 +2734,21 @@
       const r = t ? t.getBoundingClientRect() : null;
       if (r && r.width > 0) {
         hole.style.display = ring.style.display = 'block';
-        const pad = 6;
+        const pad = 4;
+        // Follow the target's own corner shape so the spotlight reads as part
+        // of the control (pills get a capsule, cards keep their radius).
+        const tr = parseFloat(getComputedStyle(t).borderRadius) || 8;
+        const radius = Math.min((r.height + pad * 2) / 2, tr + pad);
         [hole, ring].forEach(el => {
           el.style.left = (r.left - pad) + 'px'; el.style.top = (r.top - pad) + 'px';
           el.style.width = (r.width + pad * 2) + 'px'; el.style.height = (r.height + pad * 2) + 'px';
+          el.style.borderRadius = radius + 'px';
         });
         const ch = card.offsetHeight, cw = card.offsetWidth;
-        let top = (r.top - ch - 16 > 8) ? r.top - ch - 16 : Math.min(r.bottom + 16, innerHeight - ch - 8);
-        let left = Math.max(8, Math.min(r.left + r.width / 2 - cw / 2, innerWidth - cw - 8));
+        // Anchor the card to the target like a tooltip: aligned with its left
+        // edge, sitting just above it (or just below when there's no room).
+        let top = (r.top - ch - 10 > 8) ? r.top - ch - 10 : Math.min(r.bottom + 10, innerHeight - ch - 8);
+        let left = Math.max(8, Math.min(r.left - pad, innerWidth - cw - 8));
         card.style.top = top + 'px'; card.style.left = left + 'px';
       } else {
         hole.style.display = ring.style.display = 'none';
@@ -2742,7 +2759,8 @@
 
     function render() {
       const st = steps[idx];
-      card.querySelector('.tc-step').textContent = `The First Interview — step ${idx + 1} of ${steps.length}`;
+      card.querySelector('.tc-bar > div').style.width = ((idx + 1) / steps.length * 100) + '%';
+      card.querySelector('.tc-step').textContent = `The First Interview · ${idx + 1} / ${steps.length}`;
       card.querySelector('.tc-body').innerHTML = st.html;
       const hint = card.querySelector('.tc-hint');
       if (st.hint) { hint.innerHTML = '👉 ' + st.hint; hint.style.display = 'block'; } else hint.style.display = 'none';
@@ -2762,10 +2780,21 @@
     function advance() { setStep(idx + 1); }
 
     // Show a reaction to what actually happened, then wait for Continue.
-    function react(html) {
+    // targetFn (optional) moves the spotlight onto the thing being described —
+    // e.g. the reply bubble or the agent-thought line — so the user is never
+    // told about something they can't see.
+    function react(html, targetFn) {
       const st = steps[idx];
       st.html = html; st.hint = null; st.next = true; st.wait = null;
+      if (targetFn) st.target = targetFn;
       render();
+    }
+    const lastBubble = () => document.querySelector('#chat .msg.assistant:last-of-type .bubble');
+    const lastThought = () => document.querySelector('#chat .msg.assistant:last-of-type .logs-label') || lastBubble();
+    // Tour-only: bring the newest reply into view before talking about it.
+    function showLatest() {
+      const c = document.getElementById('chat');
+      if (c) c.scrollTop = c.scrollHeight;
     }
 
     function endTour(finished) {
@@ -2779,58 +2808,56 @@
     function defineSteps() {
       steps = [
         {
-          html: `<h3>Have you ever seen Blade Runner?</h3>
-            <p>In the movie, nobody trusts a replicant's word — they sit it down and <strong>interview</strong> it against a baseline. That's exactly how you work with this thing.</p>
-            <p>What just hatched on your machine is an innocent organism. It has capabilities, but you shouldn't take its word for anything. In the next five minutes you'll interview it, teach it, take part of its brain out, and put it back — <em>for real, on the live brainstem. Nothing in this tour is simulated.</em></p>`,
+          html: `<h3>You don't configure it.<br>You interview it.</h3>
+            <p>Think of this as a brand-new hire: capable, untrained, and ready to learn you. Nothing ahead is simulated — it's all live, on your machine.</p>
+            <p class="tc-punch">Five minutes. Twelve small steps.</p>`,
           next: true
         },
         {
-          html: `<h3>1 · Ask for its résumé</h3>
-            <p>Every interview starts the same way: <em>what can you do?</em> It will hand you a résumé — a list of claimed capabilities.</p>`,
-          hint: `Click the glowing <strong>What can you do?</strong> button.`,
+          html: `<h3>Ask what it can do.</h3>
+            <p>Every interview starts with a résumé.</p>`,
+          hint: `Click <strong>What can you do?</strong>`,
           target: () => pill(1), onEnter: showPills, wait: 'assistant',
           reactHtml: `<h3>That's its résumé.</h3>
-            <p>Read it. Notice it claims it can <strong>remember things</strong>. Never trust a résumé — we're going to take it up on that, right now.</p>`
+            <p>Notice it claims it can <strong>remember</strong>. Never trust a résumé — let's take it up on that.</p>`
         },
         {
-          html: `<h3>2 · Introduce yourself</h3>
-            <p>Same as meeting a new coworker. Tell it your name and one thing about you — <em>"Remember, my name is … and I …"</em></p>
-            <p>Don't worry about spelling. It reads between the lines.</p>`,
-          hint: `Type your introduction in the message box and hit Send.`,
+          html: `<h3>Introduce yourself.</h3>
+            <p>Like meeting a new coworker — your name, one detail about you. Spelling doesn't matter; it reads between the lines.</p>`,
+          hint: `Type <em>"Remember, my name is … and I …"</em> and hit <strong>Send</strong>.`,
           target: () => $('#input'), wait: 'assistant',
           reactMemory: true
         },
         {
-          html: `<h3>3 · Wipe the slate</h3>
-            <p>Conversations here are <strong>ephemeral</strong> — short-term memory. Clearing the chat is like walking away and coming back tomorrow: the conversation is gone, and only what it <em>chose to remember</em> survives.</p>`,
+          html: `<h3>Now, wipe the slate.</h3>
+            <p>Conversations are short-term memory. Clearing one is like coming back tomorrow morning.</p>`,
           hint: `Click <strong>Clear</strong> in the toolbar below.`,
           target: () => clearBtn(), wait: 'clear'
         },
         {
-          html: `<h3>4 · Make it prove itself</h3>
-            <p>New conversation. Zero context. If its memory is real, it doesn't need this conversation to know you.</p>`,
+          html: `<h3>Make it prove itself.</h3>
+            <p>New conversation. Zero context. If the memory is real, it doesn't need this chat to know you.</p>`,
           hint: `Click <strong>What do you remember?</strong>`,
           target: () => pill(2), onEnter: showPills, wait: 'assistant',
-          reactHtml: `<h3>It proved it.</h3>
-            <p>Fresh conversation — and it still knows you. That loop — <strong>claim → test → verify</strong> — is the Blade Runner baseline, and it's how you'll evaluate everything this thing ever tells you. It can't gaslight you, because you never take its word for it.</p>`
+          reactHtml: `<h3>It still knows you.</h3>
+            <p><strong>Claim → test → verify.</strong> That loop is the whole method. It can never fool you, because you never take its word for it.</p>`
         },
         {
-          html: `<h3>5 · Crack it open</h3>
-            <p>So far you've talked to the front of it. Now let's look inside its skull.</p>`,
-          hint: `Click the <strong>⊕ button</strong> in the top-right toolbar.`,
+          html: `<h3>Look inside its head.</h3>
+            <p>So far you've talked to the front of it.</p>`,
+          hint: `Click the <strong>⊕ button</strong>, top right.`,
           target: () => $('#agents-btn'), wait: 'panel',
-          reactHtml: `<h3>These aren't settings. They're its brain.</h3>
-            <p>Every capability is <strong>one Python file on your machine</strong> — a document, like a Word doc for AI. This list is <em>everything</em> it can do. If it's not in this list, it can't do it. That's your governance layer, and you own it.</p>`
+          reactHtml: `<h3>Every agent is a file.</h3>
+            <p>This list is <em>everything</em> it can do — each one a small, readable file on your machine. Nothing hidden. That's governance you own.</p>`
         },
         {
-          html: ``, // filled at onEnter with the surgery file name
-          hint: ``,
+          html: ``, hint: ``,
           target: () => $('#agent-list-ul'), panel: true, wait: 'export',
           onEnter: function () {
             openPanel();
-            this.html = `<h3>6 · Brain surgery — back up the lobe</h3>
-              <p>See <strong>${esc(surgeryFile || '')}</strong>? We're about to remove a piece of its brain while it's awake — so first, back it up. Export downloads the agent as a file. Keep track of where it lands (usually Downloads).</p>`;
-            this.hint = `Click <strong>Export</strong> on the <strong>${esc(surgeryFile || '')}</strong> row.`;
+            this.html = `<h3>Back up an agent.</h3>
+              <p>We're about to remove one — save a copy first. It downloads like any file.</p>`;
+            this.hint = `Click <strong>Export</strong> on <strong>${esc(surgeryFile || '')}</strong>.`;
           }
         },
         {
@@ -2838,47 +2865,47 @@
           target: () => $('#agent-list-ul'), panel: true, wait: 'deleted',
           onEnter: function () {
             openPanel();
-            this.html = `<h3>7 · Now take it out</h3>
-              <p>Delete it. Yes, really — the patient stays awake the whole time, and you have the backup.</p>`;
+            this.html = `<h3>Now remove it.</h3>
+              <p>Really. It stays awake the whole time — and you have the backup.</p>`;
             this.hint = `Click <strong>Delete</strong> on <strong>${esc(surgeryFile || '')}</strong> and confirm.`;
           },
-          reactHtml: `<h3>You just removed part of a running brain.</h3>
-            <p>No restart. No error. It simply doesn't have that capability anymore — and here's the important part: <em>it will be honest about that.</em> Let's check.</p>`
+          reactHtml: `<h3>It just lost an agent. Live.</h3>
+            <p>No restart. No error. And here's the part that matters: <strong>it will be honest about it.</strong></p>`
         },
         {
-          html: `<h3>8 · Interview the patient</h3>
-            <p>Ask it to use the capability you just removed — for example: <em>"get my latest hacker news"</em>.</p>`,
-          hint: `Type the request and hit Send.`,
+          html: `<h3>See for yourself.</h3>
+            <p>Ask it to use the agent you just removed.</p>`,
+          hint: `Type <em>"get my latest hacker news"</em> and hit <strong>Send</strong>.`,
           target: () => $('#input'), wait: 'assistant',
           reactHtml: `<h3>It told you the truth.</h3>
-            <p>No fake news, no bluffing — it can't do what isn't in its brain, and it says so. A <strong>naive AI that's honest about its limits</strong> is an AI you can trust in front of a customer. Forgetting a capability is as important as having one.</p>`
+            <p>No bluffing, no made-up news. It can't do what isn't in its head — <strong>and it says so.</strong> That honesty is what makes it safe to trust.</p>`
         },
         {
-          html: `<h3>9 · The transplant</h3>
-            <p>That file you exported? It's not a backup. It's <strong>how agents travel</strong>. Someone can send you one in Teams, you drag it in, and their workflow becomes your workflow.</p>`,
-          hint: `Drag the exported <strong>.py</strong> file from your Downloads and drop it <strong>anywhere on this window</strong>.`,
+          html: `<h3>Now put it back.</h3>
+            <p>That exported file isn't a backup — it's <strong>how agents travel</strong>. It's in your Downloads.</p>`,
+          hint: `Drag the <strong>.py</strong> file from Downloads and drop it <strong>anywhere on this window</strong>.`,
           target: () => $('#chat'), wait: 'dropped',
-          reactHtml: `<h3>💥 Hot-loaded. Live. No restart.</h3>
-            <p>Like the Matrix — <em>"I know kung fu."</em> One dragged file and the capability is back in its brain. This is how you'll share agents with your whole team: trade them like Pokémon cards.</p>`
+          reactHtml: `<h3>Hot-loaded. Instantly.</h3>
+            <p>One file = one agent, live the moment it lands. Teammates can send you these — drop one in, and <strong>their workflow becomes your workflow.</strong></p>`
         },
         {
-          html: `<h3>10 · Trust, but verify</h3>
-            <p>You know the loop by now. It has the capability back — take it up on it.</p>`,
+          html: `<h3>Trust — then verify.</h3>
+            <p>You know the loop by now.</p>`,
           hint: `Ask for the news again.`,
           target: () => $('#input'), wait: 'assistant',
           reactHtml: `<h3>Full circle.</h3>
-            <p>Claim → test → verify. You've now done real brain surgery on a live AI and interviewed the patient the whole way through — the violinist kept playing.</p>`
+            <p>You removed a live agent, watched it tell the truth, and restored it with one drag — and it never went down.</p>`
         },
         {
-          html: `<h3>11 · The menu of backflips</h3>
-            <p>Last thing. Whenever you're standing on the mountaintop wondering <em>"okay… what do I do now?"</em> — there's a button for that. It makes the brainstem show off everything it can do with whatever you've loaded.</p>`,
+          html: `<h3>One last button.</h3>
+            <p>Whenever you're stuck on what to do next — it will show you, with whatever agents it has loaded.</p>`,
           hint: `Click <strong>What should I do next?</strong>`,
           target: () => pill(3), onEnter: showPills, wait: 'assistant',
-          reactHtml: `<h3>🧠 You now know AI.</h3>
-            <p>That's the entire method — and it never changes, no matter how good the models get:</p>
-            <p><strong>Interview it. Teach it. Correct it. Trade agents.</strong></p>
-            <p>When you're ready for the deep end: the <strong>VS Code button</strong> up top opens the operating room, where GitHub Copilot becomes your brain surgeon — building agents on this brainstem while you watch. The brainstem can't even tell Copilot and you apart.</p>
-            <p>Now point it at your problems.</p>`,
+          reactHtml: `<h3>You now know AI.</h3>
+            <p class="tc-punch">Interview it. Teach it. Correct it. Trade agents.</p>
+            <p>That method never changes, no matter how good the models get.</p>
+            <p>Ready for the deep end? The <strong>VS Code button</strong> up top opens the workshop — GitHub Copilot builds new agents on this brainstem while you watch. It can't even tell Copilot and you apart.</p>
+            <p><em>Want to go further? The <a href="https://blazingbeard.github.io/quests/rapp-brainstem.html" target="_blank" style="color:#58a6ff">full Training Quest</a> picks up where this tour ends.</em></p>`,
           last: true
         }
       ];
@@ -2937,22 +2964,23 @@
       }
       if (role !== 'assistant') return;
       waitingChat = false;
+      showLatest();
       if (st.reactMemory) {
         // Peek at the just-rendered message for a memory-agent internal thought.
         const lastLogs = document.querySelector('#chat .msg.assistant:last-of-type .agent-logs');
         if (lastLogs && /manage.?memory/i.test(lastLogs.textContent)) {
-          react(`<h3>It just had a thought. You can see it.</h3>
-            <p>Under the reply there's a line: <strong>▶ agent called ManageMemory</strong>. Click it open. That's an internal thought — <em>it doesn't know you can read this.</em> It decided, on its own, what about you was worth keeping.</p>
-            <p>True story from the person who built this: he told it his son's name, and it <em>didn't</em> save it. Asked why: <em>"I'm a business AI — that felt personal."</em> He corrected it once — "family matters, remember it" — and it never forgot again.</p>
-            <p>You're not configuring software. <strong>You're onboarding an employee.</strong></p>`);
+          react(`<h3>It just had a thought —<br>and you can see it.</h3>
+            <p>The highlighted <strong>▶ agent called ManageMemory</strong> line is an internal thought. Click it open. It chose, on its own, what about you was worth keeping.</p>
+            <div class="tc-quote">Its builder once told it his son's name — it didn't save it. "That felt personal." One correction later, it never forgot again.</div>
+            <p class="tc-punch">You're onboarding an employee, not configuring software.</p>`, lastThought);
         } else {
-          react(`<h3>Interesting — it chose NOT to save that.</h3>
-            <p>No memory agent fired. That's not a bug — <strong>forgetting is a decision too</strong>, the same way you don't memorize everything a stranger says. It judged your message wasn't worth long-term memory.</p>
-            <p>You can overrule it — say <em>"remember that — it matters to me"</em> and watch the ▶ agent line appear under its reply. Correcting its judgment is exactly how you train it. That's the whole relationship.</p>`);
+          react(`<h3>It chose <em>not</em> to save that.</h3>
+            <p>Not a bug — <strong>forgetting is a decision too.</strong> It judged that wasn't worth long-term memory.</p>
+            <p>Overrule it: say <em>"remember that — it matters to me"</em> and watch the <strong>▶ agent called</strong> line appear. Correcting its judgment is how you train it.</p>`, lastBubble);
         }
         return;
       }
-      if (st.reactHtml) react(st.reactHtml); else if (!st.next) advance();
+      if (st.reactHtml) react(st.reactHtml, lastBubble); else if (!st.next) advance();
     }
 
     // Panel-open detection (step 5) + keep panel open during surgery steps.
