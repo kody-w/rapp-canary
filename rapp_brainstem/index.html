@@ -182,6 +182,10 @@
     font-size: 14px; line-height: 1.6;
     max-width: 780px; word-break: break-word;
   }
+  /* Long replies earn the lateral whitespace: widen instead of forcing a
+     scroll through a skinny column. Capped for line-length readability. */
+  .msg.wide { max-width: min(1200px, calc(100vw - 180px)); }
+  .msg.wide .bubble { max-width: 100%; }
   .msg.assistant .bubble {
     background: #161b22; border: 1px solid #21262d;
     border-radius: 4px 12px 12px 12px;
@@ -274,7 +278,7 @@
     padding: 8px 10px; background: #0d1117;
     font-size: 10px; color: #7ee787;
     font-family: "SF Mono", monospace;
-    white-space: pre-wrap; max-height: 160px;
+    white-space: pre-wrap; max-height: 320px;
     overflow-y: auto; border-top: 1px solid #21262d;
   }
   .agent-logs.collapsed { display: none; }
@@ -298,7 +302,7 @@
     background: #161b22;
   }
   .input-row {
-    display: flex; gap: 10px;
+    display: flex; gap: 10px; align-items: stretch;
     max-width: 760px; margin: 0 auto;
   }
   #input {
@@ -315,7 +319,6 @@
     background: #1f6feb; color: #fff; border: none; border-radius: 8px;
     padding: 10px 18px; font-size: 14px; font-weight: 600;
     cursor: pointer; transition: background 0.15s, opacity 0.15s;
-    align-self: flex-end;
   }
   #send:hover { background: #388bfd; }
   #send:disabled { opacity: 0.4; cursor: default; }
@@ -797,7 +800,7 @@
       </div>
       <div class="copy-toast" id="copy-toast">&nbsp;</div>
       <a id="verify-link" href="#" target="_blank" style="color:#58a6ff;font-size:14px">Open GitHub &rarr;</a>
-      <div style="font-size:11px;color:#8b949e;margin-top:4px">If a new tab didn't open, click the link above</div>
+      <div style="font-size:11px;color:#8b949e;margin-top:4px">Code copied to your clipboard — click the link above, then paste it on GitHub</div>
       <div class="login-status" id="login-status">Waiting for authorization...</div>
     </div>
     <div id="login-step3" style="display:none">
@@ -861,7 +864,7 @@
           <!-- Populated by JS -->
         </ul>
         <div style="font-size:10px; color:#8b949e; margin-top:12px; text-align:center;">
-          Drag & drop .py files anywhere to install new agents
+          Drag & drop agent.py files anywhere to install new agents
         </div>
       </div>
     </div>
@@ -953,10 +956,10 @@
       <ul>
         <li><strong>Chat</strong>: Just ask me questions below to start building and researching!</li>
         <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>
-        <li><strong>Add Agents</strong>: Drag and drop any <code>.py</code> agent file directly onto this window to instantly teach me new things.</li>
+        <li><strong>Add Agents</strong>: Drag and drop any <code>agent.py</code> file directly onto this window to instantly teach me new things.</li>
       </ul>
       <p><em>Click one of the prompts below to get started!</em></p>
-      <p><button class="starter-btn tour-invite" onclick="startTour()">✨ New here? Take the 5-minute guided tour</button></p>
+      <p class="tour-invite-wrap"><button class="starter-btn tour-invite" onclick="startTour()">New here? Take the 5-minute guided tour</button><button class="tour-invite-hide" onclick="hideTourInvite()" title="Hide this — you can still find the Training Quest in the toolbar"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor"><path d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z"/></svg></button></p>
     </div>
   </div>
 </div>
@@ -965,7 +968,7 @@
   <div id="starter-prompts">
     <button class="starter-btn" onclick="useStarter('What can you do?', 'What can you do? Answer short and punchy: one intro line, then up to 6 bullets (one line each) naming your loaded agents and what they do, then one suggested next step. Under 120 words total.')">What can you do?</button>
     <button class="starter-btn" onclick="useStarter('What do you remember?')">What do you remember?</button>
-    <button class="starter-btn" onclick="useStarter('What should I do next?', 'What are the absolute coolest, most mind-blowing, out of the box, prompts that will really show off the power? Give me 10.')">What should I do next?</button>
+    <button class="starter-btn" onclick="useStarter('What should I do next?', 'Look at the agents I currently have loaded — then show me what I am MISSING. Give me 10 ideas for agents I do not have yet, each one creatable just by describing it in plain language. Stretch the limits of what a local brainstem can do: hitting real APIs, working with my files, automating my routines, agents that build other agents, agents chaining together. One or two lines each: the agent plus the wow. Skip anything my loaded agents already cover. No generic AI demo ideas.')">What should I do next?</button>
   </div>
   <div class="toolbar-row">
     <div class="left">
@@ -979,7 +982,7 @@
       <button class="toolbar-link" onclick="document.getElementById('chat-import').click()" title="Import transcript">Import</button>
       <input type="file" id="chat-import" accept=".json" style="display:none" onchange="importChat(event)">
       <button class="toolbar-link" onclick="clearChat()">Clear</button>
-      <a class="toolbar-link" href="https://blazingbeard.github.io/quests/rapp-brainstem.html" target="_blank" title="Guided training quest with checkpoints">📚 Tutorial</a>
+      <a class="toolbar-link" href="https://blazingbeard.github.io/quests/rapp-brainstem.html" target="_blank" title="Guided training quest with checkpoints" onclick="showTourInvite()">📚 Tutorial</a>
       <button class="toolbar-link" onclick="shareWithAdmin()" title="Share diagnostics with admin for help" style="color:#f0883e">🆘 Get Help</button>
       <button class="toolbar-link dev-only" onclick="toggleDevMode()" id="dev-toggle">Dev</button>
     </div>
@@ -1118,8 +1121,9 @@
       document.getElementById('login-overlay').style.display = 'flex';
       loginInProgress = true;
       loginDismissed = false;
+      // Show the code and stay put — auto-opening GitHub hides the code the
+      // user still needs. They copy first, then click Open GitHub themselves.
       copyDeviceCode();
-      window.open(d.verification_uri, '_blank');
       startPollLogin();
     } catch (e) {
       alert('Failed to switch: ' + e.message);
@@ -1314,6 +1318,9 @@
     const open = p.classList.toggle('open');
     if (open) {
       loadRarRegistry();  // warm the cache so the first search is instant
+      // A transient fetch failure shouldn't stick for the session — retry
+      // the browse view whenever the panel reopens without a loaded registry.
+      if (!rarRegistry) loadFeatured();
       document.getElementById('rar-search-input').focus();
     }
   }
@@ -1405,6 +1412,20 @@
   // Search a public catalog of agents and hot-load any of them into this
   // brainstem by fetching the raw .py and POSTing it to /agents/import.
   const RAR_BASE = 'https://raw.githubusercontent.com/kody-w/RAR/main';
+  // Same static files via the jsdelivr CDN mirror — used only when raw
+  // rate-limits (HTTP 429) or hiccups. Plain file hosting, no API.
+  const RAR_MIRROR = 'https://cdn.jsdelivr.net/gh/kody-w/RAR@main';
+  async function rarFetch(path) {
+    try {
+      const r = await rarFetch(path);
+      if (r.ok) return r;
+      throw new Error('HTTP ' + r.status);
+    } catch (e) {
+      const r = await fetch(encodeURI(`${RAR_MIRROR}/${path}`));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r;
+    }
+  }
   let rarRegistry = null;     // cached agents array (lazy-loaded on first search)
   let rarLoading = null;      // in-flight promise, to dedupe concurrent loads
   let rarSearchTimer = null;
@@ -1420,8 +1441,8 @@
   function loadRarRegistry() {
     if (rarRegistry) return Promise.resolve(rarRegistry);
     if (rarLoading) return rarLoading;
-    rarLoading = fetch(`${RAR_BASE}/registry.json`)
-      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    rarLoading = rarFetch('registry.json')
+      .then(r => r.json())
       .then(data => {
         rarRegistry = (Array.isArray(data.agents) ? data.agents : []).filter(isLoadableAgent);
         return rarRegistry;
@@ -1446,10 +1467,15 @@
     loadRarRegistry().then(agents => {
       // Bail if the query changed while the registry was downloading.
       if (document.getElementById('rar-search-input').value.trim().toLowerCase() !== q) return;
+      // Agents are named with underscores (learn_new) but people type spaces
+      // ("learn new"). Fold _ - and whitespace together and match every word,
+      // any order, so the naming convention never breaks a search.
+      const fold = (t) => t.toLowerCase().replace(/[_\-\s]+/g, ' ');
+      const words = fold(q).split(' ').filter(Boolean);
       const matches = agents.filter(a => {
-        const hay = [a.display_name, a.name, a.description, a.category, ...(a.tags || [])]
-          .filter(Boolean).join(' ').toLowerCase();
-        return hay.includes(q);
+        const hay = fold([a.display_name, a.name, a.description, a.category, a._file, ...(a.tags || [])]
+          .filter(Boolean).join(' '));
+        return words.every(w => hay.includes(w));
       }).slice(0, 40);
       renderRarResults(matches);
     }).catch(() => {
@@ -1623,7 +1649,7 @@
     btn.textContent = 'Adding…';
     try {
       // encodeURI preserves '/' and '@' (used in scope dirs) while escaping spaces.
-      const r = await fetch(encodeURI(`${RAR_BASE}/${path}`));
+      const r = await rarFetch(path);
       if (!r.ok) throw new Error('download failed (HTTP ' + r.status + ')');
       const code = await r.text();
       const fd = new FormData();
@@ -1684,8 +1710,9 @@
       document.getElementById('login-step2').style.display = 'block';
       document.getElementById('device-code').textContent = d.user_code;
       document.getElementById('verify-link').href = d.verification_uri;
+      // Show the code and stay put — auto-opening GitHub hides the code the
+      // user still needs. They copy first, then click Open GitHub themselves.
       copyDeviceCode();
-      window.open(d.verification_uri, '_blank');
       startPollLogin();
     } catch (e) {
       clog('login.start_failed', { error: e.message });
@@ -1874,8 +1901,13 @@
     const right = document.createElement('div');
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
+    // Long responses expand into the unused lateral space.
+    if (role === 'assistant' && text && text.length > 1200) wrap.classList.add('wide');
     if (role === 'assistant' && typeof marked !== 'undefined') {
-      bubble.innerHTML = sanitizeHtml(marked.parse(text));
+      // Models often emit \u2022 bullets, which markdown doesn't treat as list
+      // markers — the lines collapse into one run-on paragraph. Normalize them.
+      const md = text.replace(/^([ \t]*)[\u2022\u2023\u25AA\u25CF]\s+/gm, '$1- ');
+      bubble.innerHTML = sanitizeHtml(marked.parse(md));
       bubble.querySelectorAll('a').forEach(a => a.target = '_blank');
     } else {
       bubble.textContent = text;
@@ -1909,7 +1941,12 @@
       }
       const logBox = document.createElement('div');
       logBox.className = 'agent-logs collapsed';
-      logBox.textContent = logs;
+      // Agent results are often one giant JSON line — pretty-print each
+      // "[Agent] {...}" payload so an opened thought is actually readable.
+      logBox.textContent = logs.replace(/(\[[^\]\n]+\])\s*(\{[\s\S]*?\}|\[[\s\S]*?\])(?=\s*(?:\[[^\]\n]+\]|$))/g, (m, tag, body) => {
+        try { return tag + '\n' + JSON.stringify(JSON.parse(body), null, 2); }
+        catch { return m; }
+      });
       label.onclick = () => {
         const opened = logBox.classList.toggle('collapsed') === false;
         label.querySelector('.arrow').classList.toggle('open');
@@ -2572,10 +2609,10 @@
           <ul>
             <li><strong>Chat</strong>: Just ask me questions below to start building and researching!</li>
             <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>
-            <li><strong>Add Agents</strong>: Drag and drop any <code>.py</code> agent file directly onto this window to instantly teach me new things.</li>
+            <li><strong>Add Agents</strong>: Drag and drop any <code>agent.py</code> file directly onto this window to instantly teach me new things.</li>
           </ul>
           <p><em>Click one of the prompts below to get started!</em></p>
-          <p><button class="starter-btn tour-invite" onclick="startTour()">✨ New here? Take the 5-minute guided tour</button></p>
+          <p class="tour-invite-wrap"><button class="starter-btn tour-invite" onclick="startTour()">New here? Take the 5-minute guided tour</button><button class="tour-invite-hide" onclick="hideTourInvite()" title="Hide this — you can still find the Training Quest in the toolbar"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor"><path d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z"/></svg></button></p>
         </div>
       </div>
     `;
@@ -2657,14 +2694,19 @@
   // The First Interview — an optional guided tour overlaid on the live UI.
   // Pure observer: it never clicks, sends, or changes anything for the user.
   // Every hook below is a 1:1 pass-through; exit the tour and nothing about
-  // the page differs from stock. Entry points: 🧬 Tour (toolbar) + welcome.
+  // the page differs from stock. Entry point: the welcome-bubble invite pill.
   // ══════════════════════════════════════════════════════════════════════
   (function () {
     const LS_STEP = 'rapp_tour_step', LS_DONE = 'rapp_tour_done';
     const MEMORY_FILES = ['context_memory_agent.py', 'manage_memory_agent.py', 'basic_agent.py'];
 
     document.head.insertAdjacentHTML('beforeend', `<style id="tour-css">
-      .tour-invite { margin-top: 2px; }
+      .tour-invite-wrap { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 12px 0 2px 0; }
+      .tour-invite { display: block; }
+      .tour-invite-hide { background: none; border: none; color: #8b949e; cursor: pointer; padding: 4px;
+        border-radius: 6px; opacity: 0; transition: opacity .2s; line-height: 0; }
+      .tour-invite-wrap:hover .tour-invite-hide { opacity: .8; }
+      .tour-invite-hide:hover { color: #e6edf3; }
       #tour-hole { position: fixed; z-index: 9990; pointer-events: none;
         box-shadow: 0 0 0 100vmax rgba(1, 4, 9, .6); transition: all .2s ease; }
       #tour-ring { position: fixed; z-index: 9991; pointer-events: none; border: 1px solid #58a6ff;
@@ -2673,10 +2715,13 @@
         background: #161b22; border: 1px solid #30363d; border-radius: 12px; color: #e6edf3;
         box-shadow: 0 8px 30px rgba(1,4,9,.7); font-size: 14px; line-height: 1.6; transition: top .2s ease, left .2s ease; }
       body.light-mode #tour-card { background: #ffffff; border-color: #d0d7de; color: #1f2328; box-shadow: 0 8px 30px rgba(31,35,40,.15); }
-      #tour-card .tc-bar { height: 2px; background: #21262d; border-radius: 12px 12px 0 0; overflow: hidden; }
+      #tour-card .tc-bar { height: 3px; margin: 12px 18px 0 18px; background: #21262d;
+        border-radius: 3px; overflow: hidden; }
+      body.light-mode #tour-card .tc-bar { background: #d0d7de; }
+      body.light-mode #tour-card .tc-quote { border-left-color: #d0d7de; }
       #tour-card .tc-bar > div { height: 100%; background: #1f6feb; transition: width .3s ease; }
       #tour-card .tc-head { display: flex; align-items: center; justify-content: space-between;
-        padding: 12px 18px 0 18px; font-size: 10px; color: #8b949e;
+        padding: 8px 18px 0 18px; font-size: 10px; color: #8b949e;
         text-transform: uppercase; letter-spacing: .12em; }
       #tour-card .tc-head button { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 12px; padding: 0; }
       #tour-card .tc-head button:hover { color: #e6edf3; }
@@ -2693,19 +2738,64 @@
       #tour-card .tc-hint { margin: 4px 16px 4px 16px; padding: 8px 12px; border-radius: 8px;
         background: #0d1117; border: 1px solid #21262d; color: #58a6ff; font-size: 13px; }
       body.light-mode #tour-card .tc-hint { background: #f6f8fa; border-color: #d0d7de; }
-      #tour-card .tc-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 6px 16px 14px 16px; }
+      #tour-card .tc-foot { display: flex; justify-content: flex-end; align-items: center; gap: 14px; padding: 6px 16px 14px 16px; }
+      #tour-card .tc-skip { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 12.5px; padding: 4px 0; }
+      #tour-card .tc-skip:hover { color: #e6edf3; text-decoration: underline; }
+      body.light-mode #tour-card .tc-skip:hover { color: #1f2328; }
       #tour-card .tc-next { background: #1f6feb; color: #fff; border: none; border-radius: 8px;
         padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 600; transition: background 0.15s; }
       #tour-card .tc-next:hover { background: #388bfd; }
+      #tour-cursor { position: fixed; z-index: 9996; width: 22px; height: 22px; pointer-events: none;
+        opacity: 0; transition: left 1s cubic-bezier(.4,0,.2,1), top 1s cubic-bezier(.4,0,.2,1), opacity .3s; }
+      #tour-cursor svg { filter: drop-shadow(0 1px 2px rgba(1,4,9,.5)); }
+      #tour-pulse { position: fixed; z-index: 9994; width: 36px; height: 36px; border-radius: 50%;
+        border: 2px solid #58a6ff; pointer-events: none; opacity: 0; transform: translate(-50%,-50%) scale(.4); }
+      #tour-pulse.go { animation: tour-click .7s ease-out; }
+      #tour-dropzone { position: fixed; z-index: 9992; pointer-events: none; border: 2px dashed #58a6ff;
+        border-radius: 14px; background: rgba(88,166,255,.07); display: none;
+        align-items: center; justify-content: center; animation: tour-pulse 1.6s ease-in-out infinite; }
+      #tour-dropzone .dz-label { display: flex; flex-direction: column; align-items: center; gap: 10px;
+        color: #58a6ff; font-size: 15px; font-weight: 600; text-align: center; padding: 0 24px; }
+      #tour-dropzone svg { width: 34px; height: 34px; fill: currentColor; }
+      @keyframes tour-click { 0% { opacity: .9; transform: translate(-50%,-50%) scale(.4); }
+        100% { opacity: 0; transform: translate(-50%,-50%) scale(1.5); } }
     </style>`);
 
-    let idx = -1, steps = [], hole, ring, card, posTimer = null, surgeryFile = null, waitingChat = false;
+    let idx = -1, steps = [], hole, ring, card, cursor, pulse, dropzone, posTimer = null,
+        cursorTimer = null, surgeryFile = null, waitingChat = false;
+
+    // Show, don't tell: a ghost cursor glides from the card to the action
+    // target and "clicks" so nobody has to hunt for where to go.
+    function cursorDemo() {
+      if (idx < 0 || !cursor) return;
+      const st = steps[idx];
+      const t = st && st.hint && !waitingChat && st.target ? st.target() : null;
+      const r = t && t.getBoundingClientRect();
+      if (!r || r.width === 0) { cursor.style.opacity = '0'; return; }
+      const cr = card.getBoundingClientRect();
+      cursor.style.transition = 'none';
+      cursor.style.left = (cr.left + cr.width - 60) + 'px';
+      cursor.style.top = (cr.top + cr.height - 24) + 'px';
+      cursor.style.opacity = '1';
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        cursor.style.transition = '';
+        const tx = r.left + r.width / 2, ty = r.top + r.height / 2;
+        cursor.style.left = tx + 'px'; cursor.style.top = ty + 'px';
+        setTimeout(() => {
+          if (idx < 0) return;
+          pulse.style.left = (tx + 4) + 'px'; pulse.style.top = (ty + 6) + 'px';
+          pulse.classList.remove('go'); void pulse.offsetWidth; pulse.classList.add('go');
+          setTimeout(() => { if (cursor) cursor.style.opacity = '0'; }, 700);
+        }, 1050);
+      }));
+    }
 
     const $ = (s) => document.querySelector(s);
     const pill = (n) => document.querySelectorAll('#starter-prompts .starter-btn')[n - 1] || null;
     const clearBtn = () => [...document.querySelectorAll('.toolbar-link')].find(b => b.textContent.trim() === 'Clear') || null;
     const showPills = () => document.getElementById('starter-prompts')?.classList.remove('hidden-prompts');
     const openPanel = () => { const p = $('#agents-panel'); if (p && !p.classList.contains('open')) { p.classList.add('open'); loadAgentsList(); } };
+    const openRegistry = () => { const p = $('#registry-panel'); if (p && !p.classList.contains('open')) { p.classList.add('open'); loadRarRegistry(); } };
     const esc = (s) => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
 
     async function agentFiles() {
@@ -2721,10 +2811,23 @@
       card.innerHTML = '<div class="tc-bar"><div></div></div>' +
         '<div class="tc-head"><span class="tc-step"></span><button title="Exit the tour">✕</button></div>' +
         '<div class="tc-body"></div><div class="tc-hint" style="display:none"></div>' +
-        '<div class="tc-foot" style="display:none"><button class="tc-next">Continue →</button></div>';
+        '<div class="tc-foot" style="display:none"><button class="tc-skip" style="display:none">Skip this step</button><button class="tc-next">Continue →</button></div>';
       card.querySelector('.tc-head button').onclick = () => endTour(false);
       card.querySelector('.tc-next').onclick = () => advance();
-      document.body.append(hole, ring, card);
+      card.querySelector('.tc-skip').onclick = () => {
+        const st = steps[idx];
+        let to = idx + 1;
+        if (st && st.skipTo === 'end') to = steps.findIndex(x => x.last);
+        else if (st && typeof st.skipTo === 'string') to = steps.findIndex(x => x.id === st.skipTo);
+        else if (st && Number.isInteger(st.skipTo)) to = st.skipTo;
+        setStep(to >= 0 ? to : idx + 1);
+      };
+      cursor = document.createElement('div'); cursor.id = 'tour-cursor';
+      cursor.innerHTML = '<svg viewBox="0 0 24 24"><path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 01.35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.85a.5.5 0 00-.85.36z" fill="#e6edf3" stroke="#0d1117" stroke-width="1.4"/></svg>';
+      pulse = document.createElement('div'); pulse.id = 'tour-pulse';
+      dropzone = document.createElement('div'); dropzone.id = 'tour-dropzone';
+      dropzone.innerHTML = '<div class="dz-label"><svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg><span>Drop the exported agent.py file<br>anywhere in this area</span></div>';
+      document.body.append(hole, ring, card, cursor, pulse, dropzone);
     }
 
     function position() {
@@ -2732,6 +2835,20 @@
       const st = steps[idx]; if (!st) return;
       const t = st.target ? st.target() : null;
       const r = t ? t.getBoundingClientRect() : null;
+      if (dropzone) {
+        if (st.dropzone && r) {
+          dropzone.style.display = 'flex';
+          dropzone.style.left = (r.left + 14) + 'px'; dropzone.style.top = (r.top + 14) + 'px';
+          dropzone.style.width = (r.width - 28) + 'px'; dropzone.style.height = (r.height - 28) + 'px';
+        } else dropzone.style.display = 'none';
+      }
+      if (st.dropzone && r) {
+        hole.style.display = ring.style.display = 'none';
+        const ch = card.offsetHeight, cw = card.offsetWidth;
+        card.style.top = Math.max(8, r.bottom - ch - 20) + 'px';
+        card.style.left = Math.max(8, r.left + 20) + 'px';
+        return;
+      }
       if (r && r.width > 0) {
         hole.style.display = ring.style.display = 'block';
         const pad = 4;
@@ -2745,10 +2862,27 @@
           el.style.borderRadius = radius + 'px';
         });
         const ch = card.offsetHeight, cw = card.offsetWidth;
-        // Anchor the card to the target like a tooltip: aligned with its left
-        // edge, sitting just above it (or just below when there's no room).
-        let top = (r.top - ch - 10 > 8) ? r.top - ch - 10 : Math.min(r.bottom + 10, innerHeight - ch - 8);
-        let left = Math.max(8, Math.min(r.left - pad, innerWidth - cw - 8));
+        let top, left;
+        const inChat = t.id !== 'chat' && t.closest && t.closest('#chat');
+        if ((t.id === 'agents-panel' || t.id === 'registry-panel') && r.left >= cw + 32) {
+          // The panel is right-anchored and tall — sit beside it on the left
+          // so the list being described stays fully visible.
+          left = r.left - cw - 16;
+          top = Math.max(8, Math.min(r.top + 8, innerHeight - ch - 8));
+        } else if (inChat && innerWidth - r.right >= cw + 32) {
+          // Chat content (a reply, a thought line): sit beside it in the empty
+          // margin so the card never covers what it's describing.
+          left = Math.min(r.right + 16, innerWidth - cw - 8);
+          top = Math.max(8, Math.min(r.top - 8, innerHeight - ch - 8));
+        } else {
+          // Controls (pills, buttons, input): tooltip above, or below if tight.
+          top = (r.top - ch - 10 > 8) ? r.top - ch - 10 : Math.min(r.bottom + 10, innerHeight - ch - 8);
+          left = Math.max(8, Math.min(r.left - pad, innerWidth - cw - 8));
+        }
+        // Never squat on the footer controls — the input row must stay usable.
+        const foot = document.querySelector('footer');
+        if (foot) top = Math.min(top, foot.getBoundingClientRect().top - ch - 8);
+        top = Math.max(8, top);
         card.style.top = top + 'px'; card.style.left = left + 'px';
       } else {
         hole.style.display = ring.style.display = 'none';
@@ -2763,8 +2897,14 @@
       card.querySelector('.tc-step').textContent = `The First Interview · ${idx + 1} / ${steps.length}`;
       card.querySelector('.tc-body').innerHTML = st.html;
       const hint = card.querySelector('.tc-hint');
-      if (st.hint) { hint.innerHTML = '👉 ' + st.hint; hint.style.display = 'block'; } else hint.style.display = 'none';
-      card.querySelector('.tc-foot').style.display = st.next ? 'flex' : 'none';
+      if (st.hint) {
+        hint.innerHTML = '<svg viewBox="0 0 16 16" style="width:12px;height:12px;vertical-align:-1px;margin-right:6px;fill:currentColor"><path d="M6.22 3.22a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 010-1.06z"/></svg>' + st.hint;
+        hint.style.display = 'block';
+      } else hint.style.display = 'none';
+      const skipBtn = card.querySelector('.tc-skip'), nextBtn = card.querySelector('.tc-next');
+      skipBtn.style.display = (st.skippable && !st.next) ? 'block' : 'none';
+      nextBtn.style.display = st.next ? 'block' : 'none';
+      card.querySelector('.tc-foot').style.display = (st.next || (st.skippable && !st.next)) ? 'flex' : 'none';
       position();
     }
 
@@ -2786,11 +2926,12 @@
     function react(html, targetFn) {
       const st = steps[idx];
       st.html = html; st.hint = null; st.next = true; st.wait = null;
+      st.dropzone = false;   // the action is done — retire the drop overlay
       if (targetFn) st.target = targetFn;
       render();
     }
     const lastBubble = () => document.querySelector('#chat .msg.assistant:last-of-type .bubble');
-    const lastThought = () => document.querySelector('#chat .msg.assistant:last-of-type .logs-label') || lastBubble();
+    const lastThought = () => document.querySelector('#chat .msg.assistant:last-of-type .agent-logs-wrapper') || lastBubble();
     // Tour-only: bring the newest reply into view before talking about it.
     function showLatest() {
       const c = document.getElementById('chat');
@@ -2801,8 +2942,9 @@
       localStorage.removeItem(LS_STEP);
       if (finished) localStorage.setItem(LS_DONE, '1');
       clearInterval(posTimer); posTimer = null;
-      [hole, ring, card].forEach(el => el && el.remove());
-      hole = ring = card = null; idx = -1;
+      clearInterval(cursorTimer); cursorTimer = null;
+      [hole, ring, card, cursor, pulse, dropzone].forEach(el => el && el.remove());
+      hole = ring = card = cursor = pulse = dropzone = null; idx = -1;
     }
 
     function defineSteps() {
@@ -2824,8 +2966,8 @@
         {
           html: `<h3>Introduce yourself.</h3>
             <p>Like meeting a new coworker — your name, one detail about you. Spelling doesn't matter; it reads between the lines.</p>`,
-          hint: `Type <em>"Remember, my name is … and I …"</em> and hit <strong>Send</strong>.`,
-          target: () => $('#input'), wait: 'assistant',
+          hint: `Type <em>"Remember, my name is … and I …"</em> and press <strong>Enter</strong>.`,
+          target: () => document.querySelector('.input-row') || $('#input'), wait: 'assistant',
           reactMemory: true
         },
         {
@@ -2852,7 +2994,7 @@
         },
         {
           html: ``, hint: ``,
-          target: () => $('#agent-list-ul'), panel: true, wait: 'export',
+          target: () => $('#agent-list-ul'), panel: true, wait: 'export', skippable: true, skipTo: 'registry',
           onEnter: function () {
             openPanel();
             this.html = `<h3>Back up an agent.</h3>
@@ -2862,7 +3004,7 @@
         },
         {
           html: ``, hint: ``,
-          target: () => $('#agent-list-ul'), panel: true, wait: 'deleted',
+          target: () => $('#agent-list-ul'), panel: true, wait: 'deleted', skippable: true, skipTo: 'registry',
           onEnter: function () {
             openPanel();
             this.html = `<h3>Now remove it.</h3>
@@ -2875,16 +3017,17 @@
         {
           html: `<h3>See for yourself.</h3>
             <p>Ask it to use the agent you just removed.</p>`,
-          hint: `Type <em>"get my latest hacker news"</em> and hit <strong>Send</strong>.`,
-          target: () => $('#input'), wait: 'assistant',
+          hint: `Type <em>"get my latest hacker news"</em> and press <strong>Enter</strong>.`,
+          target: () => document.querySelector('.input-row') || $('#input'), wait: 'assistant', skippable: true,
           reactHtml: `<h3>It told you the truth.</h3>
             <p>No bluffing, no made-up news. It can't do what isn't in its head — <strong>and it says so.</strong> That honesty is what makes it safe to trust.</p>`
         },
         {
           html: `<h3>Now put it back.</h3>
             <p>That exported file isn't a backup — it's <strong>how agents travel</strong>. It's in your Downloads.</p>`,
-          hint: `Drag the <strong>.py</strong> file from Downloads and drop it <strong>anywhere on this window</strong>.`,
-          target: () => $('#chat'), wait: 'dropped',
+          hint: `Drag the <strong>agent.py</strong> file you exported from Downloads and drop it <strong>anywhere on this window</strong>. Or skip — your brainstem, your call.`,
+          target: () => $('#chat'), dropzone: true, wait: 'dropped', skippable: true, skipTo: 'registry',
+          onEnter: async function () { this._baseline = await agentFiles(); },
           reactHtml: `<h3>Hot-loaded. Instantly.</h3>
             <p>One file = one agent, live the moment it lands. Teammates can send you these — drop one in, and <strong>their workflow becomes your workflow.</strong></p>`
         },
@@ -2892,9 +3035,30 @@
           html: `<h3>Trust — then verify.</h3>
             <p>You know the loop by now.</p>`,
           hint: `Ask for the news again.`,
-          target: () => $('#input'), wait: 'assistant',
+          target: () => document.querySelector('.input-row') || $('#input'), wait: 'assistant', skippable: true,
           reactHtml: `<h3>Full circle.</h3>
             <p>You removed a live agent, watched it tell the truth, and restored it with one drag — and it never went down.</p>`
+        },
+        {
+          id: 'registry',
+          html: `<h3>There's a whole library.</h3>
+            <p>You traded one agent by hand. There's also a community registry — hundreds of agents, one click each. Grab the one that changes everything: <strong>an agent that creates agents</strong>.</p>`,
+          hint: `Click the <strong>book button</strong> (top right), search <em>learn new</em>, and click <strong>Add</strong> on <strong>@rapp/learn_new</strong>.`,
+          target: () => { const p = $('#registry-panel'); return (p && p.classList.contains('open')) ? p : $('#registry-btn'); },
+          rpanel: true, wait: 'installed', skippable: true, skipTo: 'end',
+          onEnter: async function () { this._baseline = await agentFiles(); },
+          reactHtml: `<h3>Installed. Live.</h3>
+            <p>That agent's whole job is to <strong>build other agents</strong> from plain language. Which means…</p>`
+        },
+        {
+          id: 'create',
+          html: `<h3>Create your first agent.</h3>
+            <p>Describe it — a name and what it should do. Plain words. It writes the file, saves it, and hot-loads it.</p>`,
+          hint: `Try: <em>"Learn a new agent called QuoteOfTheDay that gives me an inspiring quote when I ask for motivation."</em> Then press <strong>Enter</strong>.`,
+          target: () => document.querySelector('.input-row') || $('#input'), wait: 'created', skippable: true, skipTo: 'end',
+          onEnter: async function () { this._baseline = await agentFiles(); },
+          reactHtml: `<h3>You just created an agent.</h3>
+            <p>By describing it. Open the <strong>⊕ panel</strong> — it's in the list, exportable and tradeable like any other. That's the full arc: <strong>interview → teach → trade → create</strong>.</p>`
         },
         {
           html: `<h3>One last button.</h3>
@@ -2927,7 +3091,9 @@
       }
       buildUi();
       if (!posTimer) posTimer = setInterval(position, 250);
+      if (!cursorTimer) cursorTimer = setInterval(cursorDemo, 3000);
       setStep(Number.isInteger(fromStep) ? fromStep : 0);
+      setTimeout(cursorDemo, 500);
     };
 
     // ── Observers (all pass-through; zero behavior change when tour is off) ──
@@ -2940,14 +3106,45 @@
     const _clearChat = window.clearChat;
     window.clearChat = function () {
       const r = _clearChat();
-      try { if (idx >= 0 && steps[idx]?.wait === 'clear') advance(); } catch (e) { console.error('[tour]', e); }
+      try {
+        if (idx >= 0 && steps[idx]?.wait === 'clear') advance();
+        applyInviteVisibility();
+      } catch (e) { console.error('[tour]', e); }
       return r;
     };
+
+    // The invite is dismissible and stays dismissed (cached locally).
+    function applyInviteVisibility() {
+      const hidden = !!localStorage.getItem('rapp_tour_invite_hidden');
+      document.querySelectorAll('.tour-invite-wrap').forEach(el => el.style.display = hidden ? 'none' : '');
+    }
+    window.hideTourInvite = function () {
+      localStorage.setItem('rapp_tour_invite_hidden', '1');
+      applyInviteVisibility();
+    };
+    // Opening the Tutorial signals fresh interest in learning — the tour is
+    // relevant again, so the invite comes back (dismissible as always).
+    window.showTourInvite = function () {
+      localStorage.removeItem('rapp_tour_invite_hidden');
+      applyInviteVisibility();
+    };
+    applyInviteVisibility();
 
     function onMsg(role, text, logs, wrapEl) {
       if (idx < 0) return;
       const st = steps[idx];
-      if (role === 'user') { if (st.wait === 'assistant') waitingChat = true; return; }
+      if (role === 'user') {
+        if (st.wait === 'assistant') {
+          waitingChat = true;
+          // While it thinks, anchor to the typing indicator (or the sent
+          // message) and say so — never leave the card floating in space.
+          st.target = () => document.getElementById('typing-indicator') || document.querySelector('#chat .msg.user:last-of-type');
+          st.hint = 'It\'s thinking — the reply lands here.';
+          if (cursor) cursor.style.opacity = '0';
+          render();
+        }
+        return;
+      }
       if (st.wait !== 'assistant' || !waitingChat) return;
       if (role === 'system') {
         // Error/system bubbles are appended empty and get their HTML set right
@@ -2971,7 +3168,7 @@
         if (lastLogs && /manage.?memory/i.test(lastLogs.textContent)) {
           react(`<h3>It just had a thought —<br>and you can see it.</h3>
             <p>The highlighted <strong>▶ agent called ManageMemory</strong> line is an internal thought. Click it open. It chose, on its own, what about you was worth keeping.</p>
-            <div class="tc-quote">Its builder once told it his son's name — it didn't save it. "That felt personal." One correction later, it never forgot again.</div>
+            <p>Don't like its choice? Just say so — <em>"that matters to me, remember it"</em> — and it updates its judgment for good.</p>
             <p class="tc-punch">You're onboarding an employee, not configuring software.</p>`, lastThought);
         } else {
           react(`<h3>It chose <em>not</em> to save that.</h3>
@@ -2989,8 +3186,9 @@
       setTimeout(() => {
         const st = steps[idx]; if (!st) return;
         const open = $('#agents-panel')?.classList.contains('open');
-        if (st.wait === 'panel' && open) { if (st.reactHtml) react(st.reactHtml); else advance(); }
+        if (st.wait === 'panel' && open) { if (st.reactHtml) react(st.reactHtml, () => $('#agents-panel')); else advance(); }
         if (st.panel && !open) openPanel();
+        if (st.rpanel && !$('#registry-panel')?.classList.contains('open')) openRegistry();
       }, 60);
     }, true);
 
@@ -3006,11 +3204,18 @@
     setInterval(async () => {
       if (idx < 0 || !surgeryFile) return;
       const st = steps[idx]; if (!st) return;
-      if (st.wait !== 'deleted' && st.wait !== 'dropped') return;
+      if (!['deleted', 'dropped', 'installed', 'created'].includes(st.wait)) return;
       const files = await agentFiles(); if (!files) return;
       const present = files.includes(surgeryFile);
       if (st.wait === 'deleted' && !present) { st.reactHtml ? react(st.reactHtml) : advance(); }
-      if (st.wait === 'dropped' && present) { st.reactHtml ? react(st.reactHtml) : advance(); }
+      if (st.wait === 'dropped' || st.wait === 'installed' || st.wait === 'created') {
+        // Wait for the baseline snapshot; then ANY newly-appeared agent file
+        // counts (browsers rename duplicate downloads, the server sanitizes —
+        // exact-name matching breaks on both).
+        if (!Array.isArray(st._baseline)) return;
+        const appeared = files.some(f => !st._baseline.includes(f));
+        if (appeared) { st.reactHtml ? react(st.reactHtml) : advance(); }
+      }
     }, 900);
 
     // Resume a tour that was mid-flight (e.g. the user refreshed the page).
