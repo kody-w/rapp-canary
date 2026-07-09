@@ -278,7 +278,7 @@
     padding: 8px 10px; background: #0d1117;
     font-size: 10px; color: #7ee787;
     font-family: "SF Mono", monospace;
-    white-space: pre-wrap; max-height: 160px;
+    white-space: pre-wrap; max-height: 320px;
     overflow-y: auto; border-top: 1px solid #21262d;
   }
   .agent-logs.collapsed { display: none; }
@@ -1919,7 +1919,12 @@
       }
       const logBox = document.createElement('div');
       logBox.className = 'agent-logs collapsed';
-      logBox.textContent = logs;
+      // Agent results are often one giant JSON line — pretty-print each
+      // "[Agent] {...}" payload so an opened thought is actually readable.
+      logBox.textContent = logs.replace(/(\[[^\]\n]+\])\s*(\{[\s\S]*?\}|\[[\s\S]*?\])(?=\s*(?:\[[^\]\n]+\]|$))/g, (m, tag, body) => {
+        try { return tag + '\n' + JSON.stringify(JSON.parse(body), null, 2); }
+        catch { return m; }
+      });
       label.onclick = () => {
         const opened = logBox.classList.toggle('collapsed') === false;
         label.querySelector('.arrow').classList.toggle('open');
