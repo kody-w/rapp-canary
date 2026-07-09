@@ -89,6 +89,7 @@ class _AuthTestBase(unittest.TestCase):
             "_cache": brainstem._copilot_token_cache.copy(),
             "_no_copilot": dict(brainstem._no_copilot_access),
             "_models_fetched": brainstem._models_fetched,
+            "load_agents": brainstem.load_agents,
             "GITHUB_TOKEN": os.environ.get("GITHUB_TOKEN"),
         }
 
@@ -98,6 +99,7 @@ class _AuthTestBase(unittest.TestCase):
         brainstem._pending_login_file = os.path.join(self.tmp, ".copilot_pending")
         brainstem._copilot_token_cache = {"token": None, "endpoint": None, "expires_at": 0}
         brainstem._no_copilot_access = {"username": None, "at": 0}
+        brainstem.load_agents = lambda: {}
         os.environ.pop("GITHUB_TOKEN", None)
 
         # The exchange behaviour is driven by this flag; default: no Copilot.
@@ -118,6 +120,7 @@ class _AuthTestBase(unittest.TestCase):
         brainstem._copilot_token_cache = self._orig["_cache"]
         brainstem._no_copilot_access = self._orig["_no_copilot"]
         brainstem._models_fetched = self._orig["_models_fetched"]
+        brainstem.load_agents = self._orig["load_agents"]
         if self._orig["GITHUB_TOKEN"] is not None:
             os.environ["GITHUB_TOKEN"] = self._orig["GITHUB_TOKEN"]
         import shutil
@@ -297,6 +300,28 @@ class TestLoginRetry(_AuthTestBase):
         r = self.client.post("/login/retry").get_json()
         self.assertEqual(r["status"], "ok")
         self.assertIsNone(self.brainstem._no_copilot_access["username"])
+
+
+class TestAccountSwitch(_AuthTestBase):
+
+    def test_switch_rejects_environment_pinned_account(self):
+        self._write_token("saved-token")
+        os.environ["GITHUB_TOKEN"] = "environment-token"
+        original = self.brainstem.start_device_code_login
+        called = {"start": False}
+
+        def fake_start(*args, **kwargs):
+            called["start"] = True
+            return {}
+
+        self.brainstem.start_device_code_login = fake_start
+        try:
+            r = self.client.post("/login/switch")
+        finally:
+            self.brainstem.start_device_code_login = original
+        self.assertEqual(r.status_code, 409)
+        self.assertTrue(os.path.exists(self.brainstem._token_file))
+        self.assertFalse(called["start"])
 
 
 class TestModelsNoCopilot(_AuthTestBase):

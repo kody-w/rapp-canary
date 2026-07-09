@@ -16,13 +16,13 @@ Philosophy: "engine, not experience" — infrastructure only, no opinionated UI 
 python brainstem.py       # Direct run (assumes deps installed)
 
 # Install dependencies
-pip3 install -r requirements.txt
+python3 -m pip install -r requirements-dev.txt
 
 # Run all tests
-python3 -m pytest test_local_agents.py -v
+python3 -m pytest tests -v
 
 # Run a single test
-python3 -m pytest test_local_agents.py::TestLocalStorage::test_write_and_read -v
+python3 -m pytest tests/test_local_agents.py::TestLocalStorage::test_write_and_read -v
 ```
 
 No build step, linter, or type checker is configured.
@@ -54,11 +54,11 @@ No build step, linter, or type checker is configured.
 | File | Purpose |
 |------|---------|
 | `brainstem.py` | Main server: all routes, agent loading, Copilot API integration |
-| `basic_agent.py` | Base class for agents (also copied to `agents/basic_agent.py`) |
+| `agents/basic_agent.py` | Base class for all agents |
 | `local_storage.py` | Local shim for Azure File Storage |
 | `soul.md` | Default system prompt loaded every request |
 | `index.html` | Built-in web UI served at `/` |
-| `VERSION` | Semantic version string (currently 0.4.0) |
+| `VERSION` | Semantic version string (currently 0.6.14) |
 | `CONSTITUTION.md` | Governance doc defining what belongs in this repo |
 
 ## Writing Agents

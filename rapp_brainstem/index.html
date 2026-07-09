@@ -622,7 +622,8 @@
   .rar-name { color: #e6edf3; font-weight: 600; word-break: break-word; }
   .rar-desc {
     color: #8b949e; font-size: 10px; line-height: 1.35; margin-top: 2px;
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden;
   }
   .rar-add-btn {
     flex-shrink: 0; background: #238636; color: #fff; border: 1px solid #238636;
@@ -1345,6 +1346,9 @@
       const d = await r.json();
       if (d.error) { alert(d.error); return; }
       safeRemove('brainstem_auth');
+      modelsLoaded = false;
+      currentModel = null;
+      document.getElementById('model-select').replaceChildren();
       // Show the login overlay with the new code
       document.getElementById('login-step1').style.display = 'none';
       document.getElementById('login-step2').style.display = 'block';
@@ -1749,7 +1753,7 @@
   const RAR_MIRROR = 'https://cdn.jsdelivr.net/gh/kody-w/RAR@main';
   async function rarFetch(path) {
     try {
-      const r = await rarFetch(path);
+      const r = await fetch(encodeURI(`${RAR_BASE}/${path}`));
       if (r.ok) return r;
       throw new Error('HTTP ' + r.status);
     } catch (e) {
@@ -1766,8 +1770,8 @@
   // stacks/swarms (bundles, no single .py) and stub/card entries (.py.stub, .py.card,
   // or scope-prefixed @ filenames) — none of those import cleanly, so drop them here.
   function isLoadableAgent(a) {
-    const base = (a && a._file ? a._file : '').split('/').pop();
-    return base.endsWith('_agent.py') && !base.startsWith('@');
+    const base = (a && a._file ? a._file : '').replace(/\\/g, '/').split('/').pop();
+    return base.endsWith('_agent.py') && base !== 'basic_agent.py' && !base.startsWith('@');
   }
 
   function loadRarRegistry() {
@@ -1975,7 +1979,11 @@
   async function installRarAgent(agent, btn) {
     const path = agent._file;
     if (!path) { alert('This registry entry has no file path.'); return; }
-    const filename = path.split('/').pop();
+    const filename = agent._install_filename || path.replace(/\\/g, '/').split('/').pop();
+    if (!filename.endsWith('_agent.py') || filename.includes('/') || filename.includes('\\')) {
+      alert('This registry entry has an invalid install filename.');
+      return;
+    }
     const orig = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Adding…';
@@ -2417,6 +2425,7 @@
     document.getElementById('send').disabled = true;
 
     appendMsg('user', text);
+    const requestHistory = cappedHistory();
     history.push({ role: 'user', content: text });
     fullTranscript.push({ role: 'user', content: text, timestamp: new Date().toISOString() });
 
@@ -2429,14 +2438,28 @@
       let streamed = false;
       if (window.ReadableStream && window.fetch) {
         try {
-          streamed = await sendViaStream(text, payload);
+          streamed = await sendViaStream(text, payload, requestHistory);
         } catch (err) {
-          clog('chat.stream_fallback', { error: (err && err.message) || String(err) });
-          streamed = false;
+          const errorText = (err && err.message) || String(err);
+          if (err && err.streamAccepted) {
+            // Once the server accepts the stream, an agent may already have sent
+            // email, changed CRM state, or written a file. Replaying through /chat
+            // would execute that work twice, so surface the interruption instead.
+            clog('chat.stream_interrupted', { error: errorText });
+            removeTyping();
+            appendMsg('system',
+              'The response stream was interrupted after processing began. ' +
+              'It was not retried automatically, to avoid repeating any agent actions. ' +
+              errorText);
+            streamed = true;
+          } else {
+            clog('chat.stream_fallback', { error: errorText });
+            streamed = false;
+          }
         }
       }
       if (!streamed) {
-        await sendViaPost(text, payload);
+        await sendViaPost(text, payload, requestHistory);
       }
     } finally {
       document.getElementById('send').disabled = false;
@@ -2446,10 +2469,10 @@
 
   // Non-streaming path — the original POST /chat flow verbatim. Reachable as the
   // streaming fallback and whenever ReadableStream is unavailable.
-  async function sendViaPost(text, payload) {
+  async function sendViaPost(text, payload, requestHistory) {
     try {
       // Send a capped copy of history (on-screen transcript is untouched).
-      const body = { user_input: payload, conversation_history: cappedHistory() };
+      const body = { user_input: payload, conversation_history: requestHistory };
       if (sessionId) body.session_id = sessionId;
 
       const r = await fetch(`${API}/chat`, {
@@ -2542,20 +2565,23 @@
 
   // Streaming path: fetch + ReadableStream over /chat/stream. Renders the assistant
   // bubble progressively as delta events arrive, shows agent logs when a tool round
-  // fires, and re-renders markdown on done — reusing appendMsg's structure. Throws
-  // on ANY error so sendMessage falls back to sendViaPost transparently. Returns
-  // true only on a clean finish (a done event was seen).
-  async function sendViaStream(text, payload) {
-    // Send a capped copy of history (on-screen transcript is untouched).
-    const body = { user_input: payload, conversation_history: cappedHistory() };
-    if (sessionId) body.session_id = sessionId;
+  // fires, and re-renders markdown on done — reusing appendMsg's structure. A failure
+  // before HTTP acceptance can fall back to /chat; every later failure is tagged so
+  // sendMessage will not replay potentially non-idempotent agent actions.
+  async function sendViaStream(text, payload, requestHistory) {
+    let responseAccepted = false;
+    try {
+      // Send a capped copy of history (on-screen transcript is untouched).
+      const body = { user_input: payload, conversation_history: requestHistory };
+      if (sessionId) body.session_id = sessionId;
 
-    const r = await fetch(`${API}/chat/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    if (!r.ok || !r.body) throw new Error(`stream http ${r.status}`);
+      const r = await fetch(`${API}/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!r.ok || !r.body) throw new Error(`stream http ${r.status}`);
+      responseAccepted = true;
 
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
@@ -2761,7 +2787,11 @@
     if (d.voice_response) speakText(d.voice_response);
     else if (voiceMode) speakText(finalText);
 
-    return true;
+      return true;
+    } catch (err) {
+      if (responseAccepted && err) err.streamAccepted = true;
+      throw err;
+    }
   }
 
   // ── Voice (Azure Speech + ElevenLabs + browser fallback) ──

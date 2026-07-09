@@ -23,9 +23,12 @@ if [ ! -x "$VENV_PYTHON" ]; then
 fi
 
 # Install deps if needed
-if ! "$VENV_PYTHON" -c "import flask, flask_cors, requests, dotenv" 2>/dev/null; then
+if ! "$VENV_PYTHON" -c "import flask, flask_cors, requests, dotenv, pyzipper" 2>/dev/null; then
     echo "Installing dependencies..."
-    "$BRAINSTEM_HOME/venv/bin/pip" install -r requirements.txt -q
+    if ! "$VENV_PYTHON" -m pip --version >/dev/null 2>&1; then
+        "$VENV_PYTHON" -m ensurepip --upgrade --default-pip
+    fi
+    "$VENV_PYTHON" -m pip install -r requirements.txt -q
 fi
 
 # Create .env from example if missing

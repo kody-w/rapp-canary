@@ -268,23 +268,23 @@ Point `SOUL_PATH` in `.env` to your own file. The brainstem code never changes �
 ```
 rapp_brainstem/
 ├── brainstem.py          # The server — auth, agents, tool-calling loop, all endpoints
-├── basic_agent.py        # Base class all agents extend
 ├── local_storage.py      # Local shim for Azure File Storage
 ├── soul.md               # Default system prompt (replace with your own)
 ├── VERSION               # Semver string, read at startup
 ├── index.html            # Built-in chat web UI
 ├── start.sh              # macOS/Linux startup script
 ├── start.ps1             # Windows startup script
-├── requirements.txt      # Python dependencies (flask, requests, python-dotenv)
+├── requirements.txt      # Runtime dependencies
+├── requirements-dev.txt  # Runtime dependencies plus pytest
 ├── .env.example          # Config template
 ├── .env                  # Your config (auto-created, gitignored)
 ├── .brainstem_data/      # Local storage data (gitignored)
 ├── .copilot_token        # Saved GitHub token (gitignored)
 ├── .copilot_session      # Cached Copilot API token (gitignored)
 ├── agents/               # Agent auto-discovery directory
-│   ├── hello_agent.py    # Example agent
-│   └── experimental/     # Subdirectory — NOT auto-loaded
-└── test_local_agents.py  # Test suite
+│   ├── basic_agent.py    # Base class all agents extend
+│   └── *_agent.py        # Auto-discovered agent cartridges
+└── tests/                # Pytest regression suite
 ```
 
 ---
@@ -293,12 +293,13 @@ rapp_brainstem/
 
 ```bash
 cd rapp_brainstem
-python3 -m pytest test_local_agents.py -v
+python3 -m pip install -r requirements-dev.txt
+python3 -m pytest tests -v
 ```
 
 Run a single test:
 ```bash
-python3 -m pytest test_local_agents.py::TestLocalStorage::test_write_and_read -v
+python3 -m pytest tests/test_local_agents.py::TestLocalStorage::test_write_and_read -v
 ```
 
 ---

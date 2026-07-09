@@ -6,6 +6,7 @@ import sys
 import json
 import shutil
 import tempfile
+import threading
 import unittest
 
 # Ensure brainstem dir is importable. This test lives in rapp_brainstem/tests/,
@@ -82,6 +83,71 @@ class TestLocalStorage(unittest.TestCase):
         self.assertIn("hello.txt", mgr.list_files("test"))
         mgr.delete_file("test/hello.txt")
         self.assertFalse(mgr.file_exists("test/hello.txt"))
+
+    def test_concurrent_atomic_writes_use_unique_temp_files(self):
+        import local_storage
+
+        path = os.path.join(self._tmp, "state.json")
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def write(value):
+            try:
+                def emit(handle):
+                    json.dump({"value": value}, handle)
+                    barrier.wait(timeout=5)
+                local_storage._atomic_write(path, emit)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=write, args=(value,)) for value in (1, 2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(errors, [])
+        with open(path, encoding="utf-8") as handle:
+            self.assertIn(json.load(handle)["value"], (1, 2))
+        self.assertEqual(os.listdir(self._tmp), ["state.json"])
+
+    def test_transactional_updates_preserve_concurrent_changes(self):
+        from local_storage import AzureFileStorageManager
+
+        managers = [AzureFileStorageManager(), AzureFileStorageManager()]
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def update(index):
+            try:
+                barrier.wait(timeout=5)
+                managers[index].update_json(
+                    lambda data: {**data, str(index): index})
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=update, args=(index,)) for index in (0, 1)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(managers[0].read_json(), {"0": 0, "1": 1})
+
+    def test_transactional_update_preserves_malformed_json(self):
+        from local_storage import AzureFileStorageManager
+
+        manager = AzureFileStorageManager()
+        path = manager._file_path()
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("{ recoverable but malformed")
+
+        with self.assertRaises(json.JSONDecodeError):
+            manager.update_json(lambda data: {**data, "new": True})
+
+        with open(path, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "{ recoverable but malformed")
 
 
 class TestShimRegistration(unittest.TestCase):
@@ -262,12 +328,15 @@ class TestLoginPoll(unittest.TestCase):
         self._orig_login_result = brainstem._login_result
         self._orig_pending_login = brainstem._pending_login
         self._orig_copilot_cache = brainstem._copilot_token_cache.copy()
+        self._orig_github_token = os.environ.pop("GITHUB_TOKEN", None)
 
     def tearDown(self):
         # Restore original state
         self.brainstem._login_result = self._orig_login_result
         self.brainstem._pending_login = self._orig_pending_login
         self.brainstem._copilot_token_cache = self._orig_copilot_cache
+        if self._orig_github_token is not None:
+            os.environ["GITHUB_TOKEN"] = self._orig_github_token
 
     def test_returns_ok_from_login_result(self):
         """When bg thread writes success to _login_result, /login/poll returns ok."""
@@ -348,11 +417,27 @@ class TestLoginStateCleanup(unittest.TestCase):
         self._orig_login_result = brainstem._login_result
         self._orig_pending_login = brainstem._pending_login
         self._orig_copilot_cache = brainstem._copilot_token_cache.copy()
+        self._orig_token_file = brainstem._token_file
+        self._orig_cache_file = brainstem._copilot_cache_file
+        self._orig_pending_file = brainstem._pending_login_file
+        self._orig_no_copilot = dict(brainstem._no_copilot_access)
+        self._orig_github_token = os.environ.pop("GITHUB_TOKEN", None)
+        self._tmp = tempfile.mkdtemp(prefix="login-state-test-")
+        brainstem._token_file = os.path.join(self._tmp, ".copilot_token")
+        brainstem._copilot_cache_file = os.path.join(self._tmp, ".copilot_session")
+        brainstem._pending_login_file = os.path.join(self._tmp, ".copilot_pending")
 
     def tearDown(self):
         self.brainstem._login_result = self._orig_login_result
         self.brainstem._pending_login = self._orig_pending_login
         self.brainstem._copilot_token_cache = self._orig_copilot_cache
+        self.brainstem._token_file = self._orig_token_file
+        self.brainstem._copilot_cache_file = self._orig_cache_file
+        self.brainstem._pending_login_file = self._orig_pending_file
+        self.brainstem._no_copilot_access = self._orig_no_copilot
+        if self._orig_github_token is not None:
+            os.environ["GITHUB_TOKEN"] = self._orig_github_token
+        shutil.rmtree(self._tmp, ignore_errors=True)
 
     def test_login_switch_clears_login_result(self):
         """POST /login/switch should clear _login_result."""
@@ -448,6 +533,40 @@ class TestMemoryAgentIntegration(unittest.TestCase):
         # Recall it
         result = context_agents["ContextMemory"].perform(full_recall=True)
         self.assertIn("brainstem", result.lower())
+
+    def test_concurrent_manage_memory_saves_are_not_lost(self):
+        import brainstem
+        import local_storage
+
+        agents_dir = os.path.join(os.path.dirname(os.path.abspath(brainstem.__file__)), "agents")
+        path = os.path.join(agents_dir, "manage_memory_agent.py")
+        managers = [
+            brainstem._load_agent_from_file(path)["ManageMemory"],
+            brainstem._load_agent_from_file(path)["ManageMemory"],
+        ]
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def save(index):
+            try:
+                barrier.wait(timeout=5)
+                managers[index].perform(
+                    memory_type="fact", content=f"concurrent memory {index}")
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=save, args=(index,)) for index in (0, 1)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(errors, [])
+        stored = local_storage.AzureFileStorageManager().read_json()
+        self.assertEqual(
+            {entry["message"] for entry in stored.values()},
+            {"concurrent memory 0", "concurrent memory 1"},
+        )
 
 
 class TestFetchCopilotModels(unittest.TestCase):
@@ -905,13 +1024,14 @@ class TestSoulDefaultsManifest(unittest.TestCase):
         import soul_hash
         with open(self.SOUL, "rb") as fh:
             base = fh.read()
-        want = soul_hash.normalized_sha256_bytes(base)
+        canonical = soul_hash.normalize(base)
+        want = soul_hash.normalized_sha256_bytes(canonical)
         variants = {
-            "bom": b"\xef\xbb\xbf" + base,
-            "crlf": base.replace(b"\n", b"\r\n"),
-            "no_final_newline": base.rstrip(b"\n"),
-            "extra_final_newlines": base + b"\n\n",
-            "trailing_ws": b"\n".join(l + b" \t" for l in base.split(b"\n")),
+            "bom": b"\xef\xbb\xbf" + canonical,
+            "crlf": canonical.replace(b"\n", b"\r\n"),
+            "no_final_newline": canonical.rstrip(b"\n"),
+            "extra_final_newlines": canonical + b"\n\n",
+            "trailing_ws": b"\n".join(l + b" \t" for l in canonical.split(b"\n")),
         }
         for name, data in variants.items():
             self.assertEqual(

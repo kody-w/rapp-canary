@@ -176,6 +176,58 @@ def test_cors_allows_localhost_blocks_other_origins(client):
     assert bad.headers.get("Access-Control-Allow-Origin") is None
 
 
+def test_foreign_origin_cannot_post_to_loopback(client, monkeypatch):
+    called = {"chat": False}
+
+    def fake_load_agents():
+        called["chat"] = True
+        return {}
+
+    monkeypatch.setattr(bs, "load_agents", fake_load_agents)
+    r = client.post(
+        "/chat",
+        data=json.dumps({"user_input": "run something"}),
+        content_type="text/plain",
+        headers={"Origin": "https://evil.example"},
+        environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+    )
+    assert r.status_code == 403 and r.is_json
+    assert called["chat"] is False
+
+
+def test_management_route_blocks_lan_without_secret(client, monkeypatch):
+    monkeypatch.setattr(bs, "BRAINSTEM_SECRET", "unit-test-secret")
+    r = client.post(
+        "/voice/toggle",
+        json={"enabled": True},
+        environ_overrides={"REMOTE_ADDR": "192.168.1.50"},
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize("path", [
+    "/agents",
+    "/agents/export/basic_agent.py",
+    "/diagnostics",
+    "/diagnostics/book.json",
+    "/login/status",
+])
+def test_sensitive_reads_block_lan_without_secret(client, monkeypatch, path):
+    monkeypatch.setattr(bs, "BRAINSTEM_SECRET", "unit-test-secret")
+    r = client.get(path, environ_overrides={"REMOTE_ADDR": "192.168.1.50"})
+    assert r.status_code == 403
+
+
+def test_cross_site_sensitive_get_blocked_on_loopback(client, monkeypatch):
+    monkeypatch.setattr(bs, "BRAINSTEM_SECRET", "unit-test-secret")
+    r = client.get(
+        "/agents",
+        headers={"Sec-Fetch-Site": "cross-site"},
+        environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+    )
+    assert r.status_code == 403
+
+
 # ── #4 MEDIUM: request size cap configured ─────────────────────────────────────
 
 def test_max_content_length_configured():

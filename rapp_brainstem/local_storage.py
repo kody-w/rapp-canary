@@ -8,8 +8,12 @@ Data lives in .brainstem_data/ next to this file.
 
 import os
 import json
+import tempfile
+import threading
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".brainstem_data")
+_path_locks = {}
+_path_locks_guard = threading.Lock()
 
 
 def _safe_join(*parts):
@@ -21,23 +25,70 @@ def _safe_join(*parts):
     guaranteed to live under _DATA_DIR, or raises ValueError."""
     base = os.path.abspath(_DATA_DIR)
     target = os.path.abspath(os.path.join(base, *[str(p) for p in parts]))
-    if target != base and not target.startswith(base + os.sep):
+    try:
+        contained = os.path.commonpath(
+            [os.path.normcase(base), os.path.normcase(target)]) == os.path.normcase(base)
+    except ValueError:
+        contained = False
+    if not contained:
+        raise ValueError(f"path escapes data directory: {os.path.join(*[str(p) for p in parts])}")
+
+    # Resolve only components that already exist. Resolving a destination while
+    # another thread creates its parent can yield inconsistent Windows path
+    # prefixes; the existing parent is enough to detect a symlink/junction escape.
+    existing = target
+    while not os.path.exists(existing):
+        parent = os.path.dirname(existing)
+        if parent == existing:
+            break
+        existing = parent
+    real_base = os.path.realpath(base)
+    real_existing = os.path.realpath(existing)
+    try:
+        contained = os.path.commonpath([
+            os.path.normcase(real_base), os.path.normcase(real_existing)
+        ]) == os.path.normcase(real_base)
+    except ValueError:
+        contained = False
+    if not contained:
         raise ValueError(f"path escapes data directory: {os.path.join(*[str(p) for p in parts])}")
     return target
+
+
+def _ensure_private_dir(path):
+    os.makedirs(path, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
+def _lock_for(path):
+    """Return a process-local lock shared by all managers writing this path."""
+    key = os.path.normcase(os.path.abspath(path))
+    with _path_locks_guard:
+        return _path_locks.setdefault(key, threading.RLock())
 
 
 def _atomic_write(path, write_fn):
     """Write via a temp file in the same directory + os.replace, so a crash or a
     concurrent reader never sees a half-written (and on the next write, silently
     wiped) file. write_fn receives the open file handle."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.{os.getpid()}.tmp"
+    directory = os.path.dirname(os.path.abspath(path))
+    _ensure_private_dir(directory)
+    fd, tmp = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory)
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             write_fn(f)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        with _lock_for(path):
+            os.replace(tmp, path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
     finally:
         if os.path.exists(tmp):
             try:
@@ -60,7 +111,7 @@ class AzureFileStorageManager:
         self.shared_memory_path = "shared_memories"
         self.default_file_name = "memory.json"
         self.current_memory_path = self.shared_memory_path
-        os.makedirs(_DATA_DIR, exist_ok=True)
+        _ensure_private_dir(_DATA_DIR)
 
     # ── Context ───────────────────────────────────────────────────────────
 
@@ -89,7 +140,7 @@ class AzureFileStorageManager:
         else:
             rel = os.path.join(self.shared_memory_path, self.default_file_name)
         path = _safe_join(rel)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _ensure_private_dir(os.path.dirname(path))
         return path
 
     def read_json(self, file_path=None):
@@ -106,8 +157,27 @@ class AzureFileStorageManager:
     def write_json(self, data, file_path=None):
         """Write JSON data to local storage (atomically)."""
         path = _safe_join(file_path) if file_path else self._file_path()
-        _atomic_write(path, lambda f: json.dump(data, f, indent=2, default=str))
+        with _lock_for(path):
+            _atomic_write(path, lambda f: json.dump(data, f, indent=2, default=str))
         return True
+
+    def update_json(self, update_fn, file_path=None):
+        """Atomically read, transform, and replace a JSON document.
+
+        The callback runs under a per-path lock and receives the current decoded
+        value (or {} for a missing file). Decode/read failures are raised so a
+        subsequent save cannot silently erase recoverable bytes.
+        """
+        path = _safe_join(file_path) if file_path else self._file_path()
+        with _lock_for(path):
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    current = json.load(f)
+            else:
+                current = {}
+            updated = update_fn(current)
+            _atomic_write(path, lambda f: json.dump(updated, f, indent=2, default=str))
+            return updated
 
     # ── Convenience methods used by some agents ───────────────────────────
 
@@ -120,7 +190,8 @@ class AzureFileStorageManager:
 
     def write_file(self, file_path, content):
         full = _safe_join(file_path)
-        _atomic_write(full, lambda f: f.write(content))
+        with _lock_for(full):
+            _atomic_write(full, lambda f: f.write(content))
         return True
 
     def list_files(self, directory=""):

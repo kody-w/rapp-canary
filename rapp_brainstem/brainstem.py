@@ -27,6 +27,7 @@ import traceback
 import secrets
 import hmac
 import functools
+import tempfile
 from datetime import datetime, timezone
 
 import requests
@@ -117,16 +118,46 @@ def _scrub_secrets(text):
     return scrubbed
 
 
+def _has_valid_secret():
+    """Whether this request carries the per-install LAN management secret."""
+    supplied = request.headers.get("X-Brainstem-Secret", "") or ""
+    expected = _load_or_create_secret() or ""
+    return bool(expected and supplied and hmac.compare_digest(supplied, expected))
+
+
+def _is_foreign_browser_request():
+    """Detect an unsafe request initiated by a page from another origin.
+
+    CORS controls whether browser JavaScript can read a response; it does not stop
+    form posts or other simple requests from reaching loopback. Origin and
+    Sec-Fetch-Site let us reject those side effects before a route runs.
+    """
+    origin = (request.headers.get("Origin") or "").rstrip("/")
+    expected_origin = request.host_url.rstrip("/")
+    if origin and origin != expected_origin:
+        return True
+    return (request.headers.get("Sec-Fetch-Site") or "").lower() == "cross-site"
+
+
+@app.before_request
+def _reject_cross_origin_unsafe_request():
+    """Block browser CSRF against loopback while preserving non-browser LAN APIs."""
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        if _is_foreign_browser_request() and not _has_valid_secret():
+            return jsonify({
+                "error": "Forbidden: cross-origin browser requests require a valid "
+                         "X-Brainstem-Secret header.",
+            }), 403
+
+
 def _require_secret(fn):
     """Guard a code-loading / state-changing route. Loopback (same-machine) callers
     are exempt so the local UI is unchanged; any other (LAN) caller must present the
     per-install secret in the X-Brainstem-Secret header, else gets a clean 403 JSON."""
     @functools.wraps(fn)
     def _wrapped(*args, **kwargs):
-        if not _is_loopback(request.remote_addr):
-            supplied = request.headers.get("X-Brainstem-Secret", "") or ""
-            expected = _load_or_create_secret() or ""
-            if not (expected and supplied and hmac.compare_digest(supplied, expected)):
+        if _is_foreign_browser_request() or not _is_loopback(request.remote_addr):
+            if not _has_valid_secret():
                 _tlog("auth.secret_denied",
                       {"route": request.path, "remote": request.remote_addr}, level="warn")
                 return jsonify({
@@ -140,6 +171,7 @@ def _require_secret(fn):
 # ── Config ────────────────────────────────────────────────────────────────────
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_atomic_replace_lock = threading.Lock()
 
 def _resolve_under_base(value, default_name):
     """Resolve a SOUL_PATH/AGENTS_PATH setting. A relative value (the shipped
@@ -189,15 +221,46 @@ def _atomic_write_json(path, data):
     Raises on failure so callers can decide how loud to be."""
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
-    tmp = f"{path}.{os.getpid()}.tmp"
+    fd, tmp = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory)
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, default=str)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        with _atomic_replace_lock:
+            os.replace(tmp, path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
     finally:
         # If os.replace succeeded the temp is gone; this only cleans up on failure.
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def _atomic_write_bytes(path, data):
+    """Atomically replace a binary file while preserving the previous file on error."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        with _atomic_replace_lock:
+            os.replace(tmp, path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+    finally:
         if os.path.exists(tmp):
             try:
                 os.remove(tmp)
@@ -541,8 +604,18 @@ def _tlog_autosave():
         time.sleep(30)
         _tlog_save()
 
-# Start autosave thread
-threading.Thread(target=_tlog_autosave, daemon=True).start()
+_tlog_autosave_started = False
+_tlog_autosave_lock = threading.Lock()
+
+
+def _start_tlog_autosave():
+    """Start diagnostics persistence once, only when the server actually runs."""
+    global _tlog_autosave_started
+    with _tlog_autosave_lock:
+        if _tlog_autosave_started:
+            return
+        threading.Thread(target=_tlog_autosave, daemon=True).start()
+        _tlog_autosave_started = True
 
 # ── GitHub token ──────────────────────────────────────────────────────────────
 
@@ -758,6 +831,12 @@ def _invalidate_copilot_token():
     """Drop the cached Copilot API token (memory + disk) so the next
     get_copilot_token() performs a fresh exchange. Used when the API rejects the
     cached token (401) even though its local expiry hadn't elapsed."""
+    with _copilot_token_lock:
+        _invalidate_copilot_token_locked()
+
+
+def _invalidate_copilot_token_locked():
+    """Clear Copilot cache while the caller holds _copilot_token_lock."""
     global _copilot_token_cache
     _copilot_token_cache = {"token": None, "endpoint": None, "expires_at": 0}
     try:
@@ -941,7 +1020,7 @@ def start_device_code_login(force_new=False):
     Reuses an existing pending code if it hasn't expired (prevents refresh-kills-auth bug).
     Set force_new=True to always request a fresh code.
     """
-    global _pending_login, _login_bg_thread, _login_result, _copilot_token_cache
+    global _pending_login, _login_bg_thread, _login_result
 
     # Reuse existing non-expired code (e.g. user refreshed the page)
     if not force_new and _pending_login and time.time() < _pending_login.get("expires_at", 0):
@@ -954,13 +1033,8 @@ def start_device_code_login(force_new=False):
 
     # Clear stale state so the new flow starts completely clean
     _login_result = {}
-    _copilot_token_cache = {"token": None, "endpoint": None, "expires_at": 0}
+    _invalidate_copilot_token()
     _clear_no_copilot()
-    if os.path.exists(_copilot_cache_file):
-        try:
-            os.remove(_copilot_cache_file)
-        except Exception:
-            pass
 
     resp = requests.post(
         "https://github.com/login/device/code",
@@ -1210,6 +1284,7 @@ def _load_agent_from_file(filepath):
                 cls = getattr(mod, attr)
                 if (
                     isinstance(cls, type)
+                    and cls.__module__ == mod.__name__
                     and hasattr(cls, "perform")
                     and attr not in ("BasicAgent", "object")
                     and not attr.startswith("_")
@@ -1259,7 +1334,7 @@ def _register_shims():
         agents_dir = os.path.join(brainstem_dir, "agents")
         if agents_dir not in sys.path:
             sys.path.insert(0, agents_dir)
-        from basic_agent import BasicAgent as _BA
+        from agents.basic_agent import BasicAgent as _BA
         if "agents" not in sys.modules:
             agents_mod = types.ModuleType("agents")
             agents_mod.__path__ = [agents_dir]
@@ -1736,6 +1811,24 @@ def run_tool_calls(tool_calls, agents, session_id=None):
 
 # ── /chat endpoint ────────────────────────────────────────────────────────────
 
+_HISTORY_ROLES = {"user", "assistant", "tool"}
+
+
+def _validate_conversation_history(value):
+    """Return (history, error) for the public conversation-history contract."""
+    if value is None:
+        return [], None
+    if not isinstance(value, list):
+        return None, "conversation_history must be an array"
+    for index, message in enumerate(value):
+        if not isinstance(message, dict):
+            return None, f"conversation_history[{index}] must be an object"
+        if message.get("role") not in _HISTORY_ROLES:
+            return None, f"conversation_history[{index}].role is invalid"
+        if not isinstance(message.get("content"), str):
+            return None, f"conversation_history[{index}].content must be a string"
+    return value, None
+
 @app.route("/chat", methods=["POST"])
 def chat():
     # silent=True → malformed JSON yields None (a clean JSON 400 below) instead of
@@ -1747,9 +1840,10 @@ def chat():
     if not isinstance(user_input, str):
         return jsonify({"error": "user_input must be a string"}), 400
     user_input = user_input.strip()
-    history    = data.get("conversation_history", [])
-    if not isinstance(history, list):
-        history = []
+    history, history_error = _validate_conversation_history(
+        data.get("conversation_history", []))
+    if history_error:
+        return jsonify({"error": history_error}), 400
     session_id = data.get("session_id") or str(uuid.uuid4())
 
     if not user_input:
@@ -1922,9 +2016,10 @@ def chat_stream():
     if not isinstance(user_input, str):
         user_input = ""
     user_input = user_input.strip()
-    history = data.get("conversation_history", [])
-    if not isinstance(history, list):
-        history = []
+    history, history_error = _validate_conversation_history(
+        data.get("conversation_history", []))
+    if history_error:
+        return jsonify({"error": history_error}), 400
     session_id = data.get("session_id") or str(uuid.uuid4())
 
     if not user_input:
@@ -2143,6 +2238,7 @@ def index():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
 
 @app.route("/login", methods=["POST"])
+@_require_secret
 def login():
     """Start GitHub device code OAuth flow."""
     try:
@@ -2152,6 +2248,7 @@ def login():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/login/poll", methods=["POST"])
+@_require_secret
 def login_poll():
     """Poll for completed device code authorization.
 
@@ -2174,6 +2271,7 @@ def login_poll():
     return jsonify({"status": "pending"})
 
 @app.route("/login/status", methods=["GET"])
+@_require_secret
 def login_status():
     """Check if a login flow is currently in progress. Returns code info for UI resume."""
     if _pending_login and time.time() < _pending_login.get("expires_at", 0):
@@ -2186,24 +2284,34 @@ def login_status():
     return jsonify({"pending": False})
 
 @app.route("/login/switch", methods=["POST"])
+@_require_secret
 def login_switch():
     """Switch GitHub account — clears all cached tokens and starts fresh login."""
-    global _copilot_token_cache, _pending_login, _login_result
+    global _pending_login, _login_result, _models_fetched, _default_model_selected
     _tlog("auth.account_switch")
 
-    # Clear everything: memory caches, disk caches, pending login, prior result
-    _copilot_token_cache = {"token": None, "endpoint": None, "expires_at": 0}
-    _pending_login = {}
-    _login_result = {}
-    _clear_no_copilot()
-    _save_pending_login()
+    if os.getenv("GITHUB_TOKEN", "").strip():
+        return jsonify({
+            "error": "Cannot switch accounts while GITHUB_TOKEN is set. Remove it "
+                     "from the environment or .env, restart the brainstem, then switch.",
+        }), 409
 
-    for f in (_token_file, _copilot_cache_file):
+    # Serialize against an in-flight old-account exchange. If one is active, it
+    # commits first; this block then removes its memory and disk cache atomically.
+    with _copilot_token_lock:
+        _invalidate_copilot_token_locked()
+        _pending_login = {}
+        _login_result = {}
+        _clear_no_copilot()
+        _save_pending_login()
         try:
-            if os.path.exists(f):
-                os.remove(f)
-        except Exception:
+            if os.path.exists(_token_file):
+                os.remove(_token_file)
+        except OSError:
             pass
+        _models_fetched = False
+        _default_model_selected = False
+        _NO_TOOL_CHOICE_MODELS.clear()
 
     # Start a fresh device code flow immediately
     try:
@@ -2214,6 +2322,7 @@ def login_switch():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/login/retry", methods=["POST"])
+@_require_secret
 def login_retry():
     """Re-attempt the Copilot exchange with the EXISTING GitHub token — no re-login.
 
@@ -2256,6 +2365,7 @@ def list_models():
     return jsonify({"models": AVAILABLE_MODELS, "current": MODEL})
 
 @app.route("/models/set", methods=["POST"])
+@_require_secret
 def set_model():
     """Change the active model. A specific pick is persisted (.brainstem_model) so
     it stays the default across restarts; "auto" forgets the pick and re-selects
@@ -2285,6 +2395,7 @@ def voice_status():
     return jsonify({"voice_mode": VOICE_MODE})
 
 @app.route("/voice/config", methods=["GET"])
+@_require_secret
 def voice_config():
     """Serve voice config from password-protected voice.zip."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -2316,6 +2427,7 @@ def voice_config():
     return jsonify({})
 
 @app.route("/voice/config", methods=["POST"])
+@_require_secret
 def voice_config_save():
     """Save voice config to AES-encrypted voice.zip for local persistence."""
     data = request.get_json(force=True, silent=True)
@@ -2328,11 +2440,14 @@ def voice_config_save():
     voice_zip = os.path.join(base_dir, "voice.zip")
     try:
         import pyzipper
-        with pyzipper.AESZipFile(voice_zip, 'w',
+        import io
+        buf = io.BytesIO()
+        with pyzipper.AESZipFile(buf, 'w',
                                  compression=pyzipper.ZIP_DEFLATED,
                                  encryption=pyzipper.WZ_AES) as zf:
             zf.setpassword(password.encode())
             zf.writestr("voice.json", json.dumps(data, indent=2))
+        _atomic_write_bytes(voice_zip, buf.getvalue())
         return jsonify({"status": "ok", "message": "voice.zip saved (AES encrypted)"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2382,9 +2497,7 @@ def voice_import():
         # Also save to local voice.zip
         base_dir = os.path.dirname(os.path.abspath(__file__))
         voice_zip = os.path.join(base_dir, "voice.zip")
-        buf.seek(0)
-        with open(voice_zip, 'wb') as out:
-            out.write(buf.read())
+        _atomic_write_bytes(voice_zip, buf.getvalue())
         return jsonify(cfg)
     except Exception as e:
         err = str(e).lower()
@@ -2393,6 +2506,7 @@ def voice_import():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/voice/toggle", methods=["POST"])
+@_require_secret
 def voice_toggle():
     """Toggle voice mode on/off."""
     global VOICE_MODE
@@ -2413,6 +2527,7 @@ def version():
     return jsonify({"version": VERSION})
 
 @app.route("/agents", methods=["GET"])
+@_require_secret
 def list_agents_files():
     """List all agent .py files available with their loaded agent names."""
     files = glob.glob(os.path.join(AGENTS_PATH, "*.py"))
@@ -2437,6 +2552,7 @@ def list_agents_files():
     return jsonify({"files": results})
 
 @app.route("/agents/export/<filename>", methods=["GET"])
+@_require_secret
 def agents_export(filename):
     """Export an agent .py file."""
     from flask import send_file
@@ -2490,9 +2606,13 @@ def agents_import():
     # Ensure it matches the glob pattern *_agent.py
     if not safe_name.endswith('_agent.py'):
         safe_name = safe_name[:-3] + '_agent.py'
+    if safe_name == "basic_agent.py":
+        return jsonify({
+            "error": "basic_agent.py is the shared base class and cannot be replaced.",
+        }), 400
         
     filepath = os.path.join(AGENTS_PATH, safe_name)
-    f.save(filepath)
+    _atomic_write_bytes(filepath, f.read())
 
     # load_agents() swallows per-file errors (returns {} for a broken file), so it
     # can't tell us whether THIS upload actually works. Load just this file and report
@@ -2565,7 +2685,7 @@ def debug_auth():
     LOOPBACK ONLY: it performs a live token exchange whose success body carries a
     usable Copilot token, so a remote caller must never reach it. It returns only
     booleans / status codes — never a token or the exchange body itself."""
-    if not _is_loopback(request.remote_addr):
+    if not _is_loopback(request.remote_addr) or _is_foreign_browser_request():
         return jsonify({"error": "Forbidden: /debug/auth is available to loopback callers only."}), 403
 
     token = get_github_token()
@@ -2598,6 +2718,7 @@ def debug_auth():
 # ── Diagnostics / Flight Recorder (book.json) ─────────────────────────────────
 
 @app.route("/diagnostics", methods=["GET"])
+@_require_secret
 def diagnostics():
     """Return the flight recorder log as JSON. Add ?tail=N for last N events."""
     tail = request.args.get("tail", type=int)
@@ -2613,6 +2734,7 @@ def diagnostics():
     })
 
 @app.route("/diagnostics/book.json", methods=["GET"])
+@_require_secret
 def diagnostics_export():
     """Export full flight recorder as book.json — the brainstem's story."""
     _tlog_save()  # Flush to disk first
@@ -2651,6 +2773,7 @@ def diagnostics_export():
     )
 
 @app.route("/diagnostics/clear", methods=["POST"])
+@_require_secret
 def diagnostics_clear():
     """Clear the flight recorder."""
     with _flight_log_lock:
@@ -2659,6 +2782,7 @@ def diagnostics_clear():
     return jsonify({"status": "ok", "message": "Flight recorder cleared."})
 
 @app.route("/diagnostics/report", methods=["POST"])
+@_require_secret
 def diagnostics_report():
     """Create a GitHub issue with session diagnostics so admin can help."""
     _tlog("diagnostics.report_started")
@@ -2781,6 +2905,7 @@ def diagnostics_report():
 
 if __name__ == "__main__":
     _tlog_load()  # Restore previous flight log
+    _start_tlog_autosave()
     _tlog("server.starting", {"version": VERSION, "model": MODEL, "port": PORT})
     print(f"\n🧠 RAPP Brainstem v{VERSION} starting on http://localhost:{PORT}")
     # If auth is already available (gh CLI / env / cached token), fetch the real
