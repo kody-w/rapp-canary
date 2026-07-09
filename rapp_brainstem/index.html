@@ -797,7 +797,7 @@
       </div>
       <div class="copy-toast" id="copy-toast">&nbsp;</div>
       <a id="verify-link" href="#" target="_blank" style="color:#58a6ff;font-size:14px">Open GitHub &rarr;</a>
-      <div style="font-size:11px;color:#8b949e;margin-top:4px">If a new tab didn't open, click the link above</div>
+      <div style="font-size:11px;color:#8b949e;margin-top:4px">Code copied to your clipboard — click the link above, then paste it on GitHub</div>
       <div class="login-status" id="login-status">Waiting for authorization...</div>
     </div>
     <div id="login-step3" style="display:none">
@@ -1118,8 +1118,9 @@
       document.getElementById('login-overlay').style.display = 'flex';
       loginInProgress = true;
       loginDismissed = false;
+      // Show the code and stay put — auto-opening GitHub hides the code the
+      // user still needs. They copy first, then click Open GitHub themselves.
       copyDeviceCode();
-      window.open(d.verification_uri, '_blank');
       startPollLogin();
     } catch (e) {
       alert('Failed to switch: ' + e.message);
@@ -1684,8 +1685,9 @@
       document.getElementById('login-step2').style.display = 'block';
       document.getElementById('device-code').textContent = d.user_code;
       document.getElementById('verify-link').href = d.verification_uri;
+      // Show the code and stay put — auto-opening GitHub hides the code the
+      // user still needs. They copy first, then click Open GitHub themselves.
       copyDeviceCode();
-      window.open(d.verification_uri, '_blank');
       startPollLogin();
     } catch (e) {
       clog('login.start_failed', { error: e.message });
