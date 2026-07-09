@@ -815,5 +815,110 @@ class TestCopilotTimeout(unittest.TestCase):
         self.assertEqual(mock_post.call_count, 1)  # non-timeout errors propagate unchanged, no retry
 
 
+class TestSoulDefaultsManifest(unittest.TestCase):
+    """The upgrade-time 'refresh unmodified default soul' feature (issue #40).
+
+    install.sh / install.ps1 only refresh an installed soul.md if its NORMALIZED
+    hash is listed in rapp_brainstem/soul_defaults.sha256 (an unmodified historical
+    default). This self-enforcement test makes a soul edit without regenerating the
+    manifest fail CI: it asserts the manifest contains the normalized hash of the
+    default soul this checkout ships. Regenerate with `bash tests/gen_soul_hashes.sh`.
+    """
+
+    SOUL = os.path.join(BRAINSTEM_DIR, "soul.md")
+    MANIFEST = os.path.join(BRAINSTEM_DIR, "soul_defaults.sha256")
+
+    def _manifest_hashes(self):
+        hashes = set()
+        with open(self.MANIFEST, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                hashes.add(line.split()[0].lower())
+        return hashes
+
+    def _committed_default_soul(self):
+        """soul.md as committed at HEAD (the shipped default), or None if unavailable.
+
+        The invariant is about the DEFAULT this checkout ships, not the file on disk:
+        in an installed copy the user may have customized soul.md (legitimately absent
+        from the manifest), yet HEAD still holds the pristine default the manifest must
+        describe. Reading the committed blob keeps this test correct both in the source
+        repo (CI) and when it runs inside a live install (e.g. preflight upgrade).
+        """
+        import subprocess
+        try:
+            out = subprocess.run(
+                ["git", "-C", BRAINSTEM_DIR, "show", "HEAD:rapp_brainstem/soul.md"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
+            )
+            if out.returncode == 0 and out.stdout:
+                return out.stdout
+        except Exception:
+            pass
+        return None
+
+    def test_hasher_and_manifest_present(self):
+        import soul_hash  # noqa: F401
+        self.assertTrue(os.path.isfile(self.SOUL), "rapp_brainstem/soul.md missing")
+        self.assertTrue(
+            os.path.isfile(self.MANIFEST),
+            "rapp_brainstem/soul_defaults.sha256 missing — run tests/gen_soul_hashes.sh",
+        )
+
+    def test_current_soul_hash_is_in_manifest(self):
+        import soul_hash
+        manifest = self._manifest_hashes()
+        # Fast path: the working soul is a known default (pristine source tree, or an
+        # install still on a shipped default). This is the common CI case.
+        if soul_hash.normalized_sha256(self.SOUL) in manifest:
+            return
+        # The on-disk soul is NOT a known default. In the source repo that means the
+        # manifest is stale (soul.md was edited without regenerating). In an installed
+        # copy it just means the user customized their soul. Decide against the blob
+        # committed at HEAD — always the shipped default — which is the real invariant.
+        committed = self._committed_default_soul()
+        if committed is None:
+            self.skipTest("soul.md is not a known default and git is unavailable "
+                          "to read the committed default (likely a customized install)")
+        self.assertIn(
+            soul_hash.normalized_sha256_bytes(committed),
+            manifest,
+            "soul.md changed but soul_defaults.sha256 is stale — "
+            "run `bash tests/gen_soul_hashes.sh` and commit the result",
+        )
+
+    def test_manifest_entries_are_lowercase_sha256(self):
+        for h in self._manifest_hashes():
+            self.assertRegex(h, r"^[0-9a-f]{64}$")
+
+    def test_normalization_is_idempotent_and_absorbs_mechanical_drift(self):
+        # The whole feature rests on this contract (mirrored natively by install.ps1):
+        # BOM / CRLF / trailing whitespace / trailing-newline drift must NOT change the
+        # hash, and normalizing twice must be a no-op.
+        import soul_hash
+        with open(self.SOUL, "rb") as fh:
+            base = fh.read()
+        want = soul_hash.normalized_sha256_bytes(base)
+        variants = {
+            "bom": b"\xef\xbb\xbf" + base,
+            "crlf": base.replace(b"\n", b"\r\n"),
+            "no_final_newline": base.rstrip(b"\n"),
+            "extra_final_newlines": base + b"\n\n",
+            "trailing_ws": b"\n".join(l + b" \t" for l in base.split(b"\n")),
+        }
+        for name, data in variants.items():
+            self.assertEqual(
+                soul_hash.normalized_sha256_bytes(data), want,
+                f"mechanical drift '{name}' changed the normalized hash",
+            )
+        self.assertEqual(
+            soul_hash.normalize(soul_hash.normalize(base)),
+            soul_hash.normalize(base),
+            "normalize() is not idempotent",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

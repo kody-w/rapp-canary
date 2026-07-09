@@ -302,6 +302,48 @@ function Check-Prerequisites {
     }
 }
 
+# ── soul refresh on upgrade (issue #40) ──────────────────────────────────────────
+# Normalized SHA-256 of a soul.md, computed IDENTICALLY to rapp_brainstem/soul_hash.py
+# so the shipped soul_defaults.sha256 manifest works for both installers. Normalize:
+# strip a UTF-8 BOM, CRLF->LF, strip trailing space/tab per line, exactly one trailing
+# newline; then Get-FileHash a UTF-8 (no BOM) temp copy. Returns lowercase hex, or $null
+# if the file cannot be read/decoded (the caller then preserves the soul untouched).
+function Get-NormalizedSoulHash {
+    param([string]$Path)
+    try {
+        # ReadAllText(UTF8) auto-detects and strips a UTF-8 BOM, matching soul_hash.py.
+        $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    } catch { return $null }
+    $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+    $lines = $text.Split([char]10)
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        $lines[$i] = $lines[$i].TrimEnd([char]32, [char]9)
+    }
+    $text = [string]::Join([string][char]10, $lines).TrimEnd([char]10) + [string][char]10
+    $tmp = [System.IO.Path]::GetTempFileName()
+    try {
+        [System.IO.File]::WriteAllText($tmp, $text, (New-Object System.Text.UTF8Encoding($false)))
+        return (Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLower()
+    } catch {
+        return $null
+    } finally {
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# True if $Hash is the first token of some non-comment line in the manifest.
+function Test-SoulHashInManifest {
+    param([string]$Hash, [string]$ManifestPath)
+    if (-not $Hash) { return $false }
+    if (-not (Test-Path $ManifestPath)) { return $false }
+    foreach ($line in [System.IO.File]::ReadAllLines($ManifestPath)) {
+        $trimmed = $line.Trim()
+        if ($trimmed -eq "" -or $trimmed.StartsWith("#")) { continue }
+        if (($trimmed -split '\s+')[0].ToLower() -eq $Hash.ToLower()) { return $true }
+    }
+    return $false
+}
+
 function Install-Brainstem {
     Write-Host ""
     Write-Host "Installing RAPP Brainstem..."
@@ -358,8 +400,27 @@ function Install-Brainstem {
                 Write-Host "  [!] Update download failed — keeping existing files (v$LocalVer)" -ForegroundColor Yellow
             }
 
-            # Restore user files
-            if (Test-Path "$Backup\soul.md") { Copy-Item "$Backup\soul.md" $SoulFile -Force }
+            # Restore user files.
+            # soul.md: refresh it only when the pre-upgrade file was an unmodified
+            # historical default (issue #40) — its normalized hash is in the manifest
+            # AND the new default differs; then back the old one up to soul.md.bak-<date>.
+            # Otherwise (any customization, or anything we cannot hash) preserve it
+            # byte-for-byte. Fail-safe: preserve, never clobber.
+            if (Test-Path "$Backup\soul.md") {
+                $soulRefreshed = $false
+                if ($pullOk) {
+                    $Manifest = "$BRAINSTEM_HOME\src\rapp_brainstem\soul_defaults.sha256"
+                    $OldHash = Get-NormalizedSoulHash "$Backup\soul.md"
+                    $NewHash = Get-NormalizedSoulHash $SoulFile
+                    if ($OldHash -and $NewHash -and ($OldHash -ne $NewHash) -and (Test-SoulHashInManifest $OldHash $Manifest)) {
+                        $Bak = "$BRAINSTEM_HOME\src\rapp_brainstem\soul.md.bak-$(Get-Date -Format 'yyyyMMdd')"
+                        Copy-Item "$Backup\soul.md" $Bak -Force
+                        Write-Host "  [OK] Refreshed default soul (yours was an unmodified default); backup at $Bak" -ForegroundColor Green
+                        $soulRefreshed = $true
+                    }
+                }
+                if (-not $soulRefreshed) { Copy-Item "$Backup\soul.md" $SoulFile -Force }
+            }
             if (Test-Path "$Backup\.env") { Copy-Item "$Backup\.env" $EnvFile -Force }
             Get-ChildItem "$Backup\*.py" -ErrorAction SilentlyContinue | ForEach-Object {
                 if ($_.Name -notin @("basic_agent.py", "__init__.py")) {

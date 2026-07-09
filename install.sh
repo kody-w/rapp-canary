@@ -234,6 +234,39 @@ check_prereqs() {
     fi
 }
 
+# On upgrade, decide what to do with the user's existing soul.md (issue #40).
+# Args: <old_soul> <new_default_soul>. The new checkout's default is already at
+# <new_default_soul>; <old_soul> is the pre-upgrade file we backed up.
+#   return 0 → refreshed: keep the new default in place, save the old one to
+#              soul.md.bak-<date>, and print one line saying so.
+#   return 1 → preserve : caller restores <old_soul> byte-for-byte (today's behavior).
+# It only returns 0 when the old soul is an UNMODIFIED historical default — its
+# normalized hash (rapp_brainstem/soul_hash.py) is listed in soul_defaults.sha256 —
+# AND the new default differs. Any customization, or any uncertainty (no python, no
+# manifest, unreadable/undecodable file), fails safe to preserve. It never clobbers.
+maybe_refresh_soul() {
+    local old="$1" newdef="$2"
+    local src_dir="$BRAINSTEM_HOME/src/rapp_brainstem"
+    local hasher="$src_dir/soul_hash.py"
+    local manifest="$src_dir/soul_defaults.sha256"
+
+    [ -n "${PYTHON_CMD:-}" ] && [ -f "$hasher" ] && [ -f "$manifest" ] || return 1
+
+    local oldhash newhash
+    oldhash=$("$PYTHON_CMD" "$hasher" "$old" 2>/dev/null) || return 1
+    [ -n "$oldhash" ] || return 1
+    # Not an unmodified default (customized or unrecognizable) → preserve.
+    awk -v h="$oldhash" '/^[[:space:]]*#/{next} $1==h{f=1; exit} END{exit !f}' "$manifest" || return 1
+    # A known default — only refresh if the new default actually differs.
+    newhash=$("$PYTHON_CMD" "$hasher" "$newdef" 2>/dev/null) || return 1
+    [ -n "$newhash" ] && [ "$oldhash" != "$newhash" ] || return 1
+
+    local bak="$src_dir/soul.md.bak-$(date +%Y%m%d)"
+    cp "$old" "$bak" 2>/dev/null || return 1
+    echo -e "  ${GREEN}✓${NC} Refreshed default soul (yours was an unmodified default); backup at ${bak}"
+    return 0
+}
+
 install_brainstem() {
     echo ""
     echo "Installing RAPP Brainstem..."
@@ -304,7 +337,13 @@ install_brainstem() {
             fi
 
             # 3. Restore user's local files (merge, don't overwrite)
-            [ -f "$BACKUP/soul.md" ] && cp "$BACKUP/soul.md" "$SOUL_FILE"
+            # soul.md: refresh it only when the pre-upgrade file was an unmodified
+            # historical default (issue #40); any customization is preserved as-is.
+            if [ -f "$BACKUP/soul.md" ]; then
+                if ! maybe_refresh_soul "$BACKUP/soul.md" "$SOUL_FILE"; then
+                    cp "$BACKUP/soul.md" "$SOUL_FILE"
+                fi
+            fi
             [ -f "$BACKUP/.env" ] && cp "$BACKUP/.env" "$ENV_FILE"
             if [ -d "$BACKUP/agents" ]; then
                 # Restore user agents that aren't in the repo (custom ones)

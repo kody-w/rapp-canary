@@ -282,6 +282,13 @@
     overflow-y: auto; border-top: 1px solid #21262d;
   }
   .agent-logs.collapsed { display: none; }
+  .ac-pop { display: inline-block; animation: ac-pop .16s cubic-bezier(.34, 1.56, .64, 1); }
+  @keyframes ac-pop { from { transform: scale(.4) translateY(3px); opacity: .2; }
+    to { transform: scale(1) translateY(0); opacity: 1; } }
+  .stream-caret { display: inline-block; width: 3px; height: 1em; margin-left: 2px;
+    background: #58a6ff; vertical-align: -0.15em; border-radius: 1px;
+    animation: caret-blink 1.1s ease-in-out infinite; }
+  @keyframes caret-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: .15; } }
 
   .typing { display: flex; gap: 4px; align-items: center; padding: 4px 0; }
   .typing span {
@@ -774,6 +781,13 @@
 </head>
 <body>
 
+<div id="copilot-banner" style="display:none;flex-shrink:0;background:#3d2c00;color:#f2cc60;border-bottom:1px solid #7a5c00;padding:10px 16px;font-size:14px;line-height:1.5;text-align:center;z-index:150">
+  <span class="icon" style="vertical-align:middle;margin-right:6px"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8.22 1.75a.25.25 0 00-.44 0L1.7 13.5a.25.25 0 00.22.37h12.16a.25.25 0 00.22-.37L8.22 1.75zM6.9 1.03c.5-.87 1.7-.87 2.2 0l6.09 11.75c.48.83-.12 1.85-1.1 1.85H1.91c-.98 0-1.58-1.02-1.1-1.85L6.9 1.03zM8 5a.75.75 0 01.75.75v3a.75.75 0 01-1.5 0v-3A.75.75 0 018 5zm0 7a1 1 0 100-2 1 1 0 000 2z"/></svg></span>
+  <span id="copilot-banner-text">This GitHub account doesn't have Copilot access yet.</span>
+  <button id="copilot-retry-btn" onclick="retryCopilot()" style="margin-left:10px;background:#f2cc60;color:#3d2c00;border:none;border-radius:5px;padding:4px 12px;font-size:13px;font-weight:600;cursor:pointer">Retry</button>
+  <a href="https://github.com/github-copilot/signup" target="_blank" style="color:#f2cc60;margin-left:10px;text-decoration:underline">Enable Copilot &rarr;</a>
+</div>
+
 <div id="drop-overlay">
   <span class="icon"><svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg></span>
   Drop .py agent file to install
@@ -1167,6 +1181,85 @@
     document.getElementById('login-overlay').style.display = 'none';
   }
 
+  // ── Copilot-access banner ──
+  // The account is signed in but has no Copilot entitlement (yet). Show a persistent,
+  // friendly bar with the ONE action that fixes it: enable Copilot, then Retry. Retry
+  // re-attempts the token exchange with the existing GitHub token — no re-login.
+  function showCopilotBanner(username) {
+    const txt = document.getElementById('copilot-banner-text');
+    if (txt) txt.innerHTML =
+      '<strong>' + (username || 'This GitHub account') + '</strong> doesn\'t have GitHub Copilot access yet. ' +
+      'Enable Copilot on your account, then Retry — no need to sign in again.';
+    const b = document.getElementById('copilot-banner');
+    if (b) b.style.display = 'block';
+  }
+  function hideCopilotBanner() {
+    const b = document.getElementById('copilot-banner');
+    if (b) b.style.display = 'none';
+  }
+  // Re-run the exchange with the existing token. `statusElId` lets the login overlay
+  // reuse this to report into its own status line; defaults to the banner text.
+  async function retryCopilot(statusElId) {
+    const btn = document.getElementById('copilot-retry-btn');
+    const el = document.getElementById(statusElId || 'copilot-banner-text');
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    if (el && !statusElId) el.textContent = 'Checking Copilot access…';
+    try {
+      const r = await fetch(`${API}/login/retry`, { method: 'POST' });
+      const d = await r.json();
+      if (d.status === 'ok') {
+        clog('copilot.retry_ok');
+        hideCopilotBanner();
+        localStorage.setItem('brainstem_auth', 'true');
+        checkHealth();
+        return d;
+      }
+      if (d.status === 'no_copilot_access') {
+        clog('copilot.retry_no_access', { username: d.username });
+        if (el) el.innerHTML =
+          '<strong>' + (d.username || 'This account') + '</strong> still has no Copilot access. ' +
+          'Enable it on GitHub, then Retry.';
+      } else {
+        if (el) el.textContent = d.error || 'Still can\'t reach Copilot — try again shortly.';
+      }
+      return d;
+    } catch (e) {
+      if (el) el.textContent = 'Retry failed — check your connection and try again.';
+      return { status: 'error' };
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
+    }
+  }
+
+  // Login-overlay variant: shown while the sign-in card is still open. Renders the
+  // no-Copilot message with a Retry that re-exchanges the token just obtained (it is
+  // no longer discarded server-side), plus switch/sign-up as secondary options.
+  function renderNoCopilotOverlay(username, retried) {
+    const el = document.getElementById('login-status');
+    if (!el) return;
+    el.innerHTML =
+      '<strong>' + username + '</strong> doesn\'t have GitHub Copilot access' + (retried ? ' yet' : '') + '. ' +
+      'Enable it on GitHub, then <a href="#" onclick="retryCopilotOverlay(\'' + username + '\'); return false;" style="color:#58a6ff">Retry</a>.' +
+      '<div style="margin-top:6px;font-size:12px">' +
+      '<a href="#" onclick="switchAccount(); return false;" style="color:#8b949e">Switch account</a> · ' +
+      '<a href="https://github.com/github-copilot/signup" target="_blank" style="color:#8b949e">Sign up for Copilot</a></div>';
+  }
+  async function retryCopilotOverlay(username) {
+    const el = document.getElementById('login-status');
+    if (el) el.textContent = 'Checking Copilot access…';
+    const d = await retryCopilot('login-status');
+    if (d && d.status === 'ok') {
+      loginInProgress = false;
+      document.getElementById('login-step2').style.display = 'none';
+      document.getElementById('login-step3').style.display = 'block';
+      setTimeout(hideLoginOverlay, 1200);
+      return;
+    }
+    // retryCopilot already wrote a message into #login-status; re-render with the
+    // full option set so the Retry / switch / sign-up links are always present.
+    renderNoCopilotOverlay((d && d.username) || username, true);
+  }
+
   let healthInterval = null;
 
   async function checkHealth() {
@@ -1190,6 +1283,11 @@
         localStorage.setItem('brainstem_auth', 'true');
         loginInProgress = false;
         clog('health.ok', { copilot: d.copilot, model: d.model });
+        // Signed in to GitHub, but the account has no Copilot entitlement yet.
+        // Keep the dot "connected" (they ARE authed) and show the persistent
+        // enable-Copilot-then-Retry banner instead of a dead end.
+        if (d.copilot === 'no_access') { showCopilotBanner(d.copilot_username); }
+        else { hideCopilotBanner(); }
         loadModels();
         loadAgentsList();
         // Slow down polling once connected
@@ -1200,6 +1298,7 @@
         statusText.textContent = 'sign in';
         statusText.style.cursor = 'pointer';
         statusText.onclick = showLoginOverlay;
+        hideCopilotBanner();
         clog('health.unauthenticated', { status: d.status });
         // Only auto-show overlay on first visit, never if user dismissed it
         if (!localStorage.getItem('brainstem_auth') && !loginInProgress && !loginDismissed) {
@@ -1741,10 +1840,7 @@
         clog('login.poll_error', { error: err });
         if (err.startsWith('NO_COPILOT_ACCESS:')) {
           const username = err.split(':')[1] || 'this account';
-          document.getElementById('login-status').innerHTML =
-            '<strong>' + username + '</strong> doesn\'t have GitHub Copilot access. ' +
-            '<a href="#" onclick="switchAccount(); return false;" style="color:#58a6ff">Switch account</a> or ' +
-            '<a href="https://github.com/github-copilot/signup" target="_blank" style="color:#58a6ff">sign up for Copilot</a>.';
+          renderNoCopilotOverlay(username, false);
         } else {
           document.getElementById('login-status').innerHTML =
             err + ' <a href="#" onclick="startLogin(); return false;" style="color:#58a6ff">Try again</a>';
@@ -2029,6 +2125,31 @@
     appendTyping();
 
     try {
+      // Prefer streaming for a live, token-by-token render. ANY failure on the
+      // stream path transparently falls back to POST /chat, so the user sees no
+      // difference and history/transcript bookkeeping stays identical to before.
+      let streamed = false;
+      if (window.ReadableStream && window.fetch) {
+        try {
+          streamed = await sendViaStream(text, payload);
+        } catch (err) {
+          clog('chat.stream_fallback', { error: (err && err.message) || String(err) });
+          streamed = false;
+        }
+      }
+      if (!streamed) {
+        await sendViaPost(text, payload);
+      }
+    } finally {
+      document.getElementById('send').disabled = false;
+      input.focus();
+    }
+  }
+
+  // Non-streaming path — the original POST /chat flow verbatim. Reachable as the
+  // streaming fallback and whenever ReadableStream is unavailable.
+  async function sendViaPost(text, payload) {
+    try {
       const body = { user_input: payload, conversation_history: history };
       if (sessionId) body.session_id = sessionId;
 
@@ -2045,13 +2166,17 @@
       if (d.error) {
         clog('chat.error_response', { error: d.error.slice(0, 200) });
         if (d.error.startsWith('NO_COPILOT_ACCESS:')) {
-          const username = d.error.split(':')[1] || 'this account';
+          const username = d.copilot_username || d.error.split(':')[1] || 'this account';
+          // They ARE authenticated — only Copilot entitlement is missing. Surface the
+          // persistent banner (with Retry) and an inline note. Do NOT clear
+          // brainstem_auth: that would bounce them to a misleading "signed out" state.
+          showCopilotBanner(username);
           const wrap = appendMsg('system', '');
           wrap.querySelector('.bubble').innerHTML =
-            `<strong>${username}</strong> doesn't have GitHub Copilot access. ` +
-            `<a href="#" onclick="switchAccount(); return false;" style="color:#58a6ff">Switch account</a> ` +
-            `or <a href="https://github.com/github-copilot/signup" target="_blank" style="color:#58a6ff">sign up for Copilot</a>.`;
-          localStorage.removeItem('brainstem_auth');
+            `<strong>${username}</strong> doesn't have GitHub Copilot access yet. ` +
+            `Enable Copilot on your account, then ` +
+            `<a href="#" onclick="retryCopilot(); return false;" style="color:#58a6ff">Retry</a> — ` +
+            `no need to sign in again.`;
         } else if (d.error.includes('usage limit') || d.error.includes('quota')) {
           const wrap = appendMsg('system', '');
           wrap.querySelector('.bubble').innerHTML =
@@ -2109,9 +2234,232 @@
       wrap.querySelector('.bubble').innerHTML =
         `Could not reach brainstem: ${err.message}<br><a href="#" onclick="shareWithAdmin(); return false;" style="color:#f0883e;font-size:12px">🆘 Share with admin for help</a>`;
     }
+  }
 
-    document.getElementById('send').disabled = false;
-    input.focus();
+  // Streaming path: fetch + ReadableStream over /chat/stream. Renders the assistant
+  // bubble progressively as delta events arrive, shows agent logs when a tool round
+  // fires, and re-renders markdown on done — reusing appendMsg's structure. Throws
+  // on ANY error so sendMessage falls back to sendViaPost transparently. Returns
+  // true only on a clean finish (a done event was seen).
+  async function sendViaStream(text, payload) {
+    const body = { user_input: payload, conversation_history: history };
+    if (sessionId) body.session_id = sessionId;
+
+    const r = await fetch(`${API}/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok || !r.body) throw new Error(`stream http ${r.status}`);
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let assembled = '';
+    let bubbleWrap = null, bubbleEl = null, textNode = null, caret = null;
+    let agentLogs = '';
+    let doneData = null;
+
+    // ── Typewriter smoother ──────────────────────────────────────────────
+    // Network chunks arrive in spastic bursts; readers deserve RPG-dialogue
+    // calm. Deltas fill `assembled`; this loop reveals it at a steady pace,
+    // accelerating smoothly only when a fast model builds up backlog.
+    let shown = 0, rafId = null, lastTs = 0, pauseUntil = 0, maxH = 0;
+    const normalizeMd = (t) => t.replace(/^([ \t]*)[\u2022\u2023\u25AA\u25CF]\s+/gm, '$1- ');
+    // Render the visible slice as REAL markdown every frame — formatting forms
+    // as the text pours instead of snapping in at the end. The caret rides
+    // inside the last block so it breathes where the words are appearing.
+    function renderShown(freshChars) {
+      if (typeof marked === 'undefined') { textNode.nodeValue = assembled.slice(0, shown); return; }
+      bubbleEl.innerHTML = sanitizeHtml(marked.parse(normalizeMd(assembled.slice(0, shown))));
+      bubbleEl.querySelectorAll('a').forEach(a => a.target = '_blank');
+      // The write-head bounces: wrap the freshest characters in a springy pop,
+      // Animal Crossing style — the words feel like they're arriving, not loading.
+      if (freshChars > 0) {
+        // Find the last NON-EMPTY text node (marked's HTML ends with a
+        // whitespace-only \n text node that would otherwise swallow the pop).
+        const walker = document.createTreeWalker(bubbleEl, NodeFilter.SHOW_TEXT);
+        let node = null, cur;
+        while ((cur = walker.nextNode())) { if (cur.nodeValue && cur.nodeValue.trim()) node = cur; }
+        if (node) {
+          const n = Math.min(freshChars, 3, node.nodeValue.length);
+          const tail = node.nodeValue.slice(-n);
+          node.nodeValue = node.nodeValue.slice(0, -n);
+          const popSpan = document.createElement('span');
+          popSpan.className = 'ac-pop';
+          popSpan.textContent = tail;
+          node.parentNode.appendChild(popSpan);
+        }
+      }
+      (bubbleEl.lastElementChild || bubbleEl).appendChild(caret);
+      // Height ratchet: partial-markdown reflows (a line flipping between
+      // paragraph and list, an unclosed ** collapsing) make the bubble
+      // breathe up and down every few frames — jerky. Mid-stream the bubble
+      // may only ever GROW; the final render resets cleanly.
+      const h = bubbleEl.offsetHeight;
+      if (h > maxH) maxH = h; else if (maxH) bubbleEl.style.minHeight = maxH + 'px';
+      // Long answers earn width once, mid-pour — not as an end-of-stream snap.
+      if (assembled.length > 1200 && bubbleWrap && !bubbleWrap.classList.contains('wide')) {
+        bubbleWrap.classList.add('wide');
+        maxH = 0; bubbleEl.style.minHeight = '';
+      }
+    }
+    function typeTick(ts) {
+      rafId = null;
+      if (!bubbleEl) return;
+      const dt = lastTs ? Math.min((ts - lastTs) / 1000, 0.1) : 0.016;
+      lastTs = ts;
+      const backlog = assembled.length - shown;
+      if (backlog > 0 && ts >= pauseUntil) {
+        // Zen pace: ~45 cps is read-along speed. Catch-up is a slow tide
+        // (+0.8 cps per backlogged char, low ceiling) so even a torrent from
+        // a fast model arrives as a calm, steady pour — never smashed out.
+        const rate = Math.min(45 + backlog * 0.8, 350);
+        const prevShown = shown;
+        shown = Math.min(assembled.length, shown + Math.max(1, Math.round(rate * dt)));
+        renderShown(shown - prevShown);
+        // Breathe at punctuation, dialogue-style — a beat after a sentence,
+        // half a beat at a clause — but never while far behind the model.
+        if (backlog < 400) {
+          const ch = assembled[shown - 1];
+          if ('.!?'.includes(ch)) pauseUntil = ts + 200;
+          else if (',;:'.includes(ch)) pauseUntil = ts + 90;
+        }
+      }
+      // Zen scroll: every frame, ease gently toward the bottom instead of
+      // snapping — a new line becomes a drift, not a jerk. Respects a reader
+      // who has scrolled up (only engages within ~240px of the bottom).
+      const chat = document.getElementById('chat');
+      const goal = chat.scrollHeight - chat.clientHeight;
+      const gap = goal - chat.scrollTop;
+      // Hard velocity ceiling (~160px/s): the viewport drifts like a slow
+      // elevator no matter how the text bursts — low blood pressure by design.
+      if (gap > 0 && gap < 400) chat.scrollTop += Math.min(gap, Math.max(0.5, 160 * dt));
+      if (shown < assembled.length || !doneData) rafId = requestAnimationFrame(typeTick);
+    }
+    function ensureTyping() { if (!rafId) { lastTs = 0; rafId = requestAnimationFrame(typeTick); } }
+    function drainRemaining() {
+      // Called at finalize: let the tail write itself out quickly but visibly.
+      return new Promise(resolve => {
+        let prev = 0;
+        (function finish(ts) {
+          if (!bubbleEl || shown >= assembled.length) return resolve();
+          const dt = prev ? Math.min((ts - prev) / 1000, 0.1) : 0.016;
+          prev = ts;
+          // The finale keeps the same calm ceiling — no last-second face-smash.
+          shown = Math.min(assembled.length, shown + Math.max(1, Math.round(500 * dt)));
+          renderShown();
+          const chat = document.getElementById('chat');
+          const goal = chat.scrollHeight - chat.clientHeight;
+          const gap = goal - chat.scrollTop;
+          if (gap > 0) chat.scrollTop += Math.min(gap, Math.max(0.5, 160 * dt));
+          requestAnimationFrame(finish);
+        })(performance.now());
+      });
+    }
+
+    function ensureBubble() {
+      if (!bubbleWrap) {
+        removeTyping();
+        bubbleWrap = appendMsg('assistant', '');
+        bubbleEl = bubbleWrap.querySelector('.bubble');
+        textNode = document.createTextNode('');
+        caret = document.createElement('span');
+        caret.className = 'stream-caret';
+        bubbleEl.append(textNode, caret);
+      }
+    }
+    function rollback() {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      if (bubbleWrap) { bubbleWrap.remove(); bubbleWrap = null; }
+      if (!document.getElementById('typing-indicator')) appendTyping();
+    }
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        // SSE frames are separated by a blank line.
+        let sep;
+        while ((sep = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          const dataLine = frame.split('\n').find(l => l.startsWith('data:'));
+          if (!dataLine) continue;
+          let evt;
+          try { evt = JSON.parse(dataLine.slice(5).trim()); } catch { continue; }
+          if (evt.type === 'delta') {
+            ensureBubble();
+            assembled += evt.text || '';
+            ensureTyping();
+          } else if (evt.type === 'agent') {
+            if (evt.logs) agentLogs = evt.logs;
+          } else if (evt.type === 'done') {
+            doneData = evt;
+          } else if (evt.type === 'error') {
+            throw new Error(evt.error || 'stream error');
+          }
+        }
+      }
+    } catch (err) {
+      // Roll back any partial stream UI so the POST fallback is seamless, and
+      // cancel the reader so no half-read stream is left dangling.
+      rollback();
+      try { await reader.cancel(); } catch (e) {}
+      throw err;
+    }
+
+    if (!doneData) {
+      // Stream ended without a clean done — treat as failure so we fall back.
+      rollback();
+      throw new Error('stream ended without done');
+    }
+
+    // Finalize — let the typewriter finish gracefully, then swap in markdown.
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    await drainRemaining();
+    if (caret) caret.remove();
+    removeTyping();
+    const d = doneData;
+    const finalText = (d.response != null && d.response !== '') ? d.response : assembled;
+    const finalLogs = (d.agent_logs && d.agent_logs.trim()) ? d.agent_logs
+                    : (agentLogs.trim() ? agentLogs : null);
+
+    clog('chat.stream_done', { response_len: finalText.length, has_agents: !!finalLogs, streamed: !!d.streamed });
+    sessionId = d.session_id || sessionId;
+    const sidEl = document.getElementById('session-id');
+    if (sidEl) sidEl.textContent = sessionId?.slice(0, 8) + '...';
+
+    history.push({ role: 'assistant', content: finalText });
+    fullTranscript.push({
+      role: 'assistant',
+      content: finalText,
+      agent_logs: finalLogs,
+      voice_response: d.voice_response || null,
+      model: d.model || document.getElementById('model-select')?.value || null,
+      session_id: d.session_id,
+      timestamp: new Date().toISOString()
+    });
+
+    // If the server had to fall back to a different model, say so instead of
+    // silently misattributing the answer to the selected model.
+    if (d.model && d.requested_model && d.model !== d.requested_model) {
+      const wrap = appendMsg('system', '');
+      wrap.querySelector('.bubble').innerHTML =
+        `↪ <strong>${d.requested_model}</strong> was unavailable — answered by <strong>${d.model}</strong>.`;
+    }
+
+    // Replace the progressive plain-text bubble with a proper markdown-rendered
+    // one that also carries the agent-logs disclosure — exactly what the POST
+    // path produces, so the final DOM is identical either way.
+    if (bubbleWrap) bubbleWrap.remove();
+    appendMsg('assistant', finalText, finalLogs);
+
+    if (d.voice_response) speakText(d.voice_response);
+    else if (voiceMode) speakText(finalText);
+
+    return true;
   }
 
   // ── Voice (Azure Speech + ElevenLabs + browser fallback) ──
@@ -2769,7 +3117,10 @@
     function cursorDemo() {
       if (idx < 0 || !cursor) return;
       const st = steps[idx];
-      const t = st && st.hint && !waitingChat && st.target ? st.target() : null;
+      let t = st && st.hint && !waitingChat && st.target ? st.target() : null;
+      // Precision: when a step names an exact control (a specific row's
+      // button), the cursor flies to THAT — never ambiguously to a container.
+      if (t && st.cursorTarget) { const c = st.cursorTarget(); if (c) t = c; }
       const r = t && t.getBoundingClientRect();
       if (!r || r.width === 0) { cursor.style.opacity = '0'; return; }
       const cr = card.getBoundingClientRect();
@@ -2995,6 +3346,9 @@
         {
           html: ``, hint: ``,
           target: () => $('#agent-list-ul'), panel: true, wait: 'export', skippable: true, skipTo: 'registry',
+          cursorTarget: () => [...document.querySelectorAll('#agent-list-ul li')]
+            .find(li => surgeryFile && li.textContent.includes(surgeryFile))
+            ?.querySelector('.export-btn:not(.del-btn)'),
           onEnter: function () {
             openPanel();
             this.html = `<h3>Back up an agent.</h3>
@@ -3005,6 +3359,9 @@
         {
           html: ``, hint: ``,
           target: () => $('#agent-list-ul'), panel: true, wait: 'deleted', skippable: true, skipTo: 'registry',
+          cursorTarget: () => [...document.querySelectorAll('#agent-list-ul li')]
+            .find(li => surgeryFile && li.textContent.includes(surgeryFile))
+            ?.querySelector('.del-btn'),
           onEnter: function () {
             openPanel();
             this.html = `<h3>Now remove it.</h3>
@@ -3045,6 +3402,9 @@
             <p>You traded one agent by hand. There's also a community registry — hundreds of agents, one click each. Grab the one that changes everything: <strong>an agent that creates agents</strong>.</p>`,
           hint: `Click the <strong>book button</strong> (top right), search <em>learn new</em>, and click <strong>Add</strong> on <strong>@rapp/learn_new</strong>.`,
           target: () => { const p = $('#registry-panel'); return (p && p.classList.contains('open')) ? p : $('#registry-btn'); },
+          cursorTarget: () => [...document.querySelectorAll('.rar-item')]
+            .find(i => /learn.?new/i.test(i.textContent))?.querySelector('.rar-add-btn')
+            || (!$('#registry-panel')?.classList.contains('open') ? $('#registry-btn') : $('#rar-search-input')),
           rpanel: true, wait: 'installed', skippable: true, skipTo: 'end',
           onEnter: async function () { this._baseline = await agentFiles(); },
           reactHtml: `<h3>Installed. Live.</h3>
@@ -3136,10 +3496,14 @@
       if (role === 'user') {
         if (st.wait === 'assistant') {
           waitingChat = true;
-          // While it thinks, anchor to the typing indicator (or the sent
-          // message) and say so — never leave the card floating in space.
-          st.target = () => document.getElementById('typing-indicator') || document.querySelector('#chat .msg.user:last-of-type');
-          st.hint = 'It\'s thinking — the reply lands here.';
+          // While it thinks, anchor to wherever the reply is happening:
+          // the typing indicator, then the LIVE streaming bubble as it writes
+          // (streaming removes the indicator at first token), then the sent
+          // message — never leave the card floating in space.
+          st.target = () => document.getElementById('typing-indicator')
+            || document.querySelector('#chat .stream-caret')?.closest('.msg')
+            || document.querySelector('#chat .msg.user:last-of-type');
+          st.hint = 'Watch — the reply is arriving right here.';
           if (cursor) cursor.style.opacity = '0';
           render();
         }
@@ -3160,6 +3524,10 @@
         return;
       }
       if (role !== 'assistant') return;
+      // Streaming appends the assistant bubble EMPTY and fills it live — the
+      // real signal is the completion hook below. Only plain POST replies
+      // arrive here with their full text.
+      if (text === '') return;
       waitingChat = false;
       showLatest();
       if (st.reactMemory) {
