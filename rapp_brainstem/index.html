@@ -5,7 +5,156 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RAPP Brainstem</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' fill='%2358a6ff'%3E%3Cpath d='M184 0c-30.9 0-56.5 22.7-61.1 52.3C54.5 67 0 130 0 206.8c0 41.6 17.4 79.2 45.3 105.9-2 9.2-3.3 18.8-3.3 28.7 0 55.3 35.8 102.2 85.5 119C142.2 493 172.6 512 208 512h16c35.3 0 64-28.7 64-64V86c0-8.8-7.2-16-16-16h-16c-8.8 0-16 7.2-16 16v16c0 8.8-7.2 16-16 16s-16-7.2-16-16V64c0-35.3-28.7-64-64-64h40zm144 0c30.9 0 56.5 22.7 61.1 52.3C457.5 67 512 130 512 206.8c0 41.6-17.4 79.2-45.3 105.9 2 9.2 3.3 18.8 3.3 28.7 0 55.3-35.8 102.2-85.5 119C369.8 493 339.4 512 304 512h-16c-35.3 0-64-28.7-64-64V86c0-8.8 7.2-16 16-16h16c8.8 0 16 7.2 16 16v16c0 8.8 7.2 16 16 16s16-7.2 16-16V64c0-35.3 28.7-64 64-64h-40z'/%3E%3C/svg%3E">
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+/* ── Vendored, self-contained Markdown renderer ──────────────────────────
+   Replaces the former REMOTE `marked` CDN (cdn.jsdelivr.net/npm/marked).
+   A local-first tool must not pull an unpinned "latest" script that runs with
+   full page access over untrusted model/agent output on every load, and must
+   keep working fully offline. This inline renderer emits a small, safe subset
+   of HTML; EVERY output is additionally run through the allowlist sanitizer
+   (sanitizeMarkdownFragment) before it reaches the DOM. It exposes the same
+   `marked.parse(str) -> htmlString` entry point the render paths already call.
+   No runtime external fetch. */
+(function (root) {
+  'use strict';
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function inline(text) {
+    text = esc(text);
+    var codes = [];
+    text = text.replace(/`([^`]+)`/g, function (_, c) {
+      codes.push('<code>' + c + '</code>');
+      return '\u0000C' + (codes.length - 1) + '\u0000';
+    });
+    text = text.replace(/!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"([^"]*)")?\s*\)/g,
+      function (_, alt, url, title) {
+        return '<img src="' + url + '" alt="' + alt + '"' + (title ? ' title="' + title + '"' : '') + '>';
+      });
+    text = text.replace(/\[([^\]]+)\]\(\s*([^)\s]+)(?:\s+"([^"]*)")?\s*\)/g,
+      function (_, t, url, title) {
+        return '<a href="' + url + '"' + (title ? ' title="' + title + '"' : '') + '>' + t + '</a>';
+      });
+    text = text.replace(/\*\*\*(?=\S)([\s\S]*?\S)\*\*\*/g, '<strong><em>$1</em></strong>');
+    text = text.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/(^|[\s(])__(?=\S)([\s\S]*?\S)__(?=[\s)\].,;:!?]|$)/g, '$1<strong>$2</strong>');
+    text = text.replace(/\*(?=\S)([^*\n]*?\S)\*/g, '<em>$1</em>');
+    text = text.replace(/(^|[\s(])_(?=\S)([^_\n]*?\S)_(?=[\s)\].,;:!?]|$)/g, '$1<em>$2</em>');
+    text = text.replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>');
+    text = text.replace(/(^|[\s(])((?:https?:\/\/)[^\s<]+[^\s<.,;:!?)])/g,
+      function (_, pre, url) { return pre + '<a href="' + url + '">' + url + '</a>'; });
+    text = text.replace(/\u0000C(\d+)\u0000/g, function (_, i) { return codes[+i]; });
+    return text;
+  }
+  function parseList(lines, start, baseIndent) {
+    var first = lines[start].match(/^(\s*)([-*+]|\d+[.)])\s+/);
+    var ordered = /\d/.test(first[2]);
+    var tag = ordered ? 'ol' : 'ul';
+    var html = '<' + tag + '>';
+    var i = start, itemCount = 0;
+    while (i < lines.length) {
+      if (/^\s*$/.test(lines[i])) {
+        // Continue a loose list only if the next item is the SAME marker type at
+        // this list's indent; otherwise the blank line ends the list (and a new
+        // list of the other type may begin after it).
+        var nb = lines[i + 1] && lines[i + 1].match(/^(\s*)([-*+]|\d+[.)])\s+/);
+        if (nb && nb[1].length >= baseIndent && (/\d/.test(nb[2]) === ordered)) { i++; continue; }
+        break;
+      }
+      var m = lines[i].match(/^(\s*)([-*+]|\d+[.)])\s+([\s\S]*)$/);
+      if (!m) break;
+      var indent = m[1].length;
+      if (indent < baseIndent) break;
+      if (indent >= baseIndent + 2 && itemCount > 0) {
+        var sub = parseList(lines, i, indent);
+        html = html.replace(/<\/li>$/, sub[0] + '</li>');
+        i = sub[1];
+        continue;
+      }
+      // A sibling whose marker type differs (— vs 1.) starts a NEW list.
+      if (itemCount > 0 && (/\d/.test(m[2]) !== ordered)) break;
+      html += '<li>' + inline(m[3]) + '</li>';
+      itemCount++;
+      i++;
+    }
+    html += '</' + tag + '>';
+    return [html, i];
+  }
+  function parse(src) {
+    src = String(src == null ? '' : src).replace(/\r\n?/g, '\n').replace(/\t/g, '    ');
+    var lines = src.split('\n');
+    var out = [];
+    var i = 0;
+    while (i < lines.length) {
+      var line = lines[i];
+      var fence = line.match(/^(\s*)(`{3,}|~{3,})(.*)$/);
+      if (fence) {
+        var marker = fence[2].charAt(0);
+        var re = new RegExp('^\\s*' + (marker === '`' ? '`' : '~') + '{3,}\\s*$');
+        var buf = [];
+        i++;
+        while (i < lines.length && !re.test(lines[i])) { buf.push(lines[i]); i++; }
+        i++;
+        out.push('<pre><code>' + esc(buf.join('\n')) + '</code></pre>');
+        continue;
+      }
+      if (/^\s*$/.test(line)) { i++; continue; }
+      var h = line.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/);
+      if (h) { var lvl = h[1].length; out.push('<h' + lvl + '>' + inline(h[2]) + '</h' + lvl + '>'); i++; continue; }
+      if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { out.push('<hr>'); i++; continue; }
+      if (/^\s*>/.test(line)) {
+        var qbuf = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) { qbuf.push(lines[i].replace(/^\s*>\s?/, '')); i++; }
+        out.push('<blockquote>' + parse(qbuf.join('\n')) + '</blockquote>');
+        continue;
+      }
+      if (line.indexOf('|') >= 0 && i + 1 < lines.length &&
+          /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(lines[i + 1]) && lines[i + 1].indexOf('-') >= 0) {
+        var parseRow = function (r) {
+          return r.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(function (c) { return c.trim(); });
+        };
+        var headers = parseRow(line);
+        var aligns = parseRow(lines[i + 1]).map(function (s) {
+          var l = s.charAt(0) === ':', rr = s.charAt(s.length - 1) === ':';
+          return l && rr ? 'center' : rr ? 'right' : l ? 'left' : '';
+        });
+        i += 2;
+        var rows = [];
+        while (i < lines.length && lines[i].indexOf('|') >= 0 && !/^\s*$/.test(lines[i])) { rows.push(parseRow(lines[i])); i++; }
+        var tbl = '<table><thead><tr>';
+        headers.forEach(function (hc, ci) { tbl += '<th' + (aligns[ci] ? ' align="' + aligns[ci] + '"' : '') + '>' + inline(hc) + '</th>'; });
+        tbl += '</tr></thead><tbody>';
+        rows.forEach(function (r) {
+          tbl += '<tr>';
+          headers.forEach(function (_, ci) { tbl += '<td' + (aligns[ci] ? ' align="' + aligns[ci] + '"' : '') + '>' + inline(r[ci] || '') + '</td>'; });
+          tbl += '</tr>';
+        });
+        tbl += '</tbody></table>';
+        out.push(tbl);
+        continue;
+      }
+      if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
+        var lst = parseList(lines, i, line.match(/^(\s*)/)[1].length);
+        out.push(lst[0]); i = lst[1]; continue;
+      }
+      var pbuf = [];
+      while (i < lines.length && !/^\s*$/.test(lines[i]) &&
+             !/^(\s*)(`{3,}|~{3,})/.test(lines[i]) &&
+             !/^\s{0,3}#{1,6}\s+/.test(lines[i]) &&
+             !/^\s*>/.test(lines[i]) &&
+             !/^\s*([-*+]|\d+[.)])\s+/.test(lines[i]) &&
+             !/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(lines[i])) {
+        pbuf.push(lines[i]); i++;
+      }
+      out.push('<p>' + inline(pbuf.join('\n')) + '</p>');
+    }
+    return out.join('\n');
+  }
+  root.marked = { parse: parse };
+})(typeof window !== 'undefined' ? window : this);
+</script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -1008,13 +1157,82 @@
 </footer>
 
 <script>
+  // ── Safe localStorage ──
+  // Reads/writes are wrapped so a storage failure (Safari private mode, quota,
+  // disabled cookies) degrades gracefully instead of throwing. An unguarded
+  // setItem exception used to be swallowed into the "offline" branch, so a
+  // CONNECTED brainstem could show "offline" forever. `_ls` is captured once
+  // via an alias the global replace never rewrites, avoiding self-recursion.
+  const _ls = (function () { try { return window.localStorage; } catch (e) { return null; } })();
+  function safeGet(k) { try { return _ls ? _ls.getItem(k) : null; } catch (e) { return null; } }
+  function safeSet(k, v) { try { if (_ls) _ls.setItem(k, v); } catch (e) {} }
+  function safeRemove(k) { try { if (_ls) _ls.removeItem(k); } catch (e) {} }
+
+  // ── XSS-safe DOM helpers ──
+  // Server errors, usernames, model ids and agent/model output are UNTRUSTED
+  // (the product streams third-party agent output straight into chat). Such
+  // text must never be interpolated into innerHTML. These builders use text
+  // nodes and real elements, and bind handlers with addEventListener rather
+  // than string-built inline onclick.
+  function el(tag, opts) {
+    const n = document.createElement(tag);
+    if (opts) {
+      if (opts.text != null) n.textContent = opts.text;
+      if (opts.cls) n.className = opts.cls;
+      if (opts.style) n.setAttribute('style', opts.style);
+      if (opts.href) n.setAttribute('href', opts.href);
+      if (opts.target) n.target = opts.target;
+      if (opts.rel) n.rel = opts.rel;
+      if (opts.title) n.title = opts.title;
+      if (opts.onClick) n.addEventListener('click', opts.onClick);
+    }
+    return n;
+  }
+  // An in-chat action link that runs fn() without navigating away.
+  function actionLink(label, style, fn) {
+    return el('a', { text: label, href: '#', style: style, onClick: function (e) { e.preventDefault(); fn(); } });
+  }
+  // Replace a node's children with the given parts (strings become text nodes,
+  // so any untrusted content is inserted as inert text, never parsed as HTML).
+  function setChildren(node, parts) {
+    node.textContent = '';
+    parts.forEach(function (p) {
+      if (p == null) return;
+      node.appendChild(typeof p === 'string' ? document.createTextNode(p) : p);
+    });
+  }
+  const strong = (t) => el('strong', { text: t });
+  // Model-fallback notice, built entirely from escaped/text nodes.
+  function appendModelFallback(requested, actual) {
+    const w = appendMsg('system', '');
+    setChildren(w.querySelector('.bubble'), [
+      '\u21AA ', strong(requested), ' was unavailable — answered by ', strong(actual), '.'
+    ]);
+  }
+
+  // ── Conversation-history budget ──
+  // The full transcript stays on screen (DOM + fullTranscript), but the copy
+  // SENT to /chat and /chat/stream is capped so the request can't grow without
+  // bound over a long session. Cap by turns and a rough character budget.
+  const MAX_HISTORY_MSGS = 40;
+  const MAX_HISTORY_CHARS = 60000;
+  function cappedHistory() {
+    let msgs = history.slice(-MAX_HISTORY_MSGS);
+    let total = msgs.reduce((n, m) => n + ((m && m.content) ? m.content.length : 0), 0);
+    while (msgs.length > 1 && total > MAX_HISTORY_CHARS) {
+      total -= (msgs[0].content ? msgs[0].content.length : 0);
+      msgs = msgs.slice(1);
+    }
+    return msgs;
+  }
+
   // Same-origin: chat hits whichever brainstem served this page (parent on 7071,
   // booted twin on 7081+, etc). For file:// or non-brainstem origins, fall back to 7071.
   const API = (location.protocol === 'http:' || location.protocol === 'https:') ? '' : 'http://127.0.0.1:7071';
   let sessionId = null;
   let history = [];
   let fullTranscript = [];
-  let devMode = localStorage.getItem('brainstem_dev') === 'true';
+  let devMode = safeGet('brainstem_dev') === 'true';
   if (devMode) document.body.classList.add('dev-mode');
 
   // SVG fragments for reuse
@@ -1024,7 +1242,7 @@
   function toggleDevMode() {
     devMode = !devMode;
     document.body.classList.toggle('dev-mode', devMode);
-    localStorage.setItem('brainstem_dev', devMode);
+    safeSet('brainstem_dev', devMode);
   }
   // Triple-click header to toggle dev mode (hidden gesture)
   let headerClicks = 0;
@@ -1086,9 +1304,11 @@
       const d = await r.json();
       if (d.issue_url) {
         const wrap = appendMsg('system', '');
-        wrap.querySelector('.bubble').innerHTML =
-          `✅ Help request submitted! Your admin can see it at:<br>` +
-          `<a href="${d.issue_url}" target="_blank" style="color:#58a6ff">${d.issue_url}</a>`;
+        const link = el('a', { text: d.issue_url, target: '_blank', rel: 'noopener noreferrer', style: 'color:#58a6ff' });
+        if (_safeUrl(d.issue_url)) link.setAttribute('href', d.issue_url);
+        setChildren(wrap.querySelector('.bubble'), [
+          '✅ Help request submitted! Your admin can see it at:', el('br'), link
+        ]);
       } else {
         // API call failed — fall back to local export
         throw new Error(d.error || 'Could not create issue');
@@ -1124,7 +1344,7 @@
       const r = await fetch(`${API}/login/switch`, { method: 'POST' });
       const d = await r.json();
       if (d.error) { alert(d.error); return; }
-      localStorage.removeItem('brainstem_auth');
+      safeRemove('brainstem_auth');
       // Show the login overlay with the new code
       document.getElementById('login-step1').style.display = 'none';
       document.getElementById('login-step2').style.display = 'block';
@@ -1187,9 +1407,10 @@
   // re-attempts the token exchange with the existing GitHub token — no re-login.
   function showCopilotBanner(username) {
     const txt = document.getElementById('copilot-banner-text');
-    if (txt) txt.innerHTML =
-      '<strong>' + (username || 'This GitHub account') + '</strong> doesn\'t have GitHub Copilot access yet. ' +
-      'Enable Copilot on your account, then Retry — no need to sign in again.';
+    if (txt) setChildren(txt, [
+      strong(username || 'This GitHub account'),
+      ' doesn\'t have GitHub Copilot access yet. Enable Copilot on your account, then Retry — no need to sign in again.'
+    ]);
     const b = document.getElementById('copilot-banner');
     if (b) b.style.display = 'block';
   }
@@ -1210,15 +1431,16 @@
       if (d.status === 'ok') {
         clog('copilot.retry_ok');
         hideCopilotBanner();
-        localStorage.setItem('brainstem_auth', 'true');
+        safeSet('brainstem_auth', 'true');
         checkHealth();
         return d;
       }
       if (d.status === 'no_copilot_access') {
         clog('copilot.retry_no_access', { username: d.username });
-        if (el) el.innerHTML =
-          '<strong>' + (d.username || 'This account') + '</strong> still has no Copilot access. ' +
-          'Enable it on GitHub, then Retry.';
+        if (el) setChildren(el, [
+          strong(d.username || 'This account'),
+          ' still has no Copilot access. Enable it on GitHub, then Retry.'
+        ]);
       } else {
         if (el) el.textContent = d.error || 'Still can\'t reach Copilot — try again shortly.';
       }
@@ -1237,12 +1459,23 @@
   function renderNoCopilotOverlay(username, retried) {
     const el = document.getElementById('login-status');
     if (!el) return;
-    el.innerHTML =
-      '<strong>' + username + '</strong> doesn\'t have GitHub Copilot access' + (retried ? ' yet' : '') + '. ' +
-      'Enable it on GitHub, then <a href="#" onclick="retryCopilotOverlay(\'' + username + '\'); return false;" style="color:#58a6ff">Retry</a>.' +
-      '<div style="margin-top:6px;font-size:12px">' +
-      '<a href="#" onclick="switchAccount(); return false;" style="color:#8b949e">Switch account</a> · ' +
-      '<a href="https://github.com/github-copilot/signup" target="_blank" style="color:#8b949e">Sign up for Copilot</a></div>';
+    // username is UNTRUSTED — build with text nodes and bind the Retry handler
+    // via addEventListener (never a string-built inline onclick).
+    const retry = actionLink('Retry', 'color:#58a6ff', function () { retryCopilotOverlay(username); });
+    const switchLink = actionLink('Switch account', 'color:#8b949e', switchAccount);
+    const signup = document.createElement('a');
+    signup.textContent = 'Sign up for Copilot';
+    signup.href = 'https://github.com/github-copilot/signup';
+    signup.target = '_blank'; signup.rel = 'noopener noreferrer';
+    signup.setAttribute('style', 'color:#8b949e');
+    const sub = document.createElement('div');
+    sub.setAttribute('style', 'margin-top:6px;font-size:12px');
+    sub.append(switchLink, document.createTextNode(' · '), signup);
+    setChildren(el, [
+      strong(username),
+      ' doesn\'t have GitHub Copilot access' + (retried ? ' yet' : '') + '. Enable it on GitHub, then ',
+      retry, '.', sub
+    ]);
   }
   async function retryCopilotOverlay(username) {
     const el = document.getElementById('login-status');
@@ -1280,7 +1513,7 @@
         statusText.title = 'Click to switch account';
         statusText.onclick = () => { if (confirm('Switch GitHub account?')) switchAccount(); };
         hideLoginOverlay();
-        localStorage.setItem('brainstem_auth', 'true');
+        safeSet('brainstem_auth', 'true');
         loginInProgress = false;
         clog('health.ok', { copilot: d.copilot, model: d.model });
         // Signed in to GitHub, but the account has no Copilot entitlement yet.
@@ -1301,7 +1534,7 @@
         hideCopilotBanner();
         clog('health.unauthenticated', { status: d.status });
         // Only auto-show overlay on first visit, never if user dismissed it
-        if (!localStorage.getItem('brainstem_auth') && !loginInProgress && !loginDismissed) {
+        if (!safeGet('brainstem_auth') && !loginInProgress && !loginDismissed) {
           showLoginOverlay();
         }
         // Fast poll while not connected
@@ -1316,7 +1549,7 @@
   // Bias to connected: if this browser has authed before, assume connected
   // from the first paint — checkHealth corrects within one poll if the
   // server is actually down. Only never-authed browsers start at "checking".
-  if (localStorage.getItem('brainstem_auth')) {
+  if (safeGet('brainstem_auth')) {
     document.getElementById('dot').className = 'dot';
     document.getElementById('status-text').textContent = 'connected';
   } else {
@@ -1389,11 +1622,11 @@
   function toggleTheme() {
     document.body.classList.toggle('light-mode');
     const isLight = document.body.classList.contains('light-mode');
-    localStorage.setItem('rapp_theme', isLight ? 'light' : 'dark');
+    safeSet('rapp_theme', isLight ? 'light' : 'dark');
   }
 
   // Load saved theme on startup
-  if (localStorage.getItem('rapp_theme') === 'light') {
+  if (safeGet('rapp_theme') === 'light') {
     document.body.classList.add('light-mode');
   }
 
@@ -1842,8 +2075,8 @@
           const username = err.split(':')[1] || 'this account';
           renderNoCopilotOverlay(username, false);
         } else {
-          document.getElementById('login-status').innerHTML =
-            err + ' <a href="#" onclick="startLogin(); return false;" style="color:#58a6ff">Try again</a>';
+          const s = document.getElementById('login-status');
+          if (s) setChildren(s, [err, ' ', actionLink('Try again', 'color:#58a6ff', startLogin)]);
         }
         loginInProgress = false;
         return;
@@ -1860,7 +2093,7 @@
         document.getElementById('login-step2').style.display = 'none';
         document.getElementById('login-step3').style.display = 'block';
         loginInProgress = false;
-        localStorage.setItem('brainstem_auth', 'true');
+        safeSet('brainstem_auth', 'true');
         setTimeout(hideLoginOverlay, 1500);
         checkHealth();
         return;
@@ -1906,7 +2139,7 @@
       modelsLoaded = true;
       // The server persists the active model (a sticky pick, or the auto-selected
       // Sonnet), so it is the source of truth — just mirror it locally.
-      if (d.current) { currentModel = d.current; localStorage.setItem('bs_model', d.current); }
+      if (d.current) { currentModel = d.current; safeSet('bs_model', d.current); }
     } catch {}
   }
 
@@ -1925,12 +2158,12 @@
       if (d.error) { alert(d.error); revert(); return; }
       if (modelId === 'auto') {
         // Server cleared the sticky pick and chose the best Sonnet; reflect it.
-        localStorage.removeItem('bs_model');
+        safeRemove('bs_model');
         if (sel && d.model) sel.value = d.model;
         if (d.model) { currentModel = d.model; appendModelNotice(d.model); }
       } else {
         currentModel = modelId;
-        localStorage.setItem('bs_model', modelId);
+        safeSet('bs_model', modelId);
         appendModelNotice(modelId);
       }
     } catch (e) { alert('Failed to switch model: ' + e.message); revert(); }
@@ -1957,24 +2190,88 @@
   });
 
   // ── Chat rendering ──
-  // Render markdown safely: marked produces HTML from model/agent output, which we
-  // must not trust blindly. Parse into an inert <template>, strip active content
-  // (script/style/iframe/…), on* handlers, and javascript: URLs, then use the result.
-  const _SANITIZE_BAD_TAGS = ['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','LINK','META','FORM','BASE'];
-  function sanitizeHtml(html) {
+  // Render markdown safely. `marked` produces HTML from UNTRUSTED model/agent
+  // output, so we treat that HTML as hostile. This is an ALLOWLIST sanitizer:
+  // it parses once into an inert <template>, then rebuilds a FRESH node tree
+  // containing only a known-safe set of tags and attributes, and returns a
+  // DocumentFragment the caller adopts directly. It never serializes the
+  // cleaned tree back to a string for re-parsing — that serialize→reparse step
+  // is exactly what enables mutation-XSS (mXSS), so we avoid it entirely.
+  const _ALLOWED_TAGS = new Set([
+    'P','BR','HR','PRE','CODE','KBD','BLOCKQUOTE',
+    'EM','STRONG','B','I','U','S','DEL','INS','MARK','SMALL','SUB','SUP','SPAN','DIV',
+    'A','IMG','UL','OL','LI','DL','DT','DD',
+    'H1','H2','H3','H4','H5','H6',
+    'TABLE','THEAD','TBODY','TFOOT','TR','TH','TD','CAPTION','COLGROUP','COL'
+  ]);
+  // Dropped entirely, INCLUDING all descendants — active content, embedding
+  // vectors, and foreign-content roots (svg/math) whose subtrees can smuggle
+  // xlink:href=javascript: and other namespaced execution vectors.
+  const _FORBID_SUBTREE = new Set([
+    'SCRIPT','STYLE','IFRAME','OBJECT','EMBED','LINK','META','BASE','FORM','BUTTON',
+    'INPUT','TEXTAREA','SELECT','OPTION','NOSCRIPT','TEMPLATE','SVG','MATH','FRAME',
+    'FRAMESET','APPLET','PORTAL','AUDIO','VIDEO','SOURCE','TRACK','CANVAS'
+  ]);
+  const _ALLOWED_ATTR = {
+    'A': ['href','title'],
+    'IMG': ['src','alt','title'],
+    'TD': ['align'], 'TH': ['align','scope'], 'COL': ['span'], 'COLGROUP': ['span'],
+    'OL': ['start']
+  };
+  // Only same-document-safe schemes survive. Relative/anchor URLs (no scheme)
+  // are allowed; anything with a disallowed scheme is dropped. HTML entities are
+  // decoded and control chars/whitespace stripped FIRST, so neither "java\tscript:"
+  // nor "&#106;avascript:" can smuggle a scheme past the check. (In the sanitizer
+  // the browser has already decoded attribute entities; this is defense in depth.)
+  function _safeUrl(url) {
+    const cp = function (n) { try { return (n >= 0 && n <= 0x10FFFF) ? String.fromCodePoint(n) : ''; } catch (e) { return ''; } };
+    let v = String(url == null ? '' : url)
+      .replace(/&#x([0-9a-f]+);?/gi, function (_, h) { return cp(parseInt(h, 16)); })
+      .replace(/&#(\d+);?/g, function (_, d) { return cp(parseInt(d, 10)); })
+      .replace(/&colon;/gi, ':').replace(/&tab;/gi, '').replace(/&newline;/gi, '');
+    const stripped = v.replace(/[\u0000-\u0020\u007F-\u00A0]/g, '').toLowerCase();
+    const m = stripped.match(/^([a-z][a-z0-9+.\-]*):/);
+    if (!m) return true;                     // relative / anchor / fragment → safe
+    return ['http', 'https', 'mailto', 'tel'].indexOf(m[1]) !== -1;
+  }
+  function _cleanNode(node) {
+    if (node.nodeType === 3) return document.createTextNode(node.nodeValue);   // text
+    if (node.nodeType !== 1) return null;                                       // drop comments/PI/etc
+    // Drop any non-HTML-namespace (foreign) element outright.
+    if (node.namespaceURI && node.namespaceURI !== 'http://www.w3.org/1999/xhtml') return null;
+    const tag = node.tagName ? node.tagName.toUpperCase() : '';
+    if (_FORBID_SUBTREE.has(tag)) return null;                                  // drop element + subtree
+    if (!_ALLOWED_TAGS.has(tag)) {
+      // Unknown-but-inert tag: unwrap — keep its sanitized children, drop the tag.
+      const frag = document.createDocumentFragment();
+      for (const c of node.childNodes) { const cc = _cleanNode(c); if (cc) frag.appendChild(cc); }
+      return frag;
+    }
+    const clean = document.createElement(tag);
+    const allowed = _ALLOWED_ATTR[tag] || [];
+    for (const attr of node.attributes) {
+      const name = attr.name.toLowerCase();
+      if (name.indexOf('on') === 0) continue;                 // never copy event handlers
+      if (allowed.indexOf(name) === -1) continue;             // per-tag attribute allowlist
+      if ((name === 'href' || name === 'src') && !_safeUrl(attr.value)) continue;
+      clean.setAttribute(name, attr.value);
+    }
+    // Harden model-output links: real navigation only, and never a reverse-
+    // tabnabbing handle back into this page.
+    if (tag === 'A' && clean.getAttribute('href')) {
+      clean.setAttribute('target', '_blank');
+      clean.setAttribute('rel', 'noopener noreferrer');
+    }
+    for (const c of node.childNodes) { const cc = _cleanNode(c); if (cc) clean.appendChild(cc); }
+    return clean;
+  }
+  // Parse-once, walk-the-tree, adopt-a-fragment. Returns a DocumentFragment.
+  function sanitizeMarkdownFragment(html) {
     const tpl = document.createElement('template');
-    tpl.innerHTML = html;
-    tpl.content.querySelectorAll('*').forEach(el => {
-      if (_SANITIZE_BAD_TAGS.includes(el.tagName)) { el.remove(); return; }
-      [...el.attributes].forEach(attr => {
-        const name = attr.name.toLowerCase();
-        if (name.startsWith('on')) el.removeAttribute(attr.name);
-        else if ((name === 'href' || name === 'src') && /^\s*javascript:/i.test(attr.value)) {
-          el.removeAttribute(attr.name);
-        }
-      });
-    });
-    return tpl.innerHTML;
+    tpl.innerHTML = String(html == null ? '' : html);
+    const out = document.createDocumentFragment();
+    for (const node of tpl.content.childNodes) { const c = _cleanNode(node); if (c) out.appendChild(c); }
+    return out;
   }
 
   function appendMsg(role, text, logs) {
@@ -2003,8 +2300,9 @@
       // Models often emit \u2022 bullets, which markdown doesn't treat as list
       // markers — the lines collapse into one run-on paragraph. Normalize them.
       const md = text.replace(/^([ \t]*)[\u2022\u2023\u25AA\u25CF]\s+/gm, '$1- ');
-      bubble.innerHTML = sanitizeHtml(marked.parse(md));
-      bubble.querySelectorAll('a').forEach(a => a.target = '_blank');
+      // Adopt the cleaned fragment directly (no serialize→reparse); target/rel
+      // hardening on links happens inside the sanitizer.
+      bubble.replaceChildren(sanitizeMarkdownFragment(marked.parse(md)));
     } else {
       bubble.textContent = text;
     }
@@ -2150,7 +2448,8 @@
   // streaming fallback and whenever ReadableStream is unavailable.
   async function sendViaPost(text, payload) {
     try {
-      const body = { user_input: payload, conversation_history: history };
+      // Send a capped copy of history (on-screen transcript is untouched).
+      const body = { user_input: payload, conversation_history: cappedHistory() };
       if (sessionId) body.session_id = sessionId;
 
       const r = await fetch(`${API}/chat`, {
@@ -2172,24 +2471,29 @@
           // brainstem_auth: that would bounce them to a misleading "signed out" state.
           showCopilotBanner(username);
           const wrap = appendMsg('system', '');
-          wrap.querySelector('.bubble').innerHTML =
-            `<strong>${username}</strong> doesn't have GitHub Copilot access yet. ` +
-            `Enable Copilot on your account, then ` +
-            `<a href="#" onclick="retryCopilot(); return false;" style="color:#58a6ff">Retry</a> — ` +
-            `no need to sign in again.`;
+          setChildren(wrap.querySelector('.bubble'), [
+            strong(username), ' doesn\'t have GitHub Copilot access yet. Enable Copilot on your account, then ',
+            actionLink('Retry', 'color:#58a6ff', function () { retryCopilot(); }), ' — no need to sign in again.'
+          ]);
         } else if (d.error.includes('usage limit') || d.error.includes('quota')) {
           const wrap = appendMsg('system', '');
-          wrap.querySelector('.bubble').innerHTML =
-            `${d.error}<br>` +
-            `<a href="#" onclick="switchAccount(); return false;" style="color:#58a6ff;font-size:12px">🔄 Switch to a different account</a>`;
+          setChildren(wrap.querySelector('.bubble'), [
+            d.error, el('br'),
+            actionLink('🔄 Switch to a different account', 'color:#58a6ff;font-size:12px', switchAccount)
+          ]);
         } else if (d.error.includes('Not authenticated') || d.error.includes('Copilot') || d.error.includes('Sign in')) {
           const wrap = appendMsg('system', '');
-          wrap.querySelector('.bubble').innerHTML =
-            'Not signed in. <a href="#" onclick="showLoginOverlay(); return false;" style="color:#58a6ff">Sign in with GitHub</a> to use Copilot AI.';
+          setChildren(wrap.querySelector('.bubble'), [
+            'Not signed in. ',
+            actionLink('Sign in with GitHub', 'color:#58a6ff', showLoginOverlay),
+            ' to use Copilot AI.'
+          ]);
         } else {
           const wrap = appendMsg('system', '');
-          wrap.querySelector('.bubble').innerHTML =
-            `Error: ${d.error}<br><a href="#" onclick="shareWithAdmin(); return false;" style="color:#f0883e;font-size:12px">🆘 Share with admin for help</a>`;
+          setChildren(wrap.querySelector('.bubble'), [
+            'Error: ' + d.error, el('br'),
+            actionLink('🆘 Share with admin for help', 'color:#f0883e;font-size:12px', shareWithAdmin)
+          ]);
         }
       } else {
         clog('chat.response', { response_len: d.response?.length, has_agents: !!d.agent_logs });
@@ -2211,9 +2515,7 @@
         // If the server had to fall back to a different model, say so instead of
         // silently misattributing the answer to the selected model.
         if (d.model && d.requested_model && d.model !== d.requested_model) {
-          const wrap = appendMsg('system', '');
-          wrap.querySelector('.bubble').innerHTML =
-            `↪ <strong>${d.requested_model}</strong> was unavailable — answered by <strong>${d.model}</strong>.`;
+          appendModelFallback(d.requested_model, d.model);
         }
         appendMsg('assistant', d.response, d.agent_logs && d.agent_logs.trim() ? d.agent_logs : null);
         if (d.voice_response) {
@@ -2231,8 +2533,10 @@
       if (healthInterval) clearInterval(healthInterval);
       healthInterval = setInterval(checkHealth, 5000);
       const wrap = appendMsg('system', '');
-      wrap.querySelector('.bubble').innerHTML =
-        `Could not reach brainstem: ${err.message}<br><a href="#" onclick="shareWithAdmin(); return false;" style="color:#f0883e;font-size:12px">🆘 Share with admin for help</a>`;
+      setChildren(wrap.querySelector('.bubble'), [
+        'Could not reach brainstem: ' + err.message, el('br'),
+        actionLink('🆘 Share with admin for help', 'color:#f0883e;font-size:12px', shareWithAdmin)
+      ]);
     }
   }
 
@@ -2242,7 +2546,8 @@
   // on ANY error so sendMessage falls back to sendViaPost transparently. Returns
   // true only on a clean finish (a done event was seen).
   async function sendViaStream(text, payload) {
-    const body = { user_input: payload, conversation_history: history };
+    // Send a capped copy of history (on-screen transcript is untouched).
+    const body = { user_input: payload, conversation_history: cappedHistory() };
     if (sessionId) body.session_id = sessionId;
 
     const r = await fetch(`${API}/chat/stream`, {
@@ -2271,8 +2576,7 @@
     // inside the last block so it breathes where the words are appearing.
     function renderShown(freshChars) {
       if (typeof marked === 'undefined') { textNode.nodeValue = assembled.slice(0, shown); return; }
-      bubbleEl.innerHTML = sanitizeHtml(marked.parse(normalizeMd(assembled.slice(0, shown))));
-      bubbleEl.querySelectorAll('a').forEach(a => a.target = '_blank');
+      bubbleEl.replaceChildren(sanitizeMarkdownFragment(marked.parse(normalizeMd(assembled.slice(0, shown)))));
       // The write-head bounces: wrap the freshest characters in a springy pop,
       // Animal Crossing style — the words feel like they're arriving, not loading.
       if (freshChars > 0) {
@@ -2445,9 +2749,7 @@
     // If the server had to fall back to a different model, say so instead of
     // silently misattributing the answer to the selected model.
     if (d.model && d.requested_model && d.model !== d.requested_model) {
-      const wrap = appendMsg('system', '');
-      wrap.querySelector('.bubble').innerHTML =
-        `↪ <strong>${d.requested_model}</strong> was unavailable — answered by <strong>${d.model}</strong>.`;
+      appendModelFallback(d.requested_model, d.model);
     }
 
     // Replace the progressive plain-text bubble with a proper markdown-rendered
@@ -2464,17 +2766,17 @@
 
   // ── Voice (Azure Speech + ElevenLabs + browser fallback) ──
   let voiceMode = false;
-  let voiceProvider = localStorage.getItem('voice_provider') || 'browser';
+  let voiceProvider = safeGet('voice_provider') || 'browser';
 
   // Azure Speech state
-  let azSpeechKey = localStorage.getItem('az_speech_key') || '';
-  let azSpeechRegion = localStorage.getItem('az_speech_region') || 'eastus';
-  let azVoiceName = localStorage.getItem('az_voice_name') || 'en-US-JennyNeural';
+  let azSpeechKey = safeGet('az_speech_key') || '';
+  let azSpeechRegion = safeGet('az_speech_region') || 'eastus';
+  let azVoiceName = safeGet('az_voice_name') || 'en-US-JennyNeural';
 
   // ElevenLabs state
-  let elApiKey = localStorage.getItem('el_api_key') || '';
-  let elVoiceId = localStorage.getItem('el_voice_id') || '';
-  let elModel = localStorage.getItem('el_model') || 'eleven_multilingual_v2';
+  let elApiKey = safeGet('el_api_key') || '';
+  let elVoiceId = safeGet('el_voice_id') || '';
+  let elModel = safeGet('el_model') || 'eleven_multilingual_v2';
 
   let currentAudio = null;
 
@@ -2490,40 +2792,40 @@
   fetch(`${API}/voice/config`).then(r => r.json()).then(cfg => {
     if (cfg.error) return;
     let changed = false;
-    if (cfg.provider && !localStorage.getItem('voice_provider')) {
+    if (cfg.provider && !safeGet('voice_provider')) {
       voiceProvider = cfg.provider;
       document.getElementById('voice-provider').value = cfg.provider;
-      localStorage.setItem('voice_provider', cfg.provider);
+      safeSet('voice_provider', cfg.provider);
       changed = true;
     }
     if (cfg.azure_speech_key && !azSpeechKey) {
       azSpeechKey = cfg.azure_speech_key;
       document.getElementById('az-speech-key').value = cfg.azure_speech_key;
-      localStorage.setItem('az_speech_key', cfg.azure_speech_key);
+      safeSet('az_speech_key', cfg.azure_speech_key);
       changed = true;
     }
-    if (cfg.azure_speech_region && !localStorage.getItem('az_speech_region')) {
+    if (cfg.azure_speech_region && !safeGet('az_speech_region')) {
       azSpeechRegion = cfg.azure_speech_region;
       document.getElementById('az-speech-region').value = cfg.azure_speech_region;
-      localStorage.setItem('az_speech_region', cfg.azure_speech_region);
+      safeSet('az_speech_region', cfg.azure_speech_region);
     }
-    if (cfg.azure_voice_name && !localStorage.getItem('az_voice_name')) {
+    if (cfg.azure_voice_name && !safeGet('az_voice_name')) {
       azVoiceName = cfg.azure_voice_name;
-      localStorage.setItem('az_voice_name', cfg.azure_voice_name);
+      safeSet('az_voice_name', cfg.azure_voice_name);
     }
     if (cfg.api_key && !elApiKey) {
       elApiKey = cfg.api_key;
       document.getElementById('el-api-key').value = cfg.api_key;
-      localStorage.setItem('el_api_key', cfg.api_key);
+      safeSet('el_api_key', cfg.api_key);
     }
     if (cfg.voice_id && !elVoiceId) {
       elVoiceId = cfg.voice_id;
-      localStorage.setItem('el_voice_id', cfg.voice_id);
+      safeSet('el_voice_id', cfg.voice_id);
     }
     if (cfg.model && cfg.model !== 'eleven_multilingual_v2') {
       elModel = cfg.model;
       document.getElementById('el-model-select').value = cfg.model;
-      localStorage.setItem('el_model', cfg.model);
+      safeSet('el_model', cfg.model);
     }
     switchVoiceProvider();   // loads voices for the active provider only
   }).catch(() => {});
@@ -2698,25 +3000,25 @@
   function saveVoiceSettings() {
     const provider = document.getElementById('voice-provider').value;
     voiceProvider = provider;
-    localStorage.setItem('voice_provider', provider);
+    safeSet('voice_provider', provider);
     const status = document.getElementById('voice-panel-status');
 
     if (provider === 'azure') {
       azSpeechKey = document.getElementById('az-speech-key').value.trim();
       azSpeechRegion = document.getElementById('az-speech-region').value;
       azVoiceName = document.getElementById('az-voice-select').value;
-      if (azSpeechKey) localStorage.setItem('az_speech_key', azSpeechKey);
-      if (azSpeechRegion) localStorage.setItem('az_speech_region', azSpeechRegion);
-      if (azVoiceName) localStorage.setItem('az_voice_name', azVoiceName);
+      if (azSpeechKey) safeSet('az_speech_key', azSpeechKey);
+      if (azSpeechRegion) safeSet('az_speech_region', azSpeechRegion);
+      if (azVoiceName) safeSet('az_voice_name', azVoiceName);
       if (azSpeechKey && document.getElementById('az-voice-select').options.length <= 1) loadAzureVoices();
       status.textContent = azSpeechKey ? 'Saved — Azure Speech active' : 'Saved — enter API key to activate';
     } else if (provider === 'elevenlabs') {
       elApiKey = document.getElementById('el-api-key').value.trim();
       elVoiceId = document.getElementById('el-voice-select').value;
       elModel = document.getElementById('el-model-select').value;
-      if (elApiKey) localStorage.setItem('el_api_key', elApiKey);
-      if (elVoiceId) localStorage.setItem('el_voice_id', elVoiceId);
-      localStorage.setItem('el_model', elModel);
+      if (elApiKey) safeSet('el_api_key', elApiKey);
+      if (elVoiceId) safeSet('el_voice_id', elVoiceId);
+      safeSet('el_model', elModel);
       status.textContent = elApiKey ? 'Saved — ElevenLabs active' : 'Saved — enter API key to activate';
     } else {
       status.textContent = 'Saved — using browser voice';
@@ -2732,15 +3034,15 @@
       azSpeechKey = '';
       document.getElementById('az-speech-key').value = '';
       document.getElementById('az-voice-select').innerHTML = '<option value="">Enter API key first</option>';
-      localStorage.removeItem('az_speech_key');
-      localStorage.removeItem('az_voice_name');
+      safeRemove('az_speech_key');
+      safeRemove('az_voice_name');
     } else if (provider === 'elevenlabs') {
       elApiKey = '';
       elVoiceId = '';
       document.getElementById('el-api-key').value = '';
       document.getElementById('el-voice-select').innerHTML = '<option value="">Enter API key first</option>';
-      localStorage.removeItem('el_api_key');
-      localStorage.removeItem('el_voice_id');
+      safeRemove('el_api_key');
+      safeRemove('el_voice_id');
     }
     status.textContent = 'Key cleared';
     status.style.color = '#8b949e';
@@ -2773,7 +3075,10 @@
         const last = document.querySelector('#chat .msg.system:last-child .bubble');
         const names = { azure: 'Azure Speech', elevenlabs: 'ElevenLabs', browser: 'browser' };
         const name = names[voiceProvider] || 'browser';
-        last.innerHTML = `<strong>Voice mode enabled</strong> — using ${name} TTS. Click ⚙ to change voice settings.`;
+        setChildren(last, [
+          el('strong', { text: 'Voice mode enabled' }),
+          ' — using ' + name + ' TTS. Click ⚙ to change voice settings.'
+        ]);
         speakText('Voice mode enabled.');
       } else {
         stopSpeaking();
@@ -2835,35 +3140,35 @@
     if (cfg.provider) {
       voiceProvider = cfg.provider;
       document.getElementById('voice-provider').value = cfg.provider;
-      localStorage.setItem('voice_provider', cfg.provider);
+      safeSet('voice_provider', cfg.provider);
     }
     if (cfg.azure_speech_key) {
       azSpeechKey = cfg.azure_speech_key;
       document.getElementById('az-speech-key').value = cfg.azure_speech_key;
-      localStorage.setItem('az_speech_key', cfg.azure_speech_key);
+      safeSet('az_speech_key', cfg.azure_speech_key);
     }
     if (cfg.azure_speech_region) {
       azSpeechRegion = cfg.azure_speech_region;
       document.getElementById('az-speech-region').value = cfg.azure_speech_region;
-      localStorage.setItem('az_speech_region', cfg.azure_speech_region);
+      safeSet('az_speech_region', cfg.azure_speech_region);
     }
     if (cfg.azure_voice_name) {
       azVoiceName = cfg.azure_voice_name;
-      localStorage.setItem('az_voice_name', cfg.azure_voice_name);
+      safeSet('az_voice_name', cfg.azure_voice_name);
     }
     if (cfg.api_key) {
       elApiKey = cfg.api_key;
       document.getElementById('el-api-key').value = cfg.api_key;
-      localStorage.setItem('el_api_key', cfg.api_key);
+      safeSet('el_api_key', cfg.api_key);
     }
     if (cfg.voice_id) {
       elVoiceId = cfg.voice_id;
-      localStorage.setItem('el_voice_id', cfg.voice_id);
+      safeSet('el_voice_id', cfg.voice_id);
     }
     if (cfg.model) {
       elModel = cfg.model;
       document.getElementById('el-model-select').value = cfg.model;
-      localStorage.setItem('el_model', cfg.model);
+      safeSet('el_model', cfg.model);
     }
     switchVoiceProvider();
     if (azSpeechKey) loadAzureVoices();
@@ -3110,7 +3415,7 @@
     </style>`);
 
     let idx = -1, steps = [], hole, ring, card, cursor, pulse, dropzone, posTimer = null,
-        cursorTimer = null, surgeryFile = null, waitingChat = false;
+        cursorTimer = null, agentPollTimer = null, surgeryFile = null, waitingChat = false;
 
     // Show, don't tell: a ghost cursor glides from the card to the action
     // target and "clicks" so nobody has to hunt for where to go.
@@ -3262,7 +3567,10 @@
     function setStep(i) {
       idx = i;
       if (idx >= steps.length) return endTour(true);
-      localStorage.setItem(LS_STEP, String(idx));
+      // Persist a STABLE step id, not the array index: steps are rebuilt (and the
+      // surgery arc may be sliced out) on resume, so an index would point at a
+      // different step. Fall back to the index only if a step somehow lacks an id.
+      safeSet(LS_STEP, (steps[idx] && steps[idx].id) || ('#' + idx));
       waitingChat = false;
       const st = steps[idx];
       if (st.onEnter) st.onEnter();
@@ -3290,10 +3598,11 @@
     }
 
     function endTour(finished) {
-      localStorage.removeItem(LS_STEP);
-      if (finished) localStorage.setItem(LS_DONE, '1');
+      safeRemove(LS_STEP);
+      if (finished) safeSet(LS_DONE, '1');
       clearInterval(posTimer); posTimer = null;
       clearInterval(cursorTimer); cursorTimer = null;
+      clearInterval(agentPollTimer); agentPollTimer = null;
       [hole, ring, card, cursor, pulse, dropzone].forEach(el => el && el.remove());
       hole = ring = card = cursor = pulse = dropzone = null; idx = -1;
     }
@@ -3301,12 +3610,14 @@
     function defineSteps() {
       steps = [
         {
+          id: 'intro',
           html: `<h3>You don't configure it.<br>You interview it.</h3>
             <p>Think of this as a brand-new hire: capable, untrained, and ready to learn you. Nothing ahead is simulated — it's all live, on your machine.</p>
             <p class="tc-punch">Five minutes. Twelve small steps.</p>`,
           next: true
         },
         {
+          id: 'ask-capabilities',
           html: `<h3>Ask what it can do.</h3>
             <p>Every interview starts with a résumé.</p>`,
           hint: `Click <strong>What can you do?</strong>`,
@@ -3315,6 +3626,7 @@
             <p>Notice it claims it can <strong>remember</strong>. Never trust a résumé — let's take it up on that.</p>`
         },
         {
+          id: 'introduce',
           html: `<h3>Introduce yourself.</h3>
             <p>Like meeting a new coworker — your name, one detail about you. Spelling doesn't matter; it reads between the lines.</p>`,
           hint: `Type <em>"Remember, my name is … and I …"</em> and press <strong>Enter</strong>.`,
@@ -3322,12 +3634,14 @@
           reactMemory: true
         },
         {
+          id: 'clear-slate',
           html: `<h3>Now, wipe the slate.</h3>
             <p>Conversations are short-term memory. Clearing one is like coming back tomorrow morning.</p>`,
           hint: `Click <strong>Clear</strong> in the toolbar below.`,
           target: () => clearBtn(), wait: 'clear'
         },
         {
+          id: 'what-remember',
           html: `<h3>Make it prove itself.</h3>
             <p>New conversation. Zero context. If the memory is real, it doesn't need this chat to know you.</p>`,
           hint: `Click <strong>What do you remember?</strong>`,
@@ -3336,6 +3650,7 @@
             <p><strong>Claim → test → verify.</strong> That loop is the whole method. It can never fool you, because you never take its word for it.</p>`
         },
         {
+          id: 'agents-panel',
           html: `<h3>Look inside its head.</h3>
             <p>So far you've talked to the front of it.</p>`,
           hint: `Click the <strong>⊕ button</strong>, top right.`,
@@ -3345,6 +3660,7 @@
         },
         {
           html: ``, hint: ``,
+          id: 'export-agent',
           target: () => $('#agent-list-ul'), panel: true, wait: 'export', skippable: true, skipTo: 'registry',
           cursorTarget: () => [...document.querySelectorAll('#agent-list-ul li')]
             .find(li => surgeryFile && li.textContent.includes(surgeryFile))
@@ -3358,6 +3674,7 @@
         },
         {
           html: ``, hint: ``,
+          id: 'delete-agent',
           target: () => $('#agent-list-ul'), panel: true, wait: 'deleted', skippable: true, skipTo: 'registry',
           cursorTarget: () => [...document.querySelectorAll('#agent-list-ul li')]
             .find(li => surgeryFile && li.textContent.includes(surgeryFile))
@@ -3372,6 +3689,7 @@
             <p>No restart. No error. And here's the part that matters: <strong>it will be honest about it.</strong></p>`
         },
         {
+          id: 'prove-removed',
           html: `<h3>See for yourself.</h3>
             <p>Ask it to use the agent you just removed.</p>`,
           hint: `Type <em>"get my latest hacker news"</em> and press <strong>Enter</strong>.`,
@@ -3380,6 +3698,7 @@
             <p>No bluffing, no made-up news. It can't do what isn't in its head — <strong>and it says so.</strong> That honesty is what makes it safe to trust.</p>`
         },
         {
+          id: 'restore-agent',
           html: `<h3>Now put it back.</h3>
             <p>That exported file isn't a backup — it's <strong>how agents travel</strong>. It's in your Downloads.</p>`,
           hint: `Drag the <strong>agent.py</strong> file you exported from Downloads and drop it <strong>anywhere on this window</strong>. Or skip — your brainstem, your call.`,
@@ -3389,6 +3708,7 @@
             <p>One file = one agent, live the moment it lands. Teammates can send you these — drop one in, and <strong>their workflow becomes your workflow.</strong></p>`
         },
         {
+          id: 'verify-restored',
           html: `<h3>Trust — then verify.</h3>
             <p>You know the loop by now.</p>`,
           hint: `Ask for the news again.`,
@@ -3421,6 +3741,7 @@
             <p>By describing it. Open the <strong>⊕ panel</strong> — it's in the list, exportable and tradeable like any other. That's the full arc: <strong>interview → teach → trade → create</strong>.</p>`
         },
         {
+          id: 'finale',
           html: `<h3>One last button.</h3>
             <p>Whenever you're stuck on what to do next — it will show you, with whatever agents it has loaded.</p>`,
           hint: `Click <strong>What should I do next?</strong>`,
@@ -3452,7 +3773,21 @@
       buildUi();
       if (!posTimer) posTimer = setInterval(position, 250);
       if (!cursorTimer) cursorTimer = setInterval(cursorDemo, 3000);
-      setStep(Number.isInteger(fromStep) ? fromStep : 0);
+      // The live-agent poll only matters during a tour — start it here and clear
+      // it in endTour, rather than running an always-on interval for the life of
+      // the page.
+      if (!agentPollTimer) agentPollTimer = setInterval(agentPollTick, 900);
+      // Resolve the start position AFTER steps are (re)built and possibly sliced:
+      // a persisted step is a STABLE id, so map id → current index here. A plain
+      // integer is still honored as a direct index (in range); anything else → 0.
+      let start = 0;
+      if (typeof fromStep === 'string') {
+        const i = steps.findIndex(s => s.id === fromStep);
+        start = i >= 0 ? i : 0;
+      } else if (Number.isInteger(fromStep) && fromStep >= 0 && fromStep < steps.length) {
+        start = fromStep;
+      }
+      setStep(start);
       setTimeout(cursorDemo, 500);
     };
 
@@ -3475,17 +3810,17 @@
 
     // The invite is dismissible and stays dismissed (cached locally).
     function applyInviteVisibility() {
-      const hidden = !!localStorage.getItem('rapp_tour_invite_hidden');
+      const hidden = !!safeGet('rapp_tour_invite_hidden');
       document.querySelectorAll('.tour-invite-wrap').forEach(el => el.style.display = hidden ? 'none' : '');
     }
     window.hideTourInvite = function () {
-      localStorage.setItem('rapp_tour_invite_hidden', '1');
+      safeSet('rapp_tour_invite_hidden', '1');
       applyInviteVisibility();
     };
     // Opening the Tutorial signals fresh interest in learning — the tour is
     // relevant again, so the invite comes back (dismissible as always).
     window.showTourInvite = function () {
-      localStorage.removeItem('rapp_tour_invite_hidden');
+      safeRemove('rapp_tour_invite_hidden');
       applyInviteVisibility();
     };
     applyInviteVisibility();
@@ -3569,7 +3904,9 @@
     }, true);
 
     // Deletion + drop detection: poll the live /agents list while relevant.
-    setInterval(async () => {
+    // Gated behind the tour lifecycle (started in startTour, cleared in endTour)
+    // so no timer runs when no tour is active.
+    async function agentPollTick() {
       if (idx < 0 || !surgeryFile) return;
       const st = steps[idx]; if (!st) return;
       if (!['deleted', 'dropped', 'installed', 'created'].includes(st.wait)) return;
@@ -3584,12 +3921,14 @@
         const appeared = files.some(f => !st._baseline.includes(f));
         if (appeared) { st.reactHtml ? react(st.reactHtml) : advance(); }
       }
-    }, 900);
+    }
 
     // Resume a tour that was mid-flight (e.g. the user refreshed the page).
-    const saved = localStorage.getItem(LS_STEP);
-    if (saved !== null && !localStorage.getItem(LS_DONE)) {
-      setTimeout(() => window.startTour(parseInt(saved, 10) || 0), 600);
+    // LS_STEP now holds a STABLE step id; startTour maps it to an index after it
+    // rebuilds the step list.
+    const saved = safeGet(LS_STEP);
+    if (saved !== null && !safeGet(LS_DONE)) {
+      setTimeout(() => window.startTour(saved), 600);
     }
   })();
 </script>
