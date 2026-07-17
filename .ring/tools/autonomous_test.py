@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import promote_ring
@@ -27,21 +28,25 @@ class ScenarioError(RuntimeError):
     pass
 
 
-def _run(args, *, cwd=None, env=None, quiet=False):
-    result = subprocess.run(
-        [str(item) for item in args],
-        cwd=cwd,
-        env=env,
-        capture_output=quiet,
-        text=True,
-        check=False,
-    )
-    if result.returncode:
-        detail = ""
-        if quiet:
-            detail = f"\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        raise ScenarioError(f"command failed: {' '.join(map(str, args))}{detail}")
-    return result
+def _run(args, *, cwd=None, env=None, quiet=False, retries=0):
+    result = None
+    for attempt in range(retries + 1):
+        result = subprocess.run(
+            [str(item) for item in args],
+            cwd=cwd,
+            env=env,
+            capture_output=quiet,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result
+        if attempt < retries:
+            time.sleep(2 ** attempt)
+    detail = ""
+    if quiet:
+        detail = f"\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    raise ScenarioError(f"command failed: {' '.join(map(str, args))}{detail}")
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -49,19 +54,37 @@ def _git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _clone_url(url: str, path: Path, *clone_args: str) -> None:
+    last_error = None
+    for attempt in range(3):
+        if path.exists():
+            shutil.rmtree(path)
+        try:
+            _run([
+                "git",
+                "-c",
+                "core.autocrlf=false",
+                "clone",
+                "--quiet",
+                *clone_args,
+                url,
+                path,
+            ])
+            return
+        except ScenarioError as error:
+            last_error = error
+            time.sleep(2 ** attempt)
+    raise last_error
+
+
 def _clone_ring(root: Path, ring: str) -> Path:
     path = root / ring
-    _run([
-        "git",
-        "-c",
-        "core.autocrlf=false",
-        "clone",
-        "--quiet",
-        "--branch",
-        OVERLAY_BRANCH,
+    _clone_url(
         f"https://github.com/{REPOSITORIES[ring]}.git",
         path,
-    ])
+        "--branch",
+        OVERLAY_BRANCH,
+    )
     _git(path, "config", "core.autocrlf", "false")
     _git(path, "config", "user.name", "Autonomous Ring Test")
     _git(path, "config", "user.email", "ring-test@example.invalid")
@@ -479,13 +502,10 @@ def _failure_scenarios(root: Path, config: Path) -> list[dict]:
     grail_root.mkdir()
     beta = _clone_ring(grail_root, "beta")
     grail = grail_root / "grail"
-    _run([
-        "git",
-        "clone",
-        "--quiet",
+    _clone_url(
         "https://github.com/kody-w/rapp-installer.git",
         grail,
-    ])
+    )
     try:
         promote_ring.promote(
             beta,
@@ -514,6 +534,7 @@ def _remote_main(repository: str) -> str:
             "refs/heads/main",
         ],
         quiet=True,
+        retries=3,
     )
     return result.stdout.split()[0]
 

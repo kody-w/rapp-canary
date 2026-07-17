@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -70,6 +71,11 @@ class RingAttestationTests(unittest.TestCase):
             "#!/bin/sh\nexit 0\n",
             encoding="utf-8",
             newline="\n",
+        )
+        run_mode = (self.repo / "run.sh").stat().st_mode
+        os.chmod(
+            self.repo / "run.sh",
+            run_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
         )
         _git(
             self.repo,

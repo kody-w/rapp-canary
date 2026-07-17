@@ -17,10 +17,10 @@
   "features": [
     {
       "commits": {
-        "alpha": "e8eb28e162d70a919c2ae8ba6823d1e139017243",
-        "beta": "a19cf124bf4f339f3c133efe93312411284a3a6f",
-        "canary": "5fb79a5dbe1daa8316cba612720b3ee1c3e0617a",
-        "nightly": "70cab6f21307a1ee2e7e8873a0bedaaa3d5f5892"
+        "alpha": "bf86f1dc10f0ada0aac7409d31de4c3d0626ae5f",
+        "beta": "0ac2306c13d9f79849c96e36146e732c60e98e2b",
+        "canary": "79bcc5deb14e294f361a51bc5d168f8d3a3dc454",
+        "nightly": "2197f40e87cf5083a2c3f196d637bdd0676bc3dd"
       },
       "name": "backend-route",
       "shared_sha256": "9183c848671845b5f55890fbe14155a5ec22b4e695e3349ef8392fe581f6dc4f",
@@ -28,10 +28,10 @@
     },
     {
       "commits": {
-        "alpha": "f5ce91005d4f2ffdb7752c5373bcea0de660df21",
-        "beta": "a3c3fb1cf119af3bd7009859fcf94b88ac0c03eb",
-        "canary": "e44fd3db41e8a0871ec84a5c0094fdfde0217e7c",
-        "nightly": "dd08e0602fdbbcc60c32b5233e421bebe71dba9c"
+        "alpha": "f3ceae698dd8727121caafd8e73cab5104464c73",
+        "beta": "e9f0dd6e00adaa37aff10e5d61b92be639158ef7",
+        "canary": "b7d3ab71348beaa0809ff5bbe026b22394af7e1c",
+        "nightly": "ff57ce99b8ba6e19d8f98d4df507f9704ac2e0a6"
       },
       "name": "ui-meta",
       "shared_sha256": "690cc7f213b58a45f5f21adebec602773a8b20e17d76620fc40fcff72be77a91",
@@ -39,10 +39,10 @@
     },
     {
       "commits": {
-        "alpha": "1fd075e3975ff318aaad13179e8a76fb559db3e2",
-        "beta": "57a2f571fe1d96df45740b5d1431c58d2e651f73",
-        "canary": "632e605e3edf6d6b5a2972322b2778ba4def9b38",
-        "nightly": "d6e362ec28477d0ed46b8c8dedfe54924c8e31f4"
+        "alpha": "09347264a9a48ddec5bc164e82a22a40edbb6b77",
+        "beta": "c945968701eaad9e9e4c64deb8cb0d0ae2d2ad1a",
+        "canary": "af360b176cfd6a485e5eb6a6eb685f322933b71b",
+        "nightly": "1af3afbcca327cf2a3c74a53f2a313266047f686"
       },
       "name": "agent-addition",
       "shared_sha256": "278afdc321c49b7740a7f54316619f2212705e1faa683d68104f28ce75880e4e",
@@ -50,10 +50,10 @@
     },
     {
       "commits": {
-        "alpha": "83e1768c427cb914d2a0097360d97f56c5a7b7db",
-        "beta": "e422b832fffcd8ffa60d79fcf9cfcd2938d7e936",
-        "canary": "25b3d256375dd1f3fbad74f545ae698aeeab5b4e",
-        "nightly": "5a472812b776ff2d0ebe9225039afe693c035d2e"
+        "alpha": "23b1d687519490c941143aa47c3aef24dc41536e",
+        "beta": "b8fc46e19ce0c7174109680223dd96550036cfd3",
+        "canary": "6cb8cc5330881a1aff9e26691c9553576faad037",
+        "nightly": "a859deed7c01a290b597ef649917ad06c6f95c76"
       },
       "name": "installer-parity",
       "shared_sha256": "d1772f05bc578330c03091a91ce2bd7e276bafc7545ed686bd9f70173835879b",
@@ -61,10 +61,10 @@
     },
     {
       "commits": {
-        "alpha": "0fa9de8015b6e2f68f628adb43227797dfda8f5d",
-        "beta": "f602aa8cdd1468226b7c43ebb458d766d28b2a47",
-        "canary": "2a6d1a53710f6195089613c2ea501b7a281aabe7",
-        "nightly": "43af4a6d9aa9a9e99b4fe613773f7ee1d15fb5e3"
+        "alpha": "0bef7581fa8d3f98acace0c228073b7dc0241f20",
+        "beta": "a54b8ef2519184911d42c7a0bf01b4759dedadd0",
+        "canary": "b2a1451b97217e980ad6253ff94a6f58f4cc3af8",
+        "nightly": "1c5874fa0383c57e9f6ec77cd32411f2edc5154f"
       },
       "name": "tree-shape",
       "shared_sha256": "0878b50e2ec8e8837ad1718b358efbff9c0355f71a891649f092c3246aadcf19",
