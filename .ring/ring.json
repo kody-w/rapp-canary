@@ -1,0 +1,11 @@
+{
+  "schema": "rapp-ring/1",
+  "name": "canary",
+  "repository": "kody-w/rapp-canary",
+  "pages_url": "https://kody-w.github.io/rapp-canary",
+  "support_repository": "kody-w/rapp-canary",
+  "parent": null,
+  "protected_paths": [
+    ".ring/"
+  ]
+}
