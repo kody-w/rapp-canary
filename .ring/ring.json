@@ -5,6 +5,23 @@
   "pages_url": "https://kody-w.github.io/rapp-canary",
   "support_repository": "kody-w/rapp-canary",
   "parent": null,
+  "rewrites": [
+    {
+      "from": "kody-w.github.io/rapp-installer",
+      "to": "kody-w.github.io/rapp-canary",
+      "expected_count": 25
+    },
+    {
+      "from": "kody-w/rapp-installer",
+      "to": "kody-w/rapp-canary",
+      "expected_count": 69
+    },
+    {
+      "from": "kody-w/rapp-support",
+      "to": "kody-w/rapp-canary",
+      "expected_count": 4
+    }
+  ],
   "protected_paths": [
     ".ring/"
   ]
