@@ -5,6 +5,11 @@
   "pages_url": "https://kody-w.github.io/rapp-canary",
   "support_repository": "kody-w/rapp-canary",
   "parent": null,
+  "rewrite_excluded_prefixes": [
+    "tests/",
+    "rapp_brainstem/tests/",
+    "rapp_brainstem/test"
+  ],
   "rewrites": [
     {
       "from": "kody-w.github.io/rapp-installer",
@@ -14,22 +19,12 @@
     {
       "from": "kody-w/rapp-installer",
       "to": "kody-w/rapp-canary",
-      "expected_count": 68
+      "expected_count": 67
     },
     {
       "from": "kody-w/rapp-support",
       "to": "kody-w/rapp-canary",
-      "expected_count": 4
-    },
-    {
-      "from": "rapp-installer.git",
-      "to": "rapp-canary.git",
-      "expected_count": 1
-    },
-    {
-      "from": "public rapp-installer repo",
-      "to": "public Canary repo",
-      "expected_count": 1
+      "expected_count": 2
     }
   ],
   "protected_paths": [

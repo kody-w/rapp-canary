@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -65,7 +66,19 @@ class RingAttestationTests(unittest.TestCase):
             encoding="utf-8",
             newline="\n",
         )
-        _git(self.repo, "add", "payload.txt", ".ring/ring.json")
+        (self.repo / "run.sh").write_text(
+            "#!/bin/sh\nexit 0\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        _git(
+            self.repo,
+            "add",
+            "payload.txt",
+            "run.sh",
+            ".ring/ring.json",
+        )
+        _git(self.repo, "update-index", "--chmod=+x", "run.sh")
         _git(self.repo, "commit", "-qm", "candidate")
         self.commit = _git(self.repo, "rev-parse", "HEAD^{commit}")
         self.nightly_repo = self.root / "nightly-payload"
@@ -343,8 +356,15 @@ class RingAttestationTests(unittest.TestCase):
         )
         self.assertEqual(lock["source"]["ring"], "canary")
         self.assertEqual(lock["target"]["ring"], "nightly")
+        self.assertTrue(
+            _git(
+                self.nightly_repo,
+                "ls-files",
+                "-s",
+                "run.sh",
+            ).startswith("100755 ")
+        )
 
-        _git(self.nightly_repo, "add", "-A")
         _git(self.nightly_repo, "commit", "-qm", "promote Canary payload")
         nightly_commit = _git(
             self.nightly_repo,
@@ -478,6 +498,40 @@ class RingAttestationTests(unittest.TestCase):
         self.assertEqual(
             (self.nightly_repo / "shape").read_text(encoding="utf-8"),
             "now a file\n",
+        )
+
+    def test_promotion_lock_symlink_is_rejected(self):
+        outside = self.root / "outside.txt"
+        outside.write_text("do not overwrite\n", encoding="utf-8")
+        link = self.nightly_repo / ".ring/upstream.lock.json"
+        try:
+            os.symlink(outside, link)
+        except OSError:
+            self.skipTest("symlink creation is unavailable")
+        _git(self.nightly_repo, "add", ".ring/upstream.lock.json")
+        _git(self.nightly_repo, "commit", "-qm", "malicious lock symlink")
+        target_commit = _git(
+            self.nightly_repo,
+            "rev-parse",
+            "HEAD^{commit}",
+        )
+
+        with self.assertRaisesRegex(
+            PROMOTE.PromotionError,
+            "lock must not be a symlink",
+        ):
+            PROMOTE.promote(
+                self.repo,
+                self.nightly_repo,
+                "canary",
+                "nightly",
+                self.commit,
+                target_commit,
+                CONFIG_PATH,
+            )
+        self.assertEqual(
+            outside.read_text(encoding="utf-8"),
+            "do not overwrite\n",
         )
 
 

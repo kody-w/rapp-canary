@@ -60,6 +60,15 @@ def _config(path: Path) -> dict:
         for item in protected
     ):
         raise RenderError("invalid protected_paths")
+    excluded = value.get("rewrite_excluded_prefixes", [])
+    if not isinstance(excluded, list) or not all(
+        isinstance(item, str)
+        and item
+        and not item.startswith(("/", "\\"))
+        and ".." not in Path(item).parts
+        for item in excluded
+    ):
+        raise RenderError("invalid rewrite_excluded_prefixes")
     return value
 
 
@@ -100,7 +109,7 @@ def _materialize(
     return modes
 
 
-def _text_files(output: Path):
+def _text_files(output: Path, excluded_prefixes: tuple[str, ...]):
     for path in output.rglob("*"):
         if not path.is_file() or path.is_symlink():
             continue
@@ -110,6 +119,12 @@ def _text_files(output: Path):
         try:
             data.decode("utf-8")
         except UnicodeDecodeError:
+            continue
+        relative = path.relative_to(output).as_posix()
+        if any(
+            relative == prefix.rstrip("/") or relative.startswith(prefix)
+            for prefix in excluded_prefixes
+        ):
             continue
         yield path, data
 
@@ -140,10 +155,14 @@ def render(repo: Path, config_path: Path, output: Path) -> dict:
         ),
     )
     applied = []
+    excluded_prefixes = tuple(
+        item.replace("\\", "/")
+        for item in config.get("rewrite_excluded_prefixes", [])
+    )
     for rule in config["rewrites"]:
         needle = rule["from"].encode("utf-8")
         replacement = rule["to"].encode("utf-8")
-        files = list(_text_files(output))
+        files = list(_text_files(output, excluded_prefixes))
         count = sum(data.count(needle) for _, data in files)
         if count != rule["expected_count"]:
             raise RenderError(
@@ -159,6 +178,14 @@ def render(repo: Path, config_path: Path, output: Path) -> dict:
             "to": rule["to"],
             "count": count,
         })
+        remaining = sum(
+            data.count(needle)
+            for _, data in _text_files(output, excluded_prefixes)
+        )
+        if remaining:
+            raise RenderError(
+                f"rewrite source remains in production files: {rule['from']!r}"
+            )
     return {
         "schema": "rapp-ring-render/1",
         "ring": config["name"],

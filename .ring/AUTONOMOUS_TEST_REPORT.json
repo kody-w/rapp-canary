@@ -1,0 +1,89 @@
+{
+  "execution": "evidence-only",
+  "failures": [
+    {
+      "name": "rewrite-count-drift",
+      "status": "blocked"
+    },
+    {
+      "name": "shared-payload-divergence",
+      "status": "blocked"
+    },
+    {
+      "name": "human-grail-guard",
+      "status": "blocked"
+    }
+  ],
+  "features": [
+    {
+      "commits": {
+        "alpha": "e8eb28e162d70a919c2ae8ba6823d1e139017243",
+        "beta": "a19cf124bf4f339f3c133efe93312411284a3a6f",
+        "canary": "5fb79a5dbe1daa8316cba612720b3ee1c3e0617a",
+        "nightly": "70cab6f21307a1ee2e7e8873a0bedaaa3d5f5892"
+      },
+      "name": "backend-route",
+      "shared_sha256": "9183c848671845b5f55890fbe14155a5ec22b4e695e3349ef8392fe581f6dc4f",
+      "status": "passed"
+    },
+    {
+      "commits": {
+        "alpha": "f5ce91005d4f2ffdb7752c5373bcea0de660df21",
+        "beta": "a3c3fb1cf119af3bd7009859fcf94b88ac0c03eb",
+        "canary": "e44fd3db41e8a0871ec84a5c0094fdfde0217e7c",
+        "nightly": "dd08e0602fdbbcc60c32b5233e421bebe71dba9c"
+      },
+      "name": "ui-meta",
+      "shared_sha256": "690cc7f213b58a45f5f21adebec602773a8b20e17d76620fc40fcff72be77a91",
+      "status": "passed"
+    },
+    {
+      "commits": {
+        "alpha": "1fd075e3975ff318aaad13179e8a76fb559db3e2",
+        "beta": "57a2f571fe1d96df45740b5d1431c58d2e651f73",
+        "canary": "632e605e3edf6d6b5a2972322b2778ba4def9b38",
+        "nightly": "d6e362ec28477d0ed46b8c8dedfe54924c8e31f4"
+      },
+      "name": "agent-addition",
+      "shared_sha256": "278afdc321c49b7740a7f54316619f2212705e1faa683d68104f28ce75880e4e",
+      "status": "passed"
+    },
+    {
+      "commits": {
+        "alpha": "83e1768c427cb914d2a0097360d97f56c5a7b7db",
+        "beta": "e422b832fffcd8ffa60d79fcf9cfcd2938d7e936",
+        "canary": "25b3d256375dd1f3fbad74f545ae698aeeab5b4e",
+        "nightly": "5a472812b776ff2d0ebe9225039afe693c035d2e"
+      },
+      "name": "installer-parity",
+      "shared_sha256": "d1772f05bc578330c03091a91ce2bd7e276bafc7545ed686bd9f70173835879b",
+      "status": "passed"
+    },
+    {
+      "commits": {
+        "alpha": "0fa9de8015b6e2f68f628adb43227797dfda8f5d",
+        "beta": "f602aa8cdd1468226b7c43ebb458d766d28b2a47",
+        "canary": "2a6d1a53710f6195089613c2ea501b7a281aabe7",
+        "nightly": "43af4a6d9aa9a9e99b4fe613773f7ee1d15fb5e3"
+      },
+      "name": "tree-shape",
+      "shared_sha256": "0878b50e2ec8e8837ad1718b358efbff9c0355f71a891649f092c3246aadcf19",
+      "status": "passed"
+    }
+  ],
+  "grail_commit": "5fbde1776a72715935c3d597a9ddfce28a04032b",
+  "grail_final": "5fbde1776a72715935c3d597a9ddfce28a04032b",
+  "ring_mains": {
+    "alpha": "5fbde1776a72715935c3d597a9ddfce28a04032b",
+    "beta": "5fbde1776a72715935c3d597a9ddfce28a04032b",
+    "canary": "5fbde1776a72715935c3d597a9ddfce28a04032b",
+    "nightly": "5fbde1776a72715935c3d597a9ddfce28a04032b"
+  },
+  "ring_mains_initial": {
+    "alpha": "5fbde1776a72715935c3d597a9ddfce28a04032b",
+    "beta": "5fbde1776a72715935c3d597a9ddfce28a04032b",
+    "canary": "5fbde1776a72715935c3d597a9ddfce28a04032b",
+    "nightly": "5fbde1776a72715935c3d597a9ddfce28a04032b"
+  },
+  "schema": "rapp-autonomous-test/1"
+}

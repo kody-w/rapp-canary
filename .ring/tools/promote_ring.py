@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import ring_attestation as attestation
@@ -163,6 +164,67 @@ def _remove_empty_parents(path: Path, target: Path) -> None:
         current = current.parent
 
 
+def _safe_lock_path(target: Path) -> Path:
+    ring_dir = target / ".ring"
+    target_real = target.resolve()
+    if ring_dir.is_symlink():
+        raise PromotionError(".ring must not be a symlink")
+    if ring_dir.exists() and not ring_dir.is_dir():
+        raise PromotionError(".ring must be a directory")
+    ring_dir.mkdir(parents=True, exist_ok=True)
+    ring_real = ring_dir.resolve()
+    if os.path.commonpath((str(target_real), str(ring_real))) != str(target_real):
+        raise PromotionError(".ring resolves outside the target checkout")
+    lock_path = ring_dir / "upstream.lock.json"
+    if lock_path.is_symlink():
+        raise PromotionError("promotion lock must not be a symlink")
+    if lock_path.exists() and not lock_path.is_file():
+        raise PromotionError("promotion lock must be a regular file")
+    return lock_path
+
+
+def _stage_raw(target: Path, relative: str, mode: str) -> None:
+    object_id = _git(
+        target,
+        "hash-object",
+        "-w",
+        "--no-filters",
+        "--",
+        relative,
+    ).strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", object_id):
+        raise PromotionError(f"cannot hash promoted path: {relative}")
+    _git(
+        target,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        mode,
+        object_id,
+        relative,
+    )
+
+
+def _write_lock(target: Path, lock_path: Path, lock: dict) -> None:
+    payload = (json.dumps(lock, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".upstream-lock-",
+        suffix=".tmp",
+        dir=lock_path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, lock_path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    _stage_raw(target, lock_path.relative_to(target).as_posix(), "100644")
+
+
 def promote(
     source: Path,
     target: Path,
@@ -194,6 +256,7 @@ def promote(
         raise PromotionError("both rings require repository identities")
     _validate_repo(source, source_repository, source_commit)
     _validate_repo(target, target_repository, target_commit)
+    lock_path = _safe_lock_path(target)
 
     source_entries = _entries(source, prefixes)
     target_entries = _tracked_shared(target, prefixes)
@@ -206,6 +269,7 @@ def promote(
         destination = target / Path(path)
         if destination.is_symlink() or destination.is_file():
             destination.unlink()
+            _git(target, "update-index", "--force-remove", "--", path)
             _remove_empty_parents(destination.parent, target)
         elif destination.exists():
             raise PromotionError(f"cannot delete non-file shared path: {path}")
@@ -214,6 +278,7 @@ def promote(
         if destination.is_dir():
             shutil.rmtree(destination)
         _write_blob(source, target, path, mode, object_id)
+        _stage_raw(target, path, mode)
 
     shared_sha256 = attestation._payload_tree_sha256(source, prefixes)
     lock = {
@@ -231,13 +296,7 @@ def promote(
             "base_commit": target_commit,
         },
     }
-    lock_path = target / ".ring" / "upstream.lock.json"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path.write_text(
-        json.dumps(lock, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    _write_lock(target, lock_path, lock)
     return lock
 
 
