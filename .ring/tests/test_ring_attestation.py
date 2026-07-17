@@ -72,6 +72,19 @@ class RingAttestationTests(unittest.TestCase):
             encoding="utf-8",
             newline="\n",
         )
+        required = (
+            self.repo
+            / "rapp_brainstem"
+            / "agents"
+            / "experimental"
+            / "copilot_research_agent.py"
+        )
+        required.parent.mkdir(parents=True)
+        required.write_text(
+            "# required compatibility agent\n",
+            encoding="utf-8",
+            newline="\n",
+        )
         run_mode = (self.repo / "run.sh").stat().st_mode
         os.chmod(
             self.repo / "run.sh",
@@ -82,6 +95,7 @@ class RingAttestationTests(unittest.TestCase):
             "add",
             "payload.txt",
             "run.sh",
+            "rapp_brainstem/agents/experimental/copilot_research_agent.py",
             ".ring/ring.json",
         )
         _git(self.repo, "update-index", "--chmod=+x", "run.sh")
@@ -463,6 +477,33 @@ class RingAttestationTests(unittest.TestCase):
                 "grail",
                 beta_commit,
                 grail_commit,
+                CONFIG_PATH,
+            )
+
+    def test_required_shared_file_deletion_is_rejected(self):
+        required = (
+            self.repo
+            / "rapp_brainstem"
+            / "agents"
+            / "experimental"
+            / "copilot_research_agent.py"
+        )
+        required.unlink()
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-qm", "delete required agent")
+        source_commit = _git(self.repo, "rev-parse", "HEAD^{commit}")
+
+        with self.assertRaisesRegex(
+            PROMOTE.PromotionError,
+            "required shared paths are missing",
+        ):
+            PROMOTE.promote(
+                self.repo,
+                self.nightly_repo,
+                "canary",
+                "nightly",
+                source_commit,
+                self.nightly_commit,
                 CONFIG_PATH,
             )
 

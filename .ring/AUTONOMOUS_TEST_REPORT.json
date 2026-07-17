@@ -10,6 +10,10 @@
       "status": "blocked"
     },
     {
+      "name": "required-file-deletion",
+      "status": "blocked"
+    },
+    {
       "name": "human-grail-guard",
       "status": "blocked"
     }
@@ -17,10 +21,10 @@
   "features": [
     {
       "commits": {
-        "alpha": "bf86f1dc10f0ada0aac7409d31de4c3d0626ae5f",
-        "beta": "0ac2306c13d9f79849c96e36146e732c60e98e2b",
-        "canary": "79bcc5deb14e294f361a51bc5d168f8d3a3dc454",
-        "nightly": "2197f40e87cf5083a2c3f196d637bdd0676bc3dd"
+        "alpha": "29a9151dedd635f3c09fc98c2eff947dc08a722d",
+        "beta": "f86d968472febfc5e56da29b14a6b6686b86c47d",
+        "canary": "c1af32ce4589ecbdaf98c677985048b13bf6ced3",
+        "nightly": "0c03ceab6b5d29950874a46dbaafe9f6f2eaca86"
       },
       "name": "backend-route",
       "shared_sha256": "9183c848671845b5f55890fbe14155a5ec22b4e695e3349ef8392fe581f6dc4f",
@@ -28,10 +32,10 @@
     },
     {
       "commits": {
-        "alpha": "f3ceae698dd8727121caafd8e73cab5104464c73",
-        "beta": "e9f0dd6e00adaa37aff10e5d61b92be639158ef7",
-        "canary": "b7d3ab71348beaa0809ff5bbe026b22394af7e1c",
-        "nightly": "ff57ce99b8ba6e19d8f98d4df507f9704ac2e0a6"
+        "alpha": "ea523103d24a50692b8b035079db330ef9f6512a",
+        "beta": "e301906171559b85e07ec870d8d0e7dc2cecd18e",
+        "canary": "e723ec771760f2562882995ab53939803df3ac3b",
+        "nightly": "ea4d69668efaf5c82f7feef685c6de42fe13c7a9"
       },
       "name": "ui-meta",
       "shared_sha256": "690cc7f213b58a45f5f21adebec602773a8b20e17d76620fc40fcff72be77a91",
@@ -39,10 +43,10 @@
     },
     {
       "commits": {
-        "alpha": "09347264a9a48ddec5bc164e82a22a40edbb6b77",
-        "beta": "c945968701eaad9e9e4c64deb8cb0d0ae2d2ad1a",
-        "canary": "af360b176cfd6a485e5eb6a6eb685f322933b71b",
-        "nightly": "1af3afbcca327cf2a3c74a53f2a313266047f686"
+        "alpha": "ae16996d14ec2596b0ee9654308ec30bce347ef2",
+        "beta": "e07d06213e16c45dafc61655965654eadf2aa969",
+        "canary": "b8d4373e89af7100aa86aa52be7277fb8578a9a0",
+        "nightly": "c9d19c9ee83ca7f0aabdc76e8f1e6798c45d3579"
       },
       "name": "agent-addition",
       "shared_sha256": "278afdc321c49b7740a7f54316619f2212705e1faa683d68104f28ce75880e4e",
@@ -50,10 +54,10 @@
     },
     {
       "commits": {
-        "alpha": "23b1d687519490c941143aa47c3aef24dc41536e",
-        "beta": "b8fc46e19ce0c7174109680223dd96550036cfd3",
-        "canary": "6cb8cc5330881a1aff9e26691c9553576faad037",
-        "nightly": "a859deed7c01a290b597ef649917ad06c6f95c76"
+        "alpha": "3695804901c032131b1ba8464643047989ead06e",
+        "beta": "69ffcc624e421fd0f40eac3dec9c45994476bb35",
+        "canary": "8141683eefc2f748177d1e2289368e4d48a0ce59",
+        "nightly": "bc7c4fcd6b6df24fcde4302bcb2703712c5c862c"
       },
       "name": "installer-parity",
       "shared_sha256": "d1772f05bc578330c03091a91ce2bd7e276bafc7545ed686bd9f70173835879b",
@@ -61,13 +65,57 @@
     },
     {
       "commits": {
-        "alpha": "0bef7581fa8d3f98acace0c228073b7dc0241f20",
-        "beta": "a54b8ef2519184911d42c7a0bf01b4759dedadd0",
-        "canary": "b2a1451b97217e980ad6253ff94a6f58f4cc3af8",
-        "nightly": "1c5874fa0383c57e9f6ec77cd32411f2edc5154f"
+        "alpha": "c7e279f00a31a46f2cedd2ee6def2983f7cf5ada",
+        "beta": "d96af89e0e24b891538d8d1d2b3648f321884e88",
+        "canary": "0155e734fdda73ffd5a8ad469a4954fc5302136d",
+        "nightly": "b422d0add3d5d2c832e80c88ec27b56108d94a0c"
       },
       "name": "tree-shape",
       "shared_sha256": "0878b50e2ec8e8837ad1718b358efbff9c0355f71a891649f092c3246aadcf19",
+      "status": "passed"
+    },
+    {
+      "commits": {
+        "alpha": "924916c81d882df848aed4b542f562f07ff58a2c",
+        "beta": "098268ab00a943144143528f1de50a3bfb41e153",
+        "canary": "fff9127fe95bcc48ec4b9d7c780065a2df876ec1",
+        "nightly": "08f2d35e54ef138b40dd48953d59c63cb35d1159"
+      },
+      "name": "config-default",
+      "shared_sha256": "5d9bb19de3057e6e2810784adaefb5863793962ab682a457a2e1a5a609d9ab9c",
+      "status": "passed"
+    },
+    {
+      "commits": {
+        "alpha": "db048977ec15d48782151555fefb9cea0a46c37f",
+        "beta": "7a4eb1603c80fd6813ff6bf5a25e869882ec02d7",
+        "canary": "9b03f3cadce08c245420a27d03ff8ea4e84c052f",
+        "nightly": "12be3c2a0d4e66d535f5152d412ded3235e0aa88"
+      },
+      "name": "storage-api",
+      "shared_sha256": "4b22789da6528f4b5a8aba5de5909df6541e8b07bd8858653e3efffc0e6e2793",
+      "status": "passed"
+    },
+    {
+      "commits": {
+        "alpha": "9ee11c4c6b407c697ddfa797a41b81fbde087190",
+        "beta": "148e8d2304f55d9d8ab6e0a62b5bc2ef2916c14d",
+        "canary": "b5188cfc13a1ac50112e1efb60ea702ab029ec79",
+        "nightly": "e9b3779acfd354df8150151cb0f1939783f76d51"
+      },
+      "name": "binary-asset",
+      "shared_sha256": "1035f9dfd58ef18eafd124e937f6c79002b01324b70af2e388336f874e500882",
+      "status": "passed"
+    },
+    {
+      "commits": {
+        "alpha": "8826493b88b2da739c4dead8016032482841ab91",
+        "beta": "4954e218f875a2414f8ee596797aa775cfa5aa7d",
+        "canary": "08ef0abc0e043ee81707b3e6956d53a383bab3be",
+        "nightly": "df76211c5efccd61273fc5fd1428b5826c1cbf76"
+      },
+      "name": "file-deletion",
+      "shared_sha256": "7804e13232dc5209b4ea42f0446f1501217405a5a5479801955366a969b9f879",
       "status": "passed"
     }
   ],

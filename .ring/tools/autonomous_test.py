@@ -180,12 +180,56 @@ def _shape_feature(repo: Path) -> None:
     )
 
 
+def _config_feature(repo: Path) -> None:
+    path = repo / "rapp_brainstem" / ".env.example"
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "\n# Pipeline feature probe\nPIPELINE_PROBE=false\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def _storage_feature(repo: Path) -> None:
+    path = repo / "rapp_brainstem" / "local_storage.py"
+    text = path.read_text(encoding="utf-8")
+    marker = "    def file_exists(self, file_path):"
+    addition = (
+        '    def pipeline_probe(self):\n'
+        '        return "storage-probe-ok"\n\n'
+    )
+    if marker not in text:
+        raise ScenarioError("storage insertion point not found")
+    path.write_text(
+        text.replace(marker, addition + marker, 1),
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def _binary_feature(repo: Path) -> None:
+    path = repo / "rapp_brainstem" / "assets" / "pipeline-probe.bin"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x00RAPP-PIPELINE\xff\x10")
+
+
+def _deletion_feature(repo: Path) -> None:
+    path = repo / "rapp_brainstem" / ".vscode" / "settings.json"
+    if not path.is_file():
+        raise ScenarioError("deletion fixture is missing")
+    path.unlink()
+
+
 SCENARIOS = {
     "backend-route": _backend_feature,
     "ui-meta": _ui_feature,
     "agent-addition": _agent_feature,
     "installer-parity": _installer_feature,
     "tree-shape": _shape_feature,
+    "config-default": _config_feature,
+    "storage-api": _storage_feature,
+    "binary-asset": _binary_feature,
+    "file-deletion": _deletion_feature,
 }
 
 
@@ -254,6 +298,30 @@ def _assert_feature_static(name: str, build: Path) -> None:
             build / "rapp_brainstem" / "pipeline_probe" / "config.json"
         ).is_file():
             raise ScenarioError("new nested shape did not promote")
+    elif name == "config-default":
+        if "PIPELINE_PROBE=false" not in (
+            build / "rapp_brainstem" / ".env.example"
+        ).read_text(encoding="utf-8"):
+            raise ScenarioError("configuration feature is missing")
+    elif name == "storage-api":
+        text = (build / "rapp_brainstem" / "local_storage.py").read_text(
+            encoding="utf-8"
+        )
+        if "def pipeline_probe" not in text or "storage-probe-ok" not in text:
+            raise ScenarioError("storage API feature is missing")
+    elif name == "binary-asset":
+        if (
+            build / "rapp_brainstem" / "assets" / "pipeline-probe.bin"
+        ).read_bytes() != b"\x00RAPP-PIPELINE\xff\x10":
+            raise ScenarioError("binary asset changed during promotion")
+    elif name == "file-deletion":
+        if (
+            build
+            / "rapp_brainstem"
+            / ".vscode"
+            / "settings.json"
+        ).exists():
+            raise ScenarioError("deleted file reappeared")
 
 
 def _assert_feature_runtime(
@@ -286,6 +354,18 @@ def _assert_feature_runtime(
                 "assert m.PipelineProbeAgent().perform()=='pipeline-probe-ok'"
             ),
             build / "rapp_brainstem" / "agents" / "pipeline_probe_agent.py",
+            build / "rapp_brainstem",
+        ], env=env)
+    elif name == "storage-api":
+        _run([
+            python,
+            "-c",
+            (
+                "import sys; sys.path.insert(0,sys.argv[1]); "
+                "import local_storage; "
+                "assert local_storage.AzureFileStorageManager().pipeline_probe()"
+                "=='storage-probe-ok'"
+            ),
             build / "rapp_brainstem",
         ], env=env)
 
@@ -497,6 +577,35 @@ def _failure_scenarios(root: Path, config: Path) -> list[dict]:
         if "payload changed between rings" not in str(error):
             raise
         results.append({"name": "shared-payload-divergence", "status": "blocked"})
+
+    deletion_root = root / "required-deletion"
+    deletion_root.mkdir()
+    canary = _clone_ring(deletion_root, "canary")
+    nightly = _clone_ring(deletion_root, "nightly")
+    required = (
+        canary
+        / "rapp_brainstem"
+        / "agents"
+        / "experimental"
+        / "copilot_research_agent.py"
+    )
+    required.unlink()
+    canary_commit = _commit(canary, "test: delete required shared agent")
+    try:
+        promote_ring.promote(
+            canary,
+            nightly,
+            "canary",
+            "nightly",
+            canary_commit,
+            _git(nightly, "rev-parse", "HEAD^{commit}"),
+            config,
+        )
+        raise ScenarioError("required shared deletion unexpectedly promoted")
+    except promote_ring.PromotionError as error:
+        if "required shared paths are missing" not in str(error):
+            raise
+        results.append({"name": "required-file-deletion", "status": "blocked"})
 
     grail_root = root / "grail-guard"
     grail_root.mkdir()

@@ -4,6 +4,9 @@
     ".ring/",
     ".github/workflows/"
   ],
+  "required_shared_paths": [
+    "rapp_brainstem/agents/experimental/copilot_research_agent.py"
+  ],
   "rings": [
     {
       "name": "canary",

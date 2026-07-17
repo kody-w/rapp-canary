@@ -259,6 +259,16 @@ def promote(
     lock_path = _safe_lock_path(target)
 
     source_entries = _entries(source, prefixes)
+    required_paths = config.get("required_shared_paths", [])
+    if not isinstance(required_paths, list) or not all(
+        isinstance(item, str) and item for item in required_paths
+    ):
+        raise PromotionError("invalid required_shared_paths")
+    missing_required = sorted(set(required_paths).difference(source_entries))
+    if missing_required:
+        raise PromotionError(
+            "required shared paths are missing: " + ", ".join(missing_required)
+        )
     target_entries = _tracked_shared(target, prefixes)
     _preflight_transition(
         target,
