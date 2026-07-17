@@ -14,7 +14,7 @@
     {
       "from": "kody-w/rapp-installer",
       "to": "kody-w/rapp-canary",
-      "expected_count": 69
+      "expected_count": 68
     },
     {
       "from": "kody-w/rapp-support",
