@@ -187,6 +187,14 @@ def _validate_attestation(value: dict, rings: dict[str, dict]) -> None:
         "shared_sha256",
     }:
         raise AttestationError("invalid attested payload")
+    configured_repository = rings[ring_name].get("repository")
+    if (
+        not isinstance(configured_repository, str)
+        or payload.get("repository") != configured_repository
+    ):
+        raise AttestationError(
+            f"{ring_name} attestation repository does not match train config"
+        )
     for key in ("commit", "tree"):
         if not re.fullmatch(r"[0-9a-f]{40}", str(payload.get(key, ""))):
             raise AttestationError(f"invalid payload {key}")
@@ -222,6 +230,11 @@ def create_attestation(
     ring_owned_prefixes = _ring_owned_prefixes(config)
     if ring_name not in rings:
         raise AttestationError(f"unknown ring: {ring_name}")
+    configured_repository = rings[ring_name].get("repository")
+    if repository != configured_repository:
+        raise AttestationError(
+            f"{ring_name} repository must be {configured_repository}"
+        )
     payload = _payload(
         repo,
         repository,

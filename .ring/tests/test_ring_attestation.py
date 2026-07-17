@@ -239,6 +239,21 @@ class RingAttestationTests(unittest.TestCase):
                 None,
             )
 
+    def test_attestation_repository_is_bound_to_ring_config(self):
+        with self.assertRaisesRegex(
+            RING.AttestationError,
+            "repository must be kody-w/rapp-canary",
+        ):
+            RING.create_attestation(
+                "canary",
+                self.repo,
+                "kody-w/rapp-nightly",
+                self.commit,
+                CONFIG_PATH,
+                self.canary,
+                None,
+            )
+
     def test_verification_rejects_child_with_different_shared_payload(self):
         parent = self._create_canary()
         (self.nightly_repo / "payload.txt").write_text(
@@ -390,6 +405,80 @@ class RingAttestationTests(unittest.TestCase):
             previous = current
             previous_path = output
         self.assertEqual(previous["ring"], "beta")
+
+    def test_automated_promotion_stops_before_grail(self):
+        beta_repo, beta_commit = self.extra_rings["beta"]
+        grail = self.root / "grail"
+        result = subprocess.run(
+            ["git", "clone", "-q", str(self.repo), str(grail)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode:
+            raise AssertionError(result.stderr)
+        _git(
+            grail,
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/kody-w/rapp-installer.git",
+        )
+        grail_commit = _git(grail, "rev-parse", "HEAD^{commit}")
+
+        with self.assertRaisesRegex(
+            PROMOTE.PromotionError,
+            "human-controlled promotion",
+        ):
+            PROMOTE.promote(
+                beta_repo,
+                grail,
+                "beta",
+                "grail",
+                beta_commit,
+                grail_commit,
+                CONFIG_PATH,
+            )
+
+    def test_directory_to_file_transition_is_preflighted(self):
+        (self.repo / "shape").write_text(
+            "now a file\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        _git(self.repo, "add", "shape")
+        _git(self.repo, "commit", "-qm", "source file shape")
+        source_commit = _git(self.repo, "rev-parse", "HEAD^{commit}")
+
+        (self.nightly_repo / "shape").mkdir()
+        (self.nightly_repo / "shape/child.txt").write_text(
+            "old child\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        _git(self.nightly_repo, "add", "shape/child.txt")
+        _git(self.nightly_repo, "commit", "-qm", "target directory shape")
+        target_commit = _git(
+            self.nightly_repo,
+            "rev-parse",
+            "HEAD^{commit}",
+        )
+
+        PROMOTE.promote(
+            self.repo,
+            self.nightly_repo,
+            "canary",
+            "nightly",
+            source_commit,
+            target_commit,
+            CONFIG_PATH,
+        )
+
+        self.assertTrue((self.nightly_repo / "shape").is_file())
+        self.assertEqual(
+            (self.nightly_repo / "shape").read_text(encoding="utf-8"),
+            "now a file\n",
+        )
 
 
 if __name__ == "__main__":

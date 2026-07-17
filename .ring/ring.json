@@ -20,6 +20,16 @@
       "from": "kody-w/rapp-support",
       "to": "kody-w/rapp-canary",
       "expected_count": 4
+    },
+    {
+      "from": "rapp-installer.git",
+      "to": "rapp-canary.git",
+      "expected_count": 1
+    },
+    {
+      "from": "public rapp-installer repo",
+      "to": "public Canary repo",
+      "expected_count": 1
     }
   ],
   "protected_paths": [

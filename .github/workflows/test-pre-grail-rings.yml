@@ -60,18 +60,22 @@ jobs:
             commit: ${{ inputs.beta_commit }}
 
     environment: ${{ matrix.ring }}
+    env:
+      RING_NAME: ${{ matrix.ring }}
+      RING_REPOSITORY: ${{ matrix.repository }}
+      RING_COMMIT: ${{ matrix.commit }}
 
     steps:
       - name: Validate current ring commit
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${{ matrix.commit }}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RING_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           CURRENT=$(git ls-remote \
-            "https://github.com/${{ matrix.repository }}.git" \
+            "https://github.com/$RING_REPOSITORY.git" \
             refs/heads/main | awk '{print $1}')
-          [[ "$CURRENT" == "${{ matrix.commit }}" ]] || {
-            echo "${{ matrix.ring }} input must be its current main commit" >&2
+          [[ "$CURRENT" == "$RING_COMMIT" ]] || {
+            echo "$RING_NAME input must be its current main commit" >&2
             exit 1
           }
 
@@ -88,13 +92,22 @@ jobs:
         run: |
           set -euo pipefail
           git clone --quiet --depth 1 --branch main \
-            "https://github.com/${{ matrix.repository }}.git" \
+            "https://github.com/$RING_REPOSITORY.git" \
             "$RUNNER_TEMP/payload"
-          [[ "$(git -C "$RUNNER_TEMP/payload" rev-parse 'HEAD^{commit}')" == "${{ matrix.commit }}" ]]
+          [[ "$(git -C "$RUNNER_TEMP/payload" rev-parse 'HEAD^{commit}')" == "$RING_COMMIT" ]]
 
-      - name: Run ring tests
+      - name: Render ring-owned URLs
+        run: |
+          python .ring/tools/render_ring.py \
+            --repo "$RUNNER_TEMP/payload" \
+            --config "$RUNNER_TEMP/payload/.ring/ring.json" \
+            --output "$RUNNER_TEMP/rendered" \
+            --report "$RUNNER_TEMP/render.json"
+          grep -Rqs "kody-w/rapp-$RING_NAME" "$RUNNER_TEMP/rendered"
+
+      - name: Run tests against rendered deployment
         shell: bash
-        working-directory: ${{ runner.temp }}/payload
+        working-directory: ${{ runner.temp }}/rendered
         run: |
           set -euo pipefail
           if [[ -f rapp_brainstem/requirements.txt ]]; then
@@ -109,20 +122,16 @@ jobs:
             bash tests/test_installer.sh
           fi
 
-      - name: Render ring-owned URLs
-        run: |
-          python .ring/tools/render_ring.py \
-            --repo "$RUNNER_TEMP/payload" \
-            --config "$RUNNER_TEMP/payload/.ring/ring.json" \
-            --output "$RUNNER_TEMP/rendered" \
-            --report "$RUNNER_TEMP/render.json"
-          grep -Rqs "kody-w/rapp-${{ matrix.ring }}" "$RUNNER_TEMP/rendered"
-
   attest:
     needs:
       - tooling
       - test
     runs-on: ubuntu-latest
+    env:
+      CANARY_COMMIT: ${{ inputs.canary_commit }}
+      NIGHTLY_COMMIT: ${{ inputs.nightly_commit }}
+      ALPHA_COMMIT: ${{ inputs.alpha_commit }}
+      BETA_COMMIT: ${{ inputs.beta_commit }}
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -137,17 +146,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          while read -r RING REPOSITORY COMMIT; do
+          clone_ring() {
+            local ring="$1" repository="$2" commit="$3"
             git clone --quiet --filter=blob:none --no-checkout --branch main \
-              "https://github.com/$REPOSITORY.git" "$RUNNER_TEMP/$RING"
-            git -C "$RUNNER_TEMP/$RING" checkout -q --detach "$COMMIT"
-            git -C "$RUNNER_TEMP/$RING" merge-base --is-ancestor "$COMMIT" origin/main
-          done <<'EOF'
-          canary kody-w/rapp-canary ${{ inputs.canary_commit }}
-          nightly kody-w/rapp-nightly ${{ inputs.nightly_commit }}
-          alpha kody-w/rapp-alpha ${{ inputs.alpha_commit }}
-          beta kody-w/rapp-beta ${{ inputs.beta_commit }}
-          EOF
+              "https://github.com/$repository.git" "$RUNNER_TEMP/$ring"
+            git -C "$RUNNER_TEMP/$ring" checkout -q --detach "$commit"
+            git -C "$RUNNER_TEMP/$ring" merge-base --is-ancestor "$commit" origin/main
+          }
+          clone_ring canary kody-w/rapp-canary "$CANARY_COMMIT"
+          clone_ring nightly kody-w/rapp-nightly "$NIGHTLY_COMMIT"
+          clone_ring alpha kody-w/rapp-alpha "$ALPHA_COMMIT"
+          clone_ring beta kody-w/rapp-beta "$BETA_COMMIT"
 
       - name: Build deterministic attestation chain
         shell: bash
@@ -158,27 +167,27 @@ jobs:
             --ring canary \
             --repo "$RUNNER_TEMP/canary" \
             --repository kody-w/rapp-canary \
-            --commit "${{ inputs.canary_commit }}" \
+            --commit "$CANARY_COMMIT" \
             --attestation "$RUNNER_TEMP/attestations/canary.json"
           python .ring/tools/ring_attestation.py create \
             --ring nightly \
             --repo "$RUNNER_TEMP/nightly" \
             --repository kody-w/rapp-nightly \
-            --commit "${{ inputs.nightly_commit }}" \
+            --commit "$NIGHTLY_COMMIT" \
             --parent "$RUNNER_TEMP/attestations/canary.json" \
             --attestation "$RUNNER_TEMP/attestations/nightly.json"
           python .ring/tools/ring_attestation.py create \
             --ring alpha \
             --repo "$RUNNER_TEMP/alpha" \
             --repository kody-w/rapp-alpha \
-            --commit "${{ inputs.alpha_commit }}" \
+            --commit "$ALPHA_COMMIT" \
             --parent "$RUNNER_TEMP/attestations/nightly.json" \
             --attestation "$RUNNER_TEMP/attestations/alpha.json"
           python .ring/tools/ring_attestation.py create \
             --ring beta \
             --repo "$RUNNER_TEMP/beta" \
             --repository kody-w/rapp-beta \
-            --commit "${{ inputs.beta_commit }}" \
+            --commit "$BETA_COMMIT" \
             --parent "$RUNNER_TEMP/attestations/alpha.json" \
             --attestation "$RUNNER_TEMP/attestations/beta.json"
 

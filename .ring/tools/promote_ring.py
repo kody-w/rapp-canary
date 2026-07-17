@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -113,6 +114,55 @@ def _write_blob(
     )
 
 
+def _preflight_transition(
+    target: Path,
+    source_paths: set[str],
+    target_paths: set[str],
+) -> None:
+    deletions = target_paths.difference(source_paths)
+    for path in sorted(source_paths):
+        destination = target / Path(path)
+        if destination.is_symlink():
+            raise PromotionError(f"target path is a symlink: {path}")
+        if destination.is_file() and path not in target_paths:
+            raise PromotionError(
+                f"refusing to overwrite untracked or ignored file: {path}"
+            )
+        if destination.is_dir():
+            remaining = []
+            for child in destination.rglob("*"):
+                if not child.is_file() and not child.is_symlink():
+                    continue
+                relative = child.relative_to(target).as_posix()
+                if relative not in deletions:
+                    remaining.append(relative)
+            if remaining:
+                raise PromotionError(
+                    f"directory-to-file transition would overwrite: {remaining}"
+                )
+        current = destination.parent
+        while current != target:
+            if current.is_symlink():
+                raise PromotionError(f"target parent is a symlink: {current}")
+            if current.is_file():
+                relative = current.relative_to(target).as_posix()
+                if relative not in deletions:
+                    raise PromotionError(
+                        f"file-to-directory transition would overwrite: {relative}"
+                    )
+            current = current.parent
+
+
+def _remove_empty_parents(path: Path, target: Path) -> None:
+    current = path
+    while current != target:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
+
+
 def promote(
     source: Path,
     target: Path,
@@ -131,6 +181,13 @@ def promote(
         raise PromotionError(
             f"{source_ring} cannot promote directly to {target_ring}"
         )
+    if (
+        not rings[target_ring].get("automated_promotion", False)
+        or rings[target_ring].get("human_merge_required", False)
+    ):
+        raise PromotionError(
+            f"{target_ring} requires an explicit human-controlled promotion"
+        )
     source_repository = rings[source_ring].get("repository")
     target_repository = rings[target_ring].get("repository")
     if not source_repository or not target_repository:
@@ -140,13 +197,22 @@ def promote(
 
     source_entries = _entries(source, prefixes)
     target_entries = _tracked_shared(target, prefixes)
+    _preflight_transition(
+        target,
+        set(source_entries),
+        target_entries,
+    )
     for path in sorted(target_entries.difference(source_entries)):
         destination = target / Path(path)
         if destination.is_symlink() or destination.is_file():
             destination.unlink()
+            _remove_empty_parents(destination.parent, target)
         elif destination.exists():
             raise PromotionError(f"cannot delete non-file shared path: {path}")
     for path, (mode, object_id) in sorted(source_entries.items()):
+        destination = target / Path(path)
+        if destination.is_dir():
+            shutil.rmtree(destination)
         _write_blob(source, target, path, mode, object_id)
 
     shared_sha256 = attestation._payload_tree_sha256(source, prefixes)
