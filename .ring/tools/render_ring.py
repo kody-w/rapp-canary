@@ -51,10 +51,23 @@ def _config(path: Path) -> dict:
             or rule["expected_count"] < 0
         ):
             raise RenderError("invalid ring rewrite rule")
+    protected = value.get("protected_paths")
+    if not isinstance(protected, list) or not all(
+        isinstance(item, str)
+        and item
+        and not item.startswith(("/", "\\"))
+        and ".." not in Path(item).parts
+        for item in protected
+    ):
+        raise RenderError("invalid protected_paths")
     return value
 
 
-def _materialize(repo: Path, output: Path) -> dict[str, str]:
+def _materialize(
+    repo: Path,
+    output: Path,
+    protected_paths: tuple[str, ...],
+) -> dict[str, str]:
     if output.exists() and any(output.iterdir()):
         raise RenderError("render output must be empty")
     output.mkdir(parents=True, exist_ok=True)
@@ -63,7 +76,10 @@ def _materialize(repo: Path, output: Path) -> dict[str, str]:
     for record in (item for item in tree.split("\0") if item):
         metadata, relative = record.split("\t", 1)
         mode, object_type, object_id = metadata.split()
-        if relative == ".ring" or relative.startswith(".ring/"):
+        if any(
+            relative == prefix.rstrip("/") or relative.startswith(prefix)
+            for prefix in protected_paths
+        ):
             continue
         if object_type != "blob" or mode not in {"100644", "100755"}:
             raise RenderError(
@@ -115,7 +131,14 @@ def render(repo: Path, config_path: Path, output: Path) -> dict:
     if status:
         raise RenderError("ring source worktree must be clean")
     config = _config(config_path)
-    modes = _materialize(repo, output)
+    modes = _materialize(
+        repo,
+        output,
+        tuple(
+            item.replace("\\", "/")
+            for item in config["protected_paths"]
+        ),
+    )
     applied = []
     for rule in config["rewrites"]:
         needle = rule["from"].encode("utf-8")

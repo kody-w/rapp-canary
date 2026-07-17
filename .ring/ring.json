@@ -33,6 +33,7 @@
     }
   ],
   "protected_paths": [
-    ".ring/"
+    ".ring/",
+    ".github/workflows/"
   ]
 }
