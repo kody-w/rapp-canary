@@ -3,8 +3,8 @@ import json
 from agents.basic_agent import BasicAgent
 
 
-class VuiAgent(BasicAgent):
-    """The |||VUI||| sense — the Virtual User Interface channel the model drives.
+class HoloAgent(BasicAgent):
+    """The |||HOLO||| sense (rapp-holo/1.0) — the channel the model uses to project interface onto any surface.
 
     The pad (served at /pad) renders up to 8 glowing option keys the user can
     pinch, click, or stare at to select. The model presents choices either by
@@ -14,7 +14,7 @@ class VuiAgent(BasicAgent):
     """
 
     def __init__(self):
-        self.name = 'PresentVuiOptions'
+        self.name = 'ProjectHoloOptions'
         self.metadata = {
             "name": self.name,
             "description": (
@@ -60,19 +60,19 @@ class VuiAgent(BasicAgent):
         options = kwargs.get("options", [])[:8]
         payload = json.dumps({"kind": "options", "prompt": prompt, "options": options})
         return (
-            "VUI options staged. End your response with this exact marker so "
+            "Holo projection staged. End your response with this exact marker so "
             "the gesture pad renders them (after any |||VOICE||| section):\n"
-            f"|||VUI|||{payload}|||"
+            f"|||HOLO|||{payload}|||"
         )
 
     def system_context(self):
         return (
-            "VUI SENSE (Virtual User Interface): the user may be on an adaptive visual surface "
+            "HOLO SENSE (rapp-holo/1.0): the user may be on an adaptive visual surface (a VUI — Virtual User Interface) "
             "that renders tappable option keys. When offering a small set of "
             "choices (next steps, confirmations, menus), append to the very "
-            "end of your response: |||VUI|||{\"prompt\": \"<one short spoken "
+            "end of your response: |||HOLO|||{\"prompt\": \"<one short spoken "
             "sentence>\", \"options\": [{\"label\": \"<under 4 words>\", "
             "\"value\": \"<message sent back when selected>\"}]}||| with 2-8 "
             "options. The marker is invisible to the user; never mention it. "
-            "If a |||VOICE||| section is present, put the VUI marker after it."
+            "If a |||VOICE||| section is present, put the HOLO marker after it."
         )

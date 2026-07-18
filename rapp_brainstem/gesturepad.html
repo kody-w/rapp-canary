@@ -76,7 +76,7 @@
     <div id="leds"><div class="led" id="led-cam"></div><div class="led" id="led-face"></div><div class="led" id="led-hand"></div><div class="led" id="led-srv"></div></div>
     <div id="knob" title="toggle spoken replies">🔊</div>
     <div id="grid">
-      <!-- 8 RGB option slots, filled by the |||VUI||| sense -->
+      <!-- 8 RGB option slots, filled by the |||HOLO||| sense -->
       <div class="key opt empty" data-slot="0"><div class="dot"></div><div class="lab"></div></div>
       <div class="key opt empty" data-slot="1"><div class="dot"></div><div class="lab"></div></div>
       <div class="key opt empty" data-slot="2"><div class="dot"></div><div class="lab"></div></div>
@@ -138,7 +138,7 @@ function drawTunnel(){
 }
 drawTunnel();
 
-/* ───────────────────────── chat plumbing + the VUI sense (Virtual User Interface) ───────────────────────── */
+/* ───────────────────────── chat plumbing + the HOLO sense (rendered by this VUI — Virtual User Interface) ───────────────────────── */
 const feed = $("feed"), promptEl = $("prompt");
 function say(text){
   if (!state.speak || !text) return;
@@ -150,10 +150,10 @@ function say(text){
 function parseSenses(reply){
   let text = reply, voice = null, pad = null;
   const vi = text.indexOf("|||VOICE|||");
-  if (vi >= 0){ voice = text.slice(vi + 11).replace(/\|\|\|VUI\|\|\|[\s\S]*$/,"").trim(); }
-  const pm = text.match(/\|\|\|VUI\|\|\|([\s\S]*?)(\|\|\||$)/);
+  if (vi >= 0){ voice = text.slice(vi + 11).replace(/\|\|\|HOLO\|\|\|[\s\S]*$/,"").trim(); }
+  const pm = text.match(/\|\|\|HOLO\|\|\|([\s\S]*?)(\|\|\||$)/);
   if (pm){ try { pad = JSON.parse(pm[1].trim()); } catch { /* malformed sense — ignore */ } }
-  text = text.replace(/\|\|\|VOICE\|\|\|[\s\S]*$/,"").replace(/\|\|\|VUI\|\|\|[\s\S]*?(\|\|\||$)/,"").trim();
+  text = text.replace(/\|\|\|VOICE\|\|\|[\s\S]*$/,"").replace(/\|\|\|HOLO\|\|\|[\s\S]*?(\|\|\||$)/,"").trim();
   return { text, voice, pad };
 }
 const HUES = [355, 120, 210, 32, 275, 180, 55, 320];
@@ -232,7 +232,7 @@ function press(el){
                       promptEl.textContent = "Cleared. Fresh tunnel."; break;
     case "k-repeat":  say(state.lastSpoken); break;
     case "k-mode":    setDeskMode(!state.deskMode); break;
-    case "k-ask":     send("In two short sentences: what can you do for me right now? Then use the |||VUI||| sense to offer me 4 options of things to try."); break;
+    case "k-ask":     send("In two short sentences: what can you do for me right now? Then use the |||HOLO||| sense to offer me 4 options of things to try."); break;
     case "k-dismiss": showOptions(null); promptEl.textContent = "Options dismissed."; break;
     case "k-talk":    break; // handled by hold logic
   }
