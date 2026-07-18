@@ -644,3 +644,32 @@ class ExistingAgent(BasicAgent):
     assert response.status_code == 200
     assert "previous installation was preserved" in response.get_json()["error"]
     assert path.read_bytes() == previous
+
+
+# ── book.json export gets the same scrub as /diagnostics/report ────────────────
+
+def test_diagnostics_book_export_scrubs_events(client, monkeypatch):
+    """The filename says 'share this with an admin' — its events must go
+    through the same scrub pass the report path uses, not ship raw device
+    codes, session ids, caller IPs, and home paths."""
+    monkeypatch.setattr(bs, "_tlog_save", lambda: None)
+    monkeypatch.setattr(bs, "load_agents", lambda: {})
+    monkeypatch.setattr(bs, "_flight_log", [{
+        "ts": "2026-07-18T00:00:00+00:00",
+        "type": "api.error",
+        "level": "error",
+        "data": {
+            "response_body": '{"device_code":"BOOK_DEVICE_SECRET"}',
+            "api_key": "BOOK_API_SECRET",
+            "email": "person@example.com",
+            "remote": "192.168.1.20",
+            "path": str(bs._BASE_DIR),
+        },
+    }])
+
+    response = client.get("/diagnostics/book.json")
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    for private in ("BOOK_DEVICE_SECRET", "BOOK_API_SECRET",
+                    "person@example.com", "192.168.1.20", str(bs._BASE_DIR)):
+        assert private not in body, f"book.json leaked: {private}"

@@ -2906,6 +2906,7 @@ def voice_config_save():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/voice/export", methods=["POST"])
+@_require_secret
 def voice_export():
     """Generate and return a password-protected voice.zip for download."""
     data = request.get_json(force=True, silent=True)
@@ -3252,19 +3253,27 @@ def diagnostics_export():
     with _flight_log_lock:
         events = list(_flight_log)
 
+    # The filename invites sharing ("share with an admin") — scrub events with
+    # the same pass /diagnostics/report uses so device codes, session ids,
+    # caller IPs, and home paths never leave the machine raw.
+    events = [_scrub_diagnostic_value(event) for event in events]
+
     # Build the book
     github_token = get_github_token()
     book = {
         "title": "RAPP Brainstem Flight Recorder",
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "version": VERSION,
-        "config": {
+        # Scrubbed like events: soul/agents paths carry the user's home dir
+        # (auth_state stays as built — it is already reduced to booleans and a
+        # 4-char prefix, and the key-based scrubber would redact it wholesale).
+        "config": _scrub_diagnostic_value({
             "model": MODEL,
             "soul_path": SOUL_PATH,
             "agents_path": AGENTS_PATH,
             "port": PORT,
             "voice_mode": VOICE_MODE,
-        },
+        }),
         "auth_state": {
             "github_token_exists": github_token is not None,
             "github_token_prefix": github_token[:4] + "..." if github_token else None,

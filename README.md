@@ -51,7 +51,7 @@ The brainstem is a Flask server that connects to GitHub Copilot's API for LLM in
 ├── brainstem.py       # the server
 ├── soul.md            # personality (system prompt)
 ├── agents/            # auto-discovered tools
-│   └── hello_agent.py
+│   └── hacker_news_agent.py
 ├── local_storage.py   # local-first storage shim
 └── .env               # config (model, paths, port)
 ```
@@ -83,9 +83,9 @@ class WeatherAgent(BasicAgent):
         return f"It's sunny in {city}!"
 ```
 
-### Connect Remote Agent Repos
+### Install Community Agents
 
-The chat UI has a **Sources** panel — paste any GitHub repo URL with an `agents/` folder and the brainstem hot-loads them. Missing pip dependencies are auto-installed.
+The chat UI has a **community agent browser** (RAR — the RAPP Agent Registry): browse the pinned registry and install agents with one click. Every install is SHA-256-verified against the pinned registry revision before any code lands in `agents/`. Missing pip dependencies are auto-installed.
 
 ---
 
@@ -131,7 +131,7 @@ All config via `.env` (see `.env.example`):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GITHUB_TOKEN` | auto-detected via `gh` | GitHub PAT or Copilot token |
-| `GITHUB_MODEL` | `gpt-4o` | Model ([GitHub Models](https://github.com/marketplace/models)) |
+| `GITHUB_MODEL` | `auto` | `auto` picks the best model your account offers (highest Claude Haiku, else Sonnet, else `gpt-4o`); or pin a specific id |
 | `SOUL_PATH` | `./soul.md` | Path to your soul file |
 | `AGENTS_PATH` | `./agents` | Path to your agents directory |
 | `PORT` | `7071` | Server port |
@@ -144,7 +144,6 @@ All config via `.env` (see `.env.example`):
 | `/health` | GET | Status, model, loaded agents, token state |
 | `/login` | POST | Start GitHub device code OAuth flow |
 | `/models` | GET | List available models |
-| `/repos` | GET | List connected agent repos |
 
 ## Requirements
 

@@ -92,9 +92,8 @@ Returns server status, loaded agents, model, and auth state.
   "version": "0.1.0",
   "model": "gpt-4o",
   "soul": "./soul.md",
-  "agents": ["HelloAgent", "HackerNewsAgent"],
-  "copilot": "✓",
-  "endpoint": "https://api.individual.githubcopilot.com"
+  "agents": ["ContextMemory", "HackerNewsAgent", "ManageMemory"],
+  "copilot": "✓"
 }
 ```
 
