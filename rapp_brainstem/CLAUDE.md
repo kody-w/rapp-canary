@@ -29,7 +29,7 @@ No build step, linter, or type checker is configured.
 
 ## Architecture
 
-**Entry point:** `brainstem.py` — a single-file Flask server (~2,000 lines) that handles auth, chat, agent orchestration, and the web UI.
+**Entry point:** `brainstem.py` — a single-file Flask server (~3,500 lines) that handles auth, chat, agent orchestration, and the web UI.
 
 **Request flow (POST /chat):**
 1. Load `soul.md` (system prompt) and fresh-discover agents from `agents/`
@@ -58,7 +58,7 @@ No build step, linter, or type checker is configured.
 | `local_storage.py` | Local shim for Azure File Storage |
 | `soul.md` | Default system prompt loaded every request |
 | `index.html` | Built-in web UI served at `/` |
-| `VERSION` | Semantic version string (currently 0.6.14) |
+| `VERSION` | Semantic version string (bumped in each release commit) |
 | `CONSTITUTION.md` | Governance doc defining what belongs in this repo |
 
 ## Writing Agents

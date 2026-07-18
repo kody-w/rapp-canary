@@ -28,14 +28,14 @@ cd rapp_brainstem && ./start.sh
 # Direct run (assumes deps installed)
 cd rapp_brainstem && python brainstem.py
 
-# Run all tests
-cd rapp_brainstem && python3 -m pytest test_local_agents.py -v
+# Run all tests (use the install venv's python — system python3 may lack Flask)
+cd rapp_brainstem && ~/.brainstem/venv/bin/python -m pytest tests/ -v
 
 # Run a single test
-cd rapp_brainstem && python3 -m pytest test_local_agents.py::TestLocalStorage::test_write_and_read -v
+cd rapp_brainstem && ~/.brainstem/venv/bin/python -m pytest tests/test_local_agents.py::TestLocalStorage::test_write_and_read -v
 
 # Run a single test class
-cd rapp_brainstem && python3 -m pytest test_local_agents.py::TestShimRegistration -v
+cd rapp_brainstem && ~/.brainstem/venv/bin/python -m pytest tests/test_local_agents.py::TestShimRegistration -v
 
 # Health check (server must be running)
 curl -s localhost:7071/health | python3 -m json.tool
@@ -58,7 +58,7 @@ Each tier is self-contained. Users advance when they choose to.
 
 ## Brainstem Server (rapp_brainstem/)
 
-**Single-file server**: All logic lives in `brainstem.py` (~2,000 lines) — auth, routing, LLM calls, agent orchestration. Keep it that way.
+**Single-file server**: All logic lives in `brainstem.py` (~3,500 lines) — auth, routing, LLM calls, agent orchestration. Keep it that way.
 
 **Request flow (POST /chat)**: Load soul.md -> discover agents from `agents/*_agent.py` -> call Copilot API with tools -> execute tool calls via agent `.perform()` -> loop up to 3 rounds -> return response.
 
@@ -68,7 +68,7 @@ Each tier is self-contained. Users advance when they choose to.
 
 **Import shims**: `_register_shims()` injects `sys.modules` so agents written for CommunityRAPP (cloud) work locally — `utils.azure_file_storage` maps to `local_storage.py`.
 
-**Memory agents**: `ManageMemory` and `ContextMemory` get special handling — `user_guid` arg is stripped, and `/chat` auto-injects `<memory>` context if ContextMemory is loaded.
+**Memory agents**: `ManageMemory` and `ContextMemory` get special handling — `run_tool_calls` strips the `user_guid` arg (one local user; a model-invented guid would silo the memory where injection can't see it), and `/chat` injects `<memory>` context via ContextMemory's `system_context()` hook. Pinned by `tests/test_memory_injection.py`.
 
 ## Branching and Release Model
 
