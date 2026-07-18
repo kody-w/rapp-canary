@@ -149,6 +149,29 @@ if compgen -G "$TARGET/.sync/patches/*.patch" > /dev/null; then
     done
 fi
 
+# ---- keep the soul manifest honest after rewrites ----
+# The mechanical rewrite legitimately alters soul.md (community_rapp URLs), so
+# its normalized hash no longer matches any entry in the synced manifest and
+# the soul-defaults test would fail downstream. Record the rewritten soul.
+if [ -f "$TARGET/rapp_brainstem/soul.md" ] && [ -f "$TARGET/rapp_brainstem/tests/soul_hash.py" ]; then
+    SOUL_HASH=$(python3 - "$TARGET" <<'PYEOF'
+import sys, importlib.util
+target = sys.argv[1]
+spec = importlib.util.spec_from_file_location(
+    "soul_hash", f"{target}/rapp_brainstem/tests/soul_hash.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with open(f"{target}/rapp_brainstem/soul.md", "rb") as handle:
+    print(module.normalized_sha256_bytes(handle.read()))
+PYEOF
+)
+    SOUL_MANIFEST="$TARGET/rapp_brainstem/tests/soul_defaults.sha256"
+    if [ -f "$SOUL_MANIFEST" ] && ! grep -q "$SOUL_HASH" "$SOUL_MANIFEST"; then
+        printf '%s  # soul.md after downstream URL rewrite (sync-to-aibast)\n' "$SOUL_HASH" >> "$SOUL_MANIFEST"
+        say "  ${GREEN}\xe2\x9c\x93${NC} soul manifest updated for the rewritten soul.md"
+    fi
+fi
+
 # ---- guard: no stray upstream identity left in synced files ----
 LEAKS=$(cd "$TARGET" && grep -l "kody-w/rapp-installer\|kody-w.github.io/rapp-installer" \
         "${SYNCED_TEXT[@]}" 2>/dev/null || true)
