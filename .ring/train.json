@@ -1,0 +1,49 @@
+{
+  "schema": "rapp-release-train/1",
+  "ring_owned_prefixes": [
+    ".ring/",
+    ".github/workflows/"
+  ],
+  "required_shared_paths": [
+    "rapp_brainstem/agents/experimental/copilot_research_agent.py"
+  ],
+  "rings": [
+    {
+      "name": "canary",
+      "parent": null,
+      "repository": "kody-w/rapp-canary",
+      "automated_promotion": true
+    },
+    {
+      "name": "nightly",
+      "parent": "canary",
+      "repository": "kody-w/rapp-nightly",
+      "automated_promotion": true
+    },
+    {
+      "name": "alpha",
+      "parent": "nightly",
+      "repository": "kody-w/rapp-alpha",
+      "automated_promotion": true
+    },
+    {
+      "name": "beta",
+      "parent": "alpha",
+      "repository": "kody-w/rapp-beta",
+      "automated_promotion": true
+    },
+    {
+      "name": "grail",
+      "parent": "beta",
+      "repository": "kody-w/rapp-installer",
+      "automated_promotion": false,
+      "human_merge_required": true
+    }
+  ],
+  "gates_not_rings": [
+    "security-and-license",
+    "cross-platform-installer",
+    "manual-approval",
+    "rollback-readiness"
+  ]
+}

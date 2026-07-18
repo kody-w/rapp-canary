@@ -1,0 +1,85 @@
+name: Autonomous Pre-Grail Matrix
+
+on:
+  push:
+    branches:
+      - setup/ring-overlay
+    paths:
+      - ".ring/**"
+      - ".github/workflows/autonomous-pre-grail.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autonomous-pre-grail
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RAPP_RING_REF: ${{ github.ref_name == 'setup/ring-overlay' && 'setup/ring-overlay' || 'main' }}
+
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: python -m pip install --quiet -r rapp_brainstem/requirements-dev.txt
+
+      - name: Test ring tooling
+        run: python -m unittest discover .ring/tests -v
+
+      - name: Run autonomous feature and failure matrix
+        run: |
+          python .ring/tools/autonomous_test.py \
+            --python "$(command -v python)" \
+            --bash "$(command -v bash)" \
+            --json-output "$RUNNER_TEMP/AUTONOMOUS_TEST_REPORT.json" \
+            --markdown-output "$RUNNER_TEMP/AUTONOMOUS_TEST_REPORT.md"
+
+  evidence:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RAPP_RING_REF: ${{ github.ref_name == 'setup/ring-overlay' && 'setup/ring-overlay' || 'main' }}
+
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Rebuild evidence without executing candidate code
+        run: |
+          python .ring/tools/autonomous_test.py \
+            --evidence-only \
+            --python "$(command -v python)" \
+            --bash "$(command -v bash)" \
+            --json-output "$RUNNER_TEMP/AUTONOMOUS_TEST_REPORT.json" \
+            --markdown-output "$RUNNER_TEMP/AUTONOMOUS_TEST_REPORT.md"
+
+      - name: Publish trusted report
+        run: cat "$RUNNER_TEMP/AUTONOMOUS_TEST_REPORT.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: autonomous-pre-grail-report
+          path: |
+            ${{ runner.temp }}/AUTONOMOUS_TEST_REPORT.json
+            ${{ runner.temp }}/AUTONOMOUS_TEST_REPORT.md
+          if-no-files-found: warn

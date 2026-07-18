@@ -1,0 +1,263 @@
+name: Test Pre-Grail Rings
+
+on:
+  workflow_dispatch:
+    inputs:
+      canary_commit:
+        description: Exact current Canary main commit
+        required: true
+        type: string
+      nightly_commit:
+        description: Exact current Nightly main commit
+        required: true
+        type: string
+      alpha_commit:
+        description: Exact current Alpha main commit
+        required: true
+        type: string
+      beta_commit:
+        description: Exact current Beta main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pre-grail-${{ inputs.canary_commit }}-${{ inputs.beta_commit }}
+  cancel-in-progress: false
+
+jobs:
+  tooling:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - run: python -m unittest discover .ring/tests -v
+
+  test:
+    needs: tooling
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ring: canary
+            repository: kody-w/rapp-canary
+            commit: ${{ inputs.canary_commit }}
+          - ring: nightly
+            repository: kody-w/rapp-nightly
+            commit: ${{ inputs.nightly_commit }}
+          - ring: alpha
+            repository: kody-w/rapp-alpha
+            commit: ${{ inputs.alpha_commit }}
+          - ring: beta
+            repository: kody-w/rapp-beta
+            commit: ${{ inputs.beta_commit }}
+
+    environment: ${{ matrix.ring }}
+    env:
+      RING_NAME: ${{ matrix.ring }}
+      RING_REPOSITORY: ${{ matrix.repository }}
+      RING_COMMIT: ${{ matrix.commit }}
+
+    steps:
+      - name: Validate current ring commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RING_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          CURRENT=$(git ls-remote \
+            "https://github.com/$RING_REPOSITORY.git" \
+            refs/heads/main | awk '{print $1}')
+          [[ "$CURRENT" == "$RING_COMMIT" ]] || {
+            echo "$RING_NAME input must be its current main commit" >&2
+            exit 1
+          }
+
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Deploy exact ring payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 --branch main \
+            "https://github.com/$RING_REPOSITORY.git" \
+            "$RUNNER_TEMP/payload"
+          [[ "$(git -C "$RUNNER_TEMP/payload" rev-parse 'HEAD^{commit}')" == "$RING_COMMIT" ]]
+
+      - name: Run unmodified source test oracles
+        shell: bash
+        working-directory: ${{ runner.temp }}/payload
+        run: |
+          set -euo pipefail
+          if [[ -f rapp_brainstem/requirements.txt ]]; then
+            python -m pip install --quiet -r rapp_brainstem/requirements.txt pytest
+          fi
+          if [[ -d rapp_brainstem/tests ]]; then
+            python -m pytest rapp_brainstem/tests -q
+          elif compgen -G 'rapp_brainstem/test*.py' >/dev/null; then
+            (cd rapp_brainstem && python -m pytest test*.py -q)
+          fi
+          if [[ -f tests/test_installer.sh ]]; then
+            bash tests/test_installer.sh
+          fi
+
+  render:
+    needs:
+      - tooling
+      - test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ring: canary
+            repository: kody-w/rapp-canary
+            commit: ${{ inputs.canary_commit }}
+          - ring: nightly
+            repository: kody-w/rapp-nightly
+            commit: ${{ inputs.nightly_commit }}
+          - ring: alpha
+            repository: kody-w/rapp-alpha
+            commit: ${{ inputs.alpha_commit }}
+          - ring: beta
+            repository: kody-w/rapp-beta
+            commit: ${{ inputs.beta_commit }}
+    env:
+      RING_NAME: ${{ matrix.ring }}
+      RING_REPOSITORY: ${{ matrix.repository }}
+      RING_COMMIT: ${{ matrix.commit }}
+
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Reclone exact ring payload
+        run: |
+          git clone --quiet --depth 1 --branch main \
+            "https://github.com/$RING_REPOSITORY.git" "$RUNNER_TEMP/payload"
+          [[ "$(git -C "$RUNNER_TEMP/payload" rev-parse 'HEAD^{commit}')" == "$RING_COMMIT" ]]
+
+      - name: Render and smoke-test ring deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .ring/tools/render_ring.py \
+            --repo "$RUNNER_TEMP/payload" \
+            --config "$RUNNER_TEMP/payload/.ring/ring.json" \
+            --output "$RUNNER_TEMP/rendered" \
+            --report "$RUNNER_TEMP/render.json"
+          grep -Rqs "kody-w/rapp-$RING_NAME" "$RUNNER_TEMP/rendered"
+          python -m pip install --quiet \
+            -r "$RUNNER_TEMP/rendered/rapp_brainstem/requirements.txt"
+          (cd "$RUNNER_TEMP/rendered/rapp_brainstem" && \
+            python -m py_compile brainstem.py && \
+            python -c "import brainstem; r=brainstem.app.test_client().get('/health'); assert r.status_code == 200")
+          bash -n "$RUNNER_TEMP/rendered/install.sh"
+          cmp "$RUNNER_TEMP/rendered/install.sh" "$RUNNER_TEMP/rendered/docs/install.sh"
+
+  attest:
+    needs:
+      - tooling
+      - test
+      - render
+    runs-on: ubuntu-latest
+    env:
+      CANARY_COMMIT: ${{ inputs.canary_commit }}
+      NIGHTLY_COMMIT: ${{ inputs.nightly_commit }}
+      ALPHA_COMMIT: ${{ inputs.alpha_commit }}
+      BETA_COMMIT: ${{ inputs.beta_commit }}
+
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Reclone exact commits without executing candidate code
+        shell: bash
+        run: |
+          set -euo pipefail
+          clone_ring() {
+            local ring="$1" repository="$2" commit="$3"
+            git clone --quiet --filter=blob:none --no-checkout --branch main \
+              "https://github.com/$repository.git" "$RUNNER_TEMP/$ring"
+            git -C "$RUNNER_TEMP/$ring" checkout -q --detach "$commit"
+            git -C "$RUNNER_TEMP/$ring" merge-base --is-ancestor "$commit" origin/main
+          }
+          clone_ring canary kody-w/rapp-canary "$CANARY_COMMIT"
+          clone_ring nightly kody-w/rapp-nightly "$NIGHTLY_COMMIT"
+          clone_ring alpha kody-w/rapp-alpha "$ALPHA_COMMIT"
+          clone_ring beta kody-w/rapp-beta "$BETA_COMMIT"
+
+      - name: Build deterministic attestation chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/attestations"
+          python .ring/tools/ring_attestation.py create \
+            --ring canary \
+            --repo "$RUNNER_TEMP/canary" \
+            --repository kody-w/rapp-canary \
+            --commit "$CANARY_COMMIT" \
+            --attestation "$RUNNER_TEMP/attestations/canary.json"
+          python .ring/tools/ring_attestation.py create \
+            --ring nightly \
+            --repo "$RUNNER_TEMP/nightly" \
+            --repository kody-w/rapp-nightly \
+            --commit "$NIGHTLY_COMMIT" \
+            --parent "$RUNNER_TEMP/attestations/canary.json" \
+            --attestation "$RUNNER_TEMP/attestations/nightly.json"
+          python .ring/tools/ring_attestation.py create \
+            --ring alpha \
+            --repo "$RUNNER_TEMP/alpha" \
+            --repository kody-w/rapp-alpha \
+            --commit "$ALPHA_COMMIT" \
+            --parent "$RUNNER_TEMP/attestations/nightly.json" \
+            --attestation "$RUNNER_TEMP/attestations/alpha.json"
+          python .ring/tools/ring_attestation.py create \
+            --ring beta \
+            --repo "$RUNNER_TEMP/beta" \
+            --repository kody-w/rapp-beta \
+            --commit "$BETA_COMMIT" \
+            --parent "$RUNNER_TEMP/attestations/alpha.json" \
+            --attestation "$RUNNER_TEMP/attestations/beta.json"
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: pre-grail-attestations-${{ inputs.beta_commit }}
+          path: ${{ runner.temp }}/attestations/*.json
+
+      - name: Mark Beta eligible for human Grail review
+        shell: bash
+        run: |
+          DIGEST=$(python -c \
+            "import json; print(json.load(open('$RUNNER_TEMP/attestations/beta.json'))['payload']['shared_sha256'])")
+          {
+            echo "## Pre-Grail qualification passed"
+            echo
+            echo "- Canary → Nightly → Alpha → Beta used shared payload \`$DIGEST\`."
+            echo "- Each ring ran unmodified source tests plus rendered runtime/installer smoke."
+            echo "- Qualification evidence was rebuilt after tests in a clean job."
+            echo "- No Grail credentials were available."
+            echo "- Next action: human review only."
+          } >> "$GITHUB_STEP_SUMMARY"
