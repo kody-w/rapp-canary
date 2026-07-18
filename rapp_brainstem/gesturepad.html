@@ -164,6 +164,9 @@ function showOptions(pad){
     el.classList.toggle("empty", !o);
     el.style.setProperty("--glow", o ? `hsl(${HUES[i]},85%,60%)` : "#888");
     el.querySelector(".lab").textContent = o ? o.label : "";
+    // spec §3.6: the exact value must be inspectable before selection —
+    // native tooltip on hover; dwell/gaze users see it during the dwell ring.
+    el.title = o ? `sends: ${o.value ?? o.label}` : "";
   });
   if (pad && pad.prompt){ promptEl.textContent = pad.prompt; say(pad.prompt); }
 }

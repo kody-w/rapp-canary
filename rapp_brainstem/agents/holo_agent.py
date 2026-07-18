@@ -70,7 +70,7 @@ class HoloAgent(BasicAgent):
             "HOLO SENSE (rapp-holo/1.0): the user may be on an adaptive visual surface (a VUI — Virtual User Interface) "
             "that renders tappable option keys. When offering a small set of "
             "choices (next steps, confirmations, menus), append to the very "
-            "end of your response: |||HOLO|||{\"prompt\": \"<one short spoken "
+            "end of your response: |||HOLO|||{\"kind\": \"options\", \"prompt\": \"<one short spoken "
             "sentence>\", \"options\": [{\"label\": \"<under 4 words>\", "
             "\"value\": \"<message sent back when selected>\"}]}||| with 2-8 "
             "options. The marker is invisible to the user; never mention it. "
