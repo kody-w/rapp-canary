@@ -46,9 +46,8 @@ class ContextMemoryAgent(BasicAgent):
     def system_context(self):
         """Inject stored memories into the system prompt each turn."""
         try:
-            memories = self._recall_context(
-                max_messages=SYSTEM_CONTEXT_MESSAGES, keywords=[], full_recall=True)
-            if "don't have any memories" in memories or "No memories" in memories:
+            memories = self._recall_for_injection()
+            if memories is None:
                 return None
             if len(memories) > SYSTEM_CONTEXT_CHARS:
                 memories = memories[:SYSTEM_CONTEXT_CHARS].rsplit("\n", 1)[0]
@@ -86,6 +85,42 @@ class ContextMemoryAgent(BasicAgent):
             value = 10
         return max(1, min(MAX_RECALL_MESSAGES, value))
 
+    @staticmethod
+    def _format_memory_line(memory):
+        # Every stored field is untrusted text headed for the system prompt —
+        # json.dumps-escape ALL of them (not just message) so a crafted theme,
+        # date, or time can't smuggle newlines that break out of the <memory>
+        # fence system_context wraps around this output.
+        message = str(memory.get('message', ''))[:MAX_MEMORY_CONTENT_CHARS]
+        content = json.dumps(message, ensure_ascii=False)
+        theme = json.dumps(str(memory.get('theme', 'Unknown'))[:100], ensure_ascii=False)
+        date = str(memory.get('date', ''))
+        time_str = str(memory.get('time', ''))
+        if date and time_str:
+            recorded = json.dumps(f"{date} {time_str}"[:64], ensure_ascii=False)
+            return (f"- Memory content (verbatim): {content} "
+                    f"(Theme: {theme}, Recorded: {recorded})")
+        return f"- Memory content (verbatim): {content} (Theme: {theme})"
+
+    def _recall_for_injection(self):
+        """Formatted recent memories for system_context, or None when empty.
+
+        Emptiness is signalled structurally (None), never by sniffing the
+        human-facing strings _recall_context returns — stored memory content
+        can legitimately contain those exact phrases.
+        """
+        memory_data = self.storage_manager.read_json()
+        if not isinstance(memory_data, dict) or not memory_data:
+            return None
+        legacy_memories = [
+            value for value in memory_data.values()
+            if isinstance(value, dict) and 'message' in value
+        ]
+        if not legacy_memories:
+            return None
+        return self._format_legacy_memories(
+            legacy_memories, SYSTEM_CONTEXT_MESSAGES, [], full_recall=True)
+
     def _recall_context(self, max_messages, keywords, full_recall=False):
         memory_data = self.storage_manager.read_json()
 
@@ -121,20 +156,7 @@ class ContextMemoryAgent(BasicAgent):
                 key=lambda x: (x.get('date') or '', x.get('time') or ''),
                 reverse=True
             )[:max_messages]
-            memory_lines = []
-            for memory in sorted_memories:
-                message = str(memory.get('message', ''))[:MAX_MEMORY_CONTENT_CHARS]
-                theme = str(memory.get('theme', 'Unknown'))[:100]
-                date = memory.get('date', '')
-                time_str = memory.get('time', '')
-                content = json.dumps(message, ensure_ascii=False)
-                if date and time_str:
-                    memory_lines.append(
-                        f"- Memory content (verbatim): {content} "
-                        f"(Theme: {theme}, Recorded: {date} {time_str})")
-                else:
-                    memory_lines.append(
-                        f"- Memory content (verbatim): {content} (Theme: {theme})")
+            memory_lines = [self._format_memory_line(m) for m in sorted_memories]
 
             if not memory_lines:
                 return "No memories found."
@@ -159,20 +181,7 @@ class ContextMemoryAgent(BasicAgent):
             reverse=True
         )[:max_messages]
 
-        memory_lines = []
-        for memory in memories:
-            message = str(memory.get('message', ''))[:MAX_MEMORY_CONTENT_CHARS]
-            theme = str(memory.get('theme', 'Unknown'))[:100]
-            date = memory.get('date', '')
-            time_str = memory.get('time', '')
-            content = json.dumps(message, ensure_ascii=False)
-            if date and time_str:
-                memory_lines.append(
-                    f"- Memory content (verbatim): {content} "
-                    f"(Theme: {theme}, Recorded: {date} {time_str})")
-            else:
-                memory_lines.append(
-                    f"- Memory content (verbatim): {content} (Theme: {theme})")
+        memory_lines = [self._format_memory_line(m) for m in memories]
 
         if not memory_lines:
             return "No matching memories found."

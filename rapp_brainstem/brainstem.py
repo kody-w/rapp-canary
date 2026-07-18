@@ -2173,6 +2173,17 @@ def call_copilot_stream(messages, tools=None, model=None):
 # ── Agent execution ───────────────────────────────────────────────────────────
 
 
+# Memory agents are cloud-parity code whose user_guid parameter partitions
+# storage per user. Locally there is exactly one user: a model-invented guid
+# would silo the memory in a per-guid store that ContextMemory.system_context
+# (which reads the shared store) can never surface again. Strip it so every
+# memory lands where injection finds it. Documented in the root CLAUDE.md.
+_MEMORY_AGENT_STRIP_ARGS = {
+    "ManageMemory": ("user_guid",),
+    "ContextMemory": ("user_guid",),
+}
+
+
 def run_tool_calls(tool_calls, agents, session_id=None):
     results = []
     logs = []
@@ -2200,6 +2211,9 @@ def run_tool_calls(tool_calls, agents, session_id=None):
                 "content": result
             })
             continue
+
+        for strip_arg in _MEMORY_AGENT_STRIP_ARGS.get(fn_name, ()):
+            args.pop(strip_arg, None)
 
         print(f"[brainstem] {fn_name} args: {json.dumps(args)[:200]}")
 
