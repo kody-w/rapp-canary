@@ -3,8 +3,8 @@ import json
 from agents.basic_agent import BasicAgent
 
 
-class GesturePadAgent(BasicAgent):
-    """The |||PAD||| sense — lets the model drive the gesture pad UI.
+class VuiAgent(BasicAgent):
+    """The |||VUI||| sense — the Virtual User Interface channel the model drives.
 
     The pad (served at /pad) renders up to 8 glowing option keys the user can
     pinch, click, or stare at to select. The model presents choices either by
@@ -14,7 +14,7 @@ class GesturePadAgent(BasicAgent):
     """
 
     def __init__(self):
-        self.name = 'PresentPadOptions'
+        self.name = 'PresentVuiOptions'
         self.metadata = {
             "name": self.name,
             "description": (
@@ -58,21 +58,21 @@ class GesturePadAgent(BasicAgent):
     def perform(self, **kwargs):
         prompt = kwargs.get("prompt", "Pick one.")
         options = kwargs.get("options", [])[:8]
-        payload = json.dumps({"prompt": prompt, "options": options})
+        payload = json.dumps({"kind": "options", "prompt": prompt, "options": options})
         return (
-            "Pad options staged. End your response with this exact marker so "
+            "VUI options staged. End your response with this exact marker so "
             "the gesture pad renders them (after any |||VOICE||| section):\n"
-            f"|||PAD|||{payload}|||"
+            f"|||VUI|||{payload}|||"
         )
 
     def system_context(self):
         return (
-            "GESTURE PAD SENSE: the user may be on a hands-free gesture UI "
+            "VUI SENSE (Virtual User Interface): the user may be on an adaptive visual surface "
             "that renders tappable option keys. When offering a small set of "
             "choices (next steps, confirmations, menus), append to the very "
-            "end of your response: |||PAD|||{\"prompt\": \"<one short spoken "
+            "end of your response: |||VUI|||{\"prompt\": \"<one short spoken "
             "sentence>\", \"options\": [{\"label\": \"<under 4 words>\", "
             "\"value\": \"<message sent back when selected>\"}]}||| with 2-8 "
             "options. The marker is invisible to the user; never mention it. "
-            "If a |||VOICE||| section is present, put the PAD marker after it."
+            "If a |||VOICE||| section is present, put the VUI marker after it."
         )
