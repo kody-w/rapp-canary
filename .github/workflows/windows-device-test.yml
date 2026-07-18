@@ -46,11 +46,11 @@ jobs:
     defaults:
       run:
         shell: powershell   # Windows PowerShell 5.1 — what real users run
-    env:
-      SANDBOX_HOME: ${{ runner.temp }}\device-sandbox\home
     steps:
       - uses: actions/checkout@v4
 
+      # runner context is NOT valid in job-level env — sandbox path is minted
+      # here and passed via GITHUB_ENV instead.
       - name: preconditions — tools present, port 7071 free
         run: |
           $ErrorActionPreference = 'Stop'
@@ -65,7 +65,9 @@ jobs:
             Write-Host "::error::port 7071 is busy on the battlestation (a real brainstem running?). Stop it, then re-run this workflow."
             exit 1
           }
-          New-Item -ItemType Directory -Force -Path $env:SANDBOX_HOME | Out-Null
+          $sandbox = "$env:RUNNER_TEMP\device-sandbox\home"
+          New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value "SANDBOX_HOME=$sandbox"
 
       - name: run the REAL installer inside the sandboxed profile
         run: |
@@ -128,15 +130,19 @@ jobs:
       - name: teardown — kill sandbox processes, delete sandbox
         if: always()
         run: |
-          Get-CimInstance Win32_Process |
-            Where-Object { $_.CommandLine -and $_.CommandLine -like "*$env:SANDBOX_HOME*" } |
-            ForEach-Object {
-              Write-Host "killing $($_.ProcessId) $($_.Name)"
-              Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-            }
-          Start-Sleep -Seconds 2
-          Remove-Item -Recurse -Force (Split-Path $env:SANDBOX_HOME) -ErrorAction SilentlyContinue
-          if (Test-Path $env:SANDBOX_HOME) { Write-Host '::warning::sandbox not fully removed' }
+          # Guard: with no SANDBOX_HOME the -like pattern would be "**" and
+          # match every process on the machine.
+          if ($env:SANDBOX_HOME) {
+            Get-CimInstance Win32_Process |
+              Where-Object { $_.CommandLine -and $_.CommandLine -like "*$env:SANDBOX_HOME*" } |
+              ForEach-Object {
+                Write-Host "killing $($_.ProcessId) $($_.Name)"
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+              }
+            Start-Sleep -Seconds 2
+            Remove-Item -Recurse -Force (Split-Path $env:SANDBOX_HOME) -ErrorAction SilentlyContinue
+            if (Test-Path $env:SANDBOX_HOME) { Write-Host '::warning::sandbox not fully removed' }
+          }
 
       - uses: actions/upload-artifact@v4
         if: always()
