@@ -104,6 +104,37 @@ advisory: battlestation offline ⇒ the run queues (auto-cancel in 24h) and
 never blocks promotion. Canary is where the leg lives — everything enters at
 canary, and later rings receive attested copies of the same payload.
 
+### Any device, on demand, reported into an issue
+
+The battlestation generalizes to a fleet: register any tailnet machine
+(`--os macos`/`linux` prints a bash block instead of PowerShell):
+
+```bash
+.ring/tools/register_device_runner.sh --device rappter-one --os macos
+.ring/tools/register_device_runner.sh --device battlestation --os windows all
+```
+
+Then ANY agent (Copilot, Claude) or human fires a device test with one
+command — this line is the whole interface an agent needs to know:
+
+```bash
+gh workflow run device-test.yml -R kody-w/rapp-canary \
+  -f device=rappter-one -f report_issue=42    # report_issue optional — reporting is OFF by default
+```
+
+or, from inside a GitHub issue (collaborators only — the run rocket-reacts to
+ack, then posts the verdict back to the same thread):
+
+```
+/device-test rappter-one
+```
+
+`device-test.yml` resolves the device label, runs the real installer sandboxed
+on that machine (PowerShell 5.1 path or unix path per `runner.os`), tears the
+sandbox down, and — only when an issue is in play — comments the verdict + run
+link. It never triggers on pull_request. The workflow is ring-owned: copy the
+file to another ring repo to give that ring its own fleet surface.
+
 ## 5. RELEASE TO GRAIL (the only human-gated step)
 
 ```bash
