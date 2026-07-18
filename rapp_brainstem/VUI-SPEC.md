@@ -5,9 +5,16 @@ Build fresh from this spec. Iterate WITH a visual loop (screenshot each change),
 because this is a look-and-feel artifact that cannot be nailed blind.
 
 ## What it is
-The **Virtual UI**: a spatial, hands-free way to talk to a RAPP Brainstem.
+The **Virtual UI**: a spatial, **hands-free** way to talk to a RAPP Brainstem.
 Not a keypad. An immersive 3D scene with a living AI presence you speak to,
-that answers with destinations you enter by **gaze + pinch, voice, or mouse**.
+that answers with destinations you enter by **gaze + pinch** (and voice).
+
+## THE POINT IS THE GESTURE. Everything else is secondary.
+Face/eye tracking moves the cursor; a **hand pinch selects**. That interaction —
+look at a portal, pinch to enter — IS the product. Nail that feel first and
+alone. **No iframes, no back-button/history, no frame stacks — forget all of it.**
+Mouse is only the fallback menu. Build and tune the gesture loop until it feels
+effortless, then add voice and the rest.
 
 ## References (match this quality bar)
 - **NexusWorlds** (kody-w/localFirstTools/NexusWorlds.html) — immersive Three.js
@@ -41,9 +48,7 @@ that answers with destinations you enter by **gaze + pinch, voice, or mouse**.
 8. **First Interview guided loop** — spotlight + coach card + pulse leads the user
    end to end through the modalities (speak → choose a portal → go hands-free →
    barge-in → the living form → back-button time-travel). Teaches, highlights, guides.
-9. **Back-button time-travel** via the **History API** (`pushState`/`popstate`),
-   **never nested iframes** (they collapse by ~4 deep — one camera, one loop).
-   Back rewinds the conversation AND the form together.
+9. **No frames, no history/back-button, no rewind.** Dropped — do not build it.
 10. **Static demo == live shape.** The page always `POST`s `/chat` and reads
     `data.response`. A REMOVABLE "static brainstem" shim intercepts `fetch` and
     returns the identical shape from canned tour data. Delete the shim / pass
