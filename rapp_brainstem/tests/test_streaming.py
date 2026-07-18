@@ -17,7 +17,9 @@ import json
 import unittest
 from unittest import mock
 
-BRAINSTEM_DIR = os.path.dirname(os.path.abspath(__file__))
+# brainstem.py lives one level up from tests/ — point the standalone runner
+# there (pytest runs get this from conftest.py; this is for `python test_streaming.py`).
+BRAINSTEM_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BRAINSTEM_DIR not in sys.path:
     sys.path.insert(0, BRAINSTEM_DIR)
 

@@ -6,7 +6,15 @@ Runs two ways:
     python  test_model_selection.py                  # standalone (no pytest needed)
 """
 import os
+import sys
 import tempfile
+
+# brainstem.py lives one level up from tests/ — point the standalone runner
+# there (pytest runs get this from conftest.py).
+_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+
 import brainstem as bs
 
 
