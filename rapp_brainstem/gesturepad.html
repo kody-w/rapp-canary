@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RAPP Gesture Pad</title>
+<title>RAPP VUI</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html,body { height:100%; background:#05060a; color:#e8e8f0; font-family:-apple-system,"Segoe UI",sans-serif; overflow:hidden; }
@@ -70,9 +70,9 @@
 <body>
 <canvas id="tunnel"></canvas>
 <div id="stage">
-  <div id="prompt">Pinch, point, or stare — the pad listens.</div>
+  <div id="prompt">The VUI adapts to you — pinch, point, stare, or speak.</div>
   <div id="pad">
-    <span class="silk tl">RAPP · Gesture Pad</span><span class="silk br">Let's build</span>
+    <span class="silk tl">RAPP · VUI</span><span class="silk br">Let's build</span>
     <div id="leds"><div class="led" id="led-cam"></div><div class="led" id="led-face"></div><div class="led" id="led-hand"></div><div class="led" id="led-srv"></div></div>
     <div id="knob" title="toggle spoken replies">🔊</div>
     <div id="grid">
@@ -106,8 +106,8 @@ const qs = new URLSearchParams(location.search);
 const BASE = qs.get("server")
   || (location.protocol.startsWith("http") ? location.origin : "http://localhost:7071");
 const $ = id => document.getElementById(id);
-const state = { mode:"boot", history:[], lastSpoken:"", options:[], depth:0,
-                speak:true, deskMode:false, pinch:false, hoverKey:null, dwellStart:0 };
+const state = { mode:"boot", history:[], lastSpoken:"", options:[], depth:0, busy:false,
+                speak:true, deskMode:false, pinch:false, hoverKey:null, dwellStart:0, dwellFired:false };
 
 /* ───────────────────────── the tunnel (state-reactive, restrained) ───────────────────────── */
 const tun = $("tunnel"), tctx = tun.getContext("2d");
@@ -168,7 +168,8 @@ function showOptions(pad){
   if (pad && pad.prompt){ promptEl.textContent = pad.prompt; say(pad.prompt); }
 }
 async function send(text){
-  if (!text) return;
+  if (!text || state.busy) return;
+  state.busy = true;
   feed.insertAdjacentHTML("beforeend", `<div class="u">▸ ${text}</div>`);
   feed.scrollTop = feed.scrollHeight;
   setMood("thinking"); promptEl.textContent = "…";
@@ -177,7 +178,8 @@ async function send(text){
       body: JSON.stringify({ user_input:text, conversation_history:state.history }) });
     const data = await res.json();
     const raw = data.assistant_response ?? data.response ?? data.error ?? JSON.stringify(data);
-    const { text:clean, voice, pad } = parseSenses(String(raw));
+    let { text:clean, voice, pad } = parseSenses(String(raw));
+    if (!clean) clean = voice || (pad && pad.prompt) || "(options below)";
     state.history.push({ role:"user", content:text }, { role:"assistant", content:String(raw) });
     state.depth++;
     feed.insertAdjacentHTML("beforeend", `<div class="a">${clean.replace(/</g,"&lt;")}</div>`);
@@ -187,10 +189,12 @@ async function send(text){
     if (!pad || !pad.prompt) promptEl.textContent = "Ready.";
     say(voice || clean.split(/(?<=[.!?])\s/).slice(0,2).join(" "));
     if (!voice && !state.speak) setMood("idle");
+    state.busy = false;
   } catch (e){
     $("led-srv").className = "led warn";
     promptEl.textContent = `no brainstem at ${BASE} — is it running?`;
     setMood("idle");
+    state.busy = false;
   }
 }
 
@@ -215,6 +219,7 @@ function talkEnd(){
 
 /* ───────────────────────── key actions ───────────────────────── */
 function press(el){
+  if (state.busy && el.id !== "k-mode" && el.id !== "k-dismiss"){ return; }
   el.classList.add("pressed"); setTimeout(() => el.classList.remove("pressed"), 160);
   if (el.classList.contains("opt")){
     const o = state.options[+el.dataset.slot];
@@ -250,7 +255,7 @@ function moveCursor(x, y){
   const el = document.elementFromPoint(x, y)?.closest(".key");
   if (el !== state.hoverKey){
     state.hoverKey?.classList.remove("hover");
-    state.hoverKey = el; state.dwellStart = performance.now();
+    state.hoverKey = el; state.dwellStart = performance.now(); state.dwellFired = false;
     el?.classList.add("hover");
   }
 }
@@ -262,11 +267,13 @@ function pinchUp(){
   if (!state.pinch) return; state.pinch = false; cursor.classList.remove("pinch");
   if (state.hoverKey){ state.hoverKey.id === "k-talk" ? talkEnd() : press(state.hoverKey); }
 }
-setInterval(() => {  // dwell = stare-to-select (never on the talk key)
-  if (!state.hoverKey || state.pinch || state.hoverKey.id === "k-talk"){ dwellCircle.style.strokeDashoffset = 113; return; }
+setInterval(() => {  // dwell = stare-to-select, ONCE per key-entry (never on the talk key)
+  if (!state.hoverKey || state.pinch || state.busy || state.dwellFired || state.hoverKey.id === "k-talk"){
+    dwellCircle.style.strokeDashoffset = 113; return;
+  }
   const t = (performance.now() - state.dwellStart) / 1100;
   dwellCircle.style.strokeDashoffset = Math.max(0, 113 * (1 - t));
-  if (t >= 1){ press(state.hoverKey); state.dwellStart = performance.now() + 600; }
+  if (t >= 1){ state.dwellFired = true; press(state.hoverKey); }
 }, 50);
 
 /* ───────────────────────── desk mode (no camera needed) ───────────────────────── */

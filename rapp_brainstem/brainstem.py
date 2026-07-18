@@ -2796,6 +2796,7 @@ def index():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
 
 
+@app.route("/vui")
 @app.route("/pad")
 def gesture_pad():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "gesturepad.html")
