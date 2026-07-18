@@ -24,6 +24,12 @@ gh run watch                             # green -> merge to canary main
 git checkout main && git pull && git merge --no-ff fix/whatever && git push
 ```
 
+**If your change adds/removes grail-URL occurrences** (`kody-w/rapp-installer`,
+its Pages host, or `kody-w/rapp-support`), the render oracle will refuse with
+`rewrite count drift`. That is deliberate — recount and bump `expected_count`
+in **all four** rings' `.ring/ring.json` in the same cycle (the counts are
+payload-wide, so they match across rings).
+
 **Grail hotfix re-seed** (run the moment a hotfix lands on grail main):
 
 ```bash
