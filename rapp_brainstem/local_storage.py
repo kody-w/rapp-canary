@@ -7,19 +7,41 @@ Data lives in .brainstem_data/ next to this file.
 """
 
 import os
+import re
 import json
 import tempfile
 import threading
 import hashlib
+from datetime import datetime
+from pathlib import Path
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".brainstem_data")
 _path_locks = {}
 _path_locks_guard = threading.Lock()
-_WINDOWS_RESERVED_STEMS = {
-    "CON", "PRN", "AUX", "NUL",
-    *(f"COM{index}" for index in range(1, 10)),
-    *(f"LPT{index}" for index in range(1, 10)),
-}
+
+# CommunityRAPP's user-context contract: only a strict GUID gets a per-user
+# store; anything else falls back to shared memory (see set_memory_context).
+_GUID_RE = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    re.IGNORECASE,
+)
+
+
+class _FileEntry(str):
+    """A directory listing entry that satisfies BOTH client styles: cloud-ported
+    agents read `.name` (Azure SDK objects), pre-parity local agents treat
+    entries as plain strings (`"x.txt" in list_files(...)`)."""
+
+    is_directory = False
+
+    def __new__(cls, name, is_directory=False):
+        obj = super().__new__(cls, name)
+        obj.is_directory = is_directory
+        return obj
+
+    @property
+    def name(self):
+        return str(self)
 
 
 def _safe_join(*parts):
@@ -76,22 +98,7 @@ def _lock_for(path):
         return _path_locks.setdefault(key, threading.RLock())
 
 
-def _memory_context_component(user_guid):
-    """Return a user identifier only when it is one literal path component."""
-    if not isinstance(user_guid, str):
-        raise ValueError("user_guid must be a string")
-    component = user_guid
-    if (
-        component in {"", ".", ".."}
-        or component.endswith((".", " "))
-        or any(char in '<>:"/\\|?*' or ord(char) < 32 for char in component)
-        or component.split(".", 1)[0].upper() in _WINDOWS_RESERVED_STEMS
-    ):
-        raise ValueError("user_guid must be a single path component")
-    return component
-
-
-def _atomic_write(path, write_fn):
+def _atomic_write(path, write_fn, binary=False):
     """Write via a temp file in the same directory + os.replace, so a crash or a
     concurrent reader never sees a half-written (and on the next write, silently
     wiped) file. write_fn receives the open file handle."""
@@ -100,7 +107,9 @@ def _atomic_write(path, write_fn):
     fd, tmp = tempfile.mkstemp(
         prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        mode = "wb" if binary else "w"
+        encoding = None if binary else "utf-8"
+        with os.fdopen(fd, mode, encoding=encoding) as f:
             write_fn(f)
             f.flush()
             os.fsync(f.fileno())
@@ -148,18 +157,29 @@ class AzureFileStorageManager:
 
     # ── Context ───────────────────────────────────────────────────────────
 
-    def set_memory_context(self, user_guid=None):
-        """Set the memory context — matches CommunityRAPP's set_memory_context."""
-        if user_guid is None or user_guid == "" or user_guid == self.DEFAULT_MARKER_GUID:
+    def set_memory_context(self, guid=None, user_guid=None):
+        """Set the memory context — CommunityRAPP's exact contract: falsy or the
+        default marker → shared (True); anything that is not a strict GUID →
+        fall back to shared and return False, NEVER raise. The strict GUID
+        format also guarantees a single safe path component, so a traversal
+        attempt ('a/../b') lands in shared memory, not another user's store.
+
+        The cloud names this parameter `guid`; the pre-parity local shim said
+        `user_guid` — accept both keyword spellings."""
+        if guid is None and user_guid is not None:
+            guid = user_guid
+        if not guid or guid == self.DEFAULT_MARKER_GUID:
             self.current_guid = None
             self.current_memory_path = self.shared_memory_path
             return True
 
-        _memory_context_component(user_guid)
+        if not isinstance(guid, str) or not _GUID_RE.match(guid):
+            self.current_guid = None
+            self.current_memory_path = self.shared_memory_path
+            return False
 
-        # Valid GUID — set up user-specific path (memory/{guid})
-        self.current_guid = user_guid
-        self.current_memory_path = os.path.join(self.storage_root, "memory", str(user_guid))
+        self.current_guid = guid
+        self.current_memory_path = os.path.join(self.storage_root, "memory", guid)
         return True
 
     # ── Core I/O ──────────────────────────────────────────────────────────
@@ -168,11 +188,11 @@ class AzureFileStorageManager:
         """Return the absolute path for the current memory file.
         Shared:  .brainstem_data/shared_memories/memory.json
         User:    .brainstem_data/memory/{guid}/user_memory.json
-        A malicious user_guid (e.g. '../../') is contained by _safe_join.
+        current_guid is regex-validated by set_memory_context; _safe_join
+        contains it anyway (defense in depth).
         """
         if self.current_guid:
-            context = _memory_context_component(self.current_guid)
-            rel = os.path.join(self.storage_root, "memory", context, "user_memory.json")
+            rel = os.path.join(self.storage_root, "memory", self.current_guid, "user_memory.json")
         else:
             rel = os.path.join(self.shared_memory_path, self.default_file_name)
         path = _safe_join(rel)
@@ -215,36 +235,151 @@ class AzureFileStorageManager:
             _atomic_write(path, lambda f: json.dump(updated, f, indent=2, default=str))
             return updated
 
-    # ── Convenience methods used by some agents ───────────────────────────
+    # ── File API — CommunityRAPP signatures ───────────────────────────────
+    # Cloud shape: op(directory_name, file_name[, content]) — what every RAR
+    # registry agent calls. The pre-parity local shape op(file_path[, content])
+    # is still accepted (detected by arity) so user-authored agents from older
+    # installs keep working. Cloud error contract: log-and-return failure
+    # values (False/None/[]), never raise.
 
-    def read_file(self, file_path):
-        full = self._scoped_path(file_path)
-        if not os.path.exists(full):
-            return None
-        with open(full, "r", encoding="utf-8") as f:
-            return f.read()
+    _BINARY_EXTENSIONS = (
+        '.pptx', '.docx', '.xlsx', '.pdf', '.zip',
+        '.jpg', '.png', '.gif', '.jpeg', '.webp',
+    )
 
-    def write_file(self, file_path, content):
-        full = self._scoped_path(file_path)
-        with _lock_for(full):
-            _atomic_write(full, lambda f: f.write(content))
-        return True
+    def _entry_path(self, directory_name, file_name):
+        if file_name is None:
+            return self._scoped_path(directory_name)  # legacy single-path form
+        return self._scoped_path(os.path.join(str(directory_name), str(file_name)))
 
-    def list_files(self, directory=""):
-        full = self._scoped_path(directory)
-        if not os.path.exists(full):
-            return []
-        return os.listdir(full)
-
-    def delete_file(self, file_path):
-        full = self._scoped_path(file_path)
-        if os.path.exists(full):
-            os.remove(full)
-            return True
-        return False
-
-    def file_exists(self, file_path):
+    def ensure_directory_exists(self, directory_name):
+        """Create a (possibly nested) directory under the data root."""
+        if not directory_name:
+            return False
         try:
-            return os.path.exists(self._scoped_path(file_path))
+            _ensure_private_dir(self._scoped_path(directory_name))
+            return True
+        except (ValueError, OSError) as e:
+            print(f"[local_storage] ensure_directory_exists failed: {e}")
+            return False
+
+    def read_file(self, directory_name, file_name=None):
+        """Text content, bytes for known-binary extensions, None when missing."""
+        try:
+            full = self._entry_path(directory_name, file_name)
+            if not os.path.exists(full):
+                return None
+            name = file_name if file_name is not None else directory_name
+            if str(name).lower().endswith(self._BINARY_EXTENSIONS):
+                with open(full, "rb") as f:
+                    return f.read()
+            with open(full, "rb") as f:
+                raw = f.read()
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return raw
+        except (ValueError, OSError) as e:
+            print(f"[local_storage] read_file failed: {e}")
+            return None
+
+    def read_file_binary(self, directory_name, file_name=None):
+        try:
+            full = self._entry_path(directory_name, file_name)
+            if not os.path.exists(full):
+                return None
+            with open(full, "rb") as f:
+                return f.read()
+        except (ValueError, OSError) as e:
+            print(f"[local_storage] read_file_binary failed: {e}")
+            return None
+
+    def write_file(self, directory_name, file_name, content=None):
+        # Legacy two-arg form: write_file(file_path, content).
+        if content is None:
+            directory_name, file_name, content = "", directory_name, file_name
+        try:
+            full = self._entry_path(directory_name, file_name)
+            # Mirror the cloud's content coercion: bytes pass through, file-like
+            # objects are drained, everything else goes through str().
+            if isinstance(content, (bytes, bytearray)):
+                data = bytes(content)
+            elif hasattr(content, "read") and callable(content.read):
+                content.seek(0)
+                data = content.read()
+                if not isinstance(data, (bytes, bytearray)):
+                    data = str(data).encode("utf-8")
+            else:
+                data = str(content).encode("utf-8")
+            with _lock_for(full):
+                _atomic_write(full, lambda f: f.write(data), binary=True)
+            return True
+        except (ValueError, OSError) as e:
+            print(f"[local_storage] write_file failed: {e}")
+            return False
+
+    def list_files(self, directory_name="", auto_create=True):
+        """Entries carry .name (cloud style) and compare as strings (legacy)."""
+        try:
+            full = self._scoped_path(directory_name)
+            if not os.path.exists(full):
+                if auto_create and directory_name:
+                    self.ensure_directory_exists(directory_name)
+                return []
+            return [
+                _FileEntry(name, is_directory=os.path.isdir(os.path.join(full, name)))
+                for name in os.listdir(full)
+            ]
+        except (ValueError, OSError) as e:
+            print(f"[local_storage] list_files failed: {e}")
+            return []
+
+    def delete_file(self, directory_name, file_name=None):
+        try:
+            full = self._entry_path(directory_name, file_name)
+            if os.path.exists(full):
+                os.remove(full)
+                return True
+            return False
+        except (ValueError, OSError) as e:
+            print(f"[local_storage] delete_file failed: {e}")
+            return False
+
+    def file_exists(self, directory_name, file_name=None):
+        try:
+            return os.path.exists(self._entry_path(directory_name, file_name))
         except ValueError:
             return False
+
+    def get_file_properties(self, directory_name, file_name=None):
+        try:
+            full = self._entry_path(directory_name, file_name)
+            if not os.path.exists(full):
+                return None
+            st = os.stat(full)
+            return {
+                'name': str(file_name if file_name is not None
+                            else os.path.basename(str(directory_name))),
+                'size': st.st_size,
+                'content_type': None,
+                'last_modified': datetime.fromtimestamp(st.st_mtime),
+                'etag': None,
+            }
+        except (ValueError, OSError) as e:
+            print(f"[local_storage] get_file_properties failed: {e}")
+            return None
+
+    def generate_download_url(self, directory, filename, expiry_minutes=30):
+        """No URL service locally — return a file:// URI when the file exists,
+        None otherwise (cloud returns None on failure too)."""
+        try:
+            full = self._entry_path(directory, filename)
+            if not os.path.exists(full):
+                return None
+            return Path(full).as_uri()
+        except (ValueError, OSError):
+            return None
+
+    def refresh_credentials(self):
+        """Cloud re-authenticates here; local storage has no credentials."""
+        return None
