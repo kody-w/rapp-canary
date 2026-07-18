@@ -1,0 +1,8 @@
+{
+  "schema": "rapp-flight/1",
+  "name": "voice-first",
+  "port": 7081,
+  "description": "Voice-first brainstem: mic input (browser STT), spoken replies, hands-free conversation loop — zero extra keys",
+  "env": {"VOICE_MODE": "true"},
+  "base_commit": "a6d5fe05c08c"
+}

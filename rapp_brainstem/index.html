@@ -4317,5 +4317,127 @@
     }
   })();
 </script>
+<script>
+  // ══ FLIGHT: voice-first (see FLIGHT.json) ═══════════════════════════════
+  // Experimental — this block exists ONLY on the flight/voice-first branch.
+  // Everything is additive: one injected mic button, browser SpeechRecognition
+  // for input, and a hands-free loop that re-opens the mic after each spoken
+  // reply. TTS output rides the EXISTING voice stack (speakText + VOICE_MODE,
+  // forced on by the flight's env), so no server changes are needed.
+  (function () {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const input = document.getElementById('input');
+    const sendBtn = document.getElementById('send');
+    const row = document.querySelector('.input-row');
+    if (!input || !sendBtn || !row) return;
+
+    document.head.insertAdjacentHTML('beforeend', `<style id="vf-css">
+      #vf-mic { min-width: 44px; border: 1px solid #30363d; border-radius: 8px;
+        background: #21262d; color: #e6edf3; cursor: pointer; font-size: 16px; }
+      #vf-mic.listening { background: #238636; border-color: #2ea043;
+        animation: vf-pulse 1.2s ease-in-out infinite; }
+      #vf-mic[disabled] { opacity: .4; cursor: not-allowed; }
+      @keyframes vf-pulse { 50% { box-shadow: 0 0 0 6px rgba(46,160,67,.25); } }
+      #vf-badge { position: fixed; top: 6px; left: 50%; transform: translateX(-50%);
+        z-index: 40; font-size: 11px; color: #8b949e; background: #161b22cc;
+        border: 1px solid #30363d; border-radius: 999px; padding: 2px 10px;
+        display: flex; gap: 8px; align-items: center; }
+      #vf-badge label { cursor: pointer; display: flex; gap: 4px; align-items: center; }
+      body.light-mode #vf-mic { background: #f6f8fa; color: #1f2328; border-color: #d0d7de; }
+      body.light-mode #vf-badge { background: #ffffffcc; color: #57606a; border-color: #d0d7de; }
+    </style>`);
+
+    const mic = document.createElement('button');
+    mic.id = 'vf-mic';
+    mic.setAttribute('aria-label', 'Speak your message');
+    mic.textContent = '🎤';
+    row.insertBefore(mic, sendBtn);
+
+    const badge = document.createElement('div');
+    badge.id = 'vf-badge';
+    badge.innerHTML = '🎙 voice-first flight <label><input type="checkbox" id="vf-handsfree"> hands-free</label>';
+    document.body.appendChild(badge);
+    const handsFreeBox = document.getElementById('vf-handsfree');
+    handsFreeBox.checked = (safeGet('vf_handsfree') ?? '1') === '1';
+    handsFreeBox.addEventListener('change', () => safeSet('vf_handsfree', handsFreeBox.checked ? '1' : '0'));
+
+    if (!SR) {
+      mic.disabled = true;
+      mic.title = 'Speech recognition is not supported in this browser (try Chrome, Edge, or Safari)';
+      return;
+    }
+
+    let rec = null, listening = false, finalText = '';
+
+    function startListening() {
+      if (listening) return;
+      rec = new SR();
+      rec.lang = navigator.language || 'en-US';
+      rec.interimResults = true;
+      rec.continuous = false;
+      finalText = '';
+      rec.onresult = (e) => {
+        let interim = '';
+        for (const res of e.results) {
+          if (res.isFinal) finalText += res[0].transcript;
+          else interim += res[0].transcript;
+        }
+        input.value = (finalText + ' ' + interim).trim();
+      };
+      rec.onend = () => {
+        listening = false;
+        mic.classList.remove('listening');
+        mic.textContent = '🎤';
+        if (finalText.trim()) {
+          input.value = finalText.trim();
+          sendBtn.click();  // exact same path as a typed message
+        }
+      };
+      rec.onerror = (e) => {
+        listening = false;
+        mic.classList.remove('listening');
+        mic.textContent = '🎤';
+        if (e.error === 'not-allowed') mic.title = 'Microphone permission denied — allow it in the browser bar';
+      };
+      listening = true;
+      mic.classList.add('listening');
+      mic.textContent = '⏺';
+      rec.start();
+    }
+
+    function stopListening() {
+      if (rec && listening) rec.stop();
+    }
+
+    mic.addEventListener('click', () => (listening ? stopListening() : startListening()));
+
+    // Hands-free loop: when a spoken reply finishes, re-open the mic. We wrap
+    // the EXISTING global speakText (called on every voiced reply) and wait for
+    // both browser synthesis and provider audio to go quiet before listening —
+    // otherwise the mic would transcribe the assistant's own voice.
+    const origSpeak = window.speakText;
+    if (typeof origSpeak === 'function') {
+      window.speakText = async function (text, force) {
+        const result = await origSpeak.call(this, text, force);
+        if (handsFreeBox.checked && !listening) {
+          // Browser-TTS quiet detection (the flight's zero-key default). The
+          // Azure/ElevenLabs audio object is module-scoped and unreachable
+          // from here, so provider users get a length-based grace instead.
+          const started = Date.now();
+          const graceMs = Math.min(20000, 1200 + (String(text || '').length * 55));
+          const quiet = () => !window.speechSynthesis.speaking && !window.speechSynthesis.pending
+            && Date.now() - started > graceMs;
+          const wait = setInterval(() => {
+            if (quiet() || Date.now() - started > 120000) {
+              clearInterval(wait);
+              if (quiet() && handsFreeBox.checked && !listening) startListening();
+            }
+          }, 300);
+        }
+        return result;
+      };
+    }
+  })();
+</script>
 </body>
 </html>
