@@ -256,6 +256,22 @@ def promote(
         raise PromotionError("both rings require repository identities")
     _validate_repo(source, source_repository, source_commit)
     _validate_repo(target, target_repository, target_commit)
+
+    # Experimental-flight poison pill (SOP.md §4): flight/* branches carry a
+    # FLIGHT.json marker at the repo root. A flight must NEVER ride a promotion
+    # — if the marker is in the source tree, someone merged a flight into the
+    # ring main (or is promoting from a flight checkout). Refuse loudly.
+    flight_probe = subprocess.run(
+        ["git", "-C", str(source), "cat-file", "-e", f"{source_commit}:FLIGHT.json"],
+        capture_output=True,
+        check=False,
+    )
+    if flight_probe.returncode == 0:
+        raise PromotionError(
+            "source tree contains FLIGHT.json — an experimental flight can never "
+            "be promoted. If this is ring main, a flight branch was merged by "
+            "mistake: revert the merge on the ring first (see SOP.md §4)."
+        )
     lock_path = _safe_lock_path(target)
 
     source_entries = _entries(source, prefixes)

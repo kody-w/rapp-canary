@@ -99,6 +99,33 @@ existing `~/.brainstem`. IMPORTANT: never point anyone at a ring repo's
 design and would install the wrong repo; the Pages copies are the only
 correct ring one-liners.
 
+### Any device, zero-config, reported into an issue
+
+Real-device testing is PULL-based: no runner registration, no tailnet
+linkage, nothing to configure. On ANY machine with internet — a fresh VM, a
+spare laptop, the battlestation — one line does the whole job:
+
+```bash
+curl -sL https://raw.githubusercontent.com/kody-w/rapp-canary/main/.ring/tools/device_probe.sh \
+  | bash -s -- --ring canary --report-issue 42
+```
+
+That line is the entire interface: hand it to Copilot (or any agent) on the
+device and it needs no other context. The probe pulls the ring, runs the REAL
+installer inside a throwaway sandbox HOME, runs the full test suite plus live
+health/chat asserts, prints a findings report, and — only when
+`--report-issue` is given — posts it to that issue on the ring repo with
+`gh`. Reporting is OFF by default. `--ring nightly|alpha|beta` picks the
+ring; `--ref flight/<name>` tests a flight; `--keep` preserves the sandbox.
+It REFUSES to run when :7071 is busy (the installer kills existing
+listeners — a probe must never execute that against a real brainstem).
+
+Blow the VM away afterwards — nothing outside `/tmp` is touched. (A
+self-hosted-runner "push mode" was built and retired in favor of this: rings
+are installable everywhere via the Flight Deck one-liners, so devices pull
+tests; nothing needs to be enrolled. Windows devices use the Flight Deck's
+`irm | iex` one-liners; a PowerShell probe twin is future work.)
+
 ## 5. RELEASE TO GRAIL (the only human-gated step)
 
 ```bash
