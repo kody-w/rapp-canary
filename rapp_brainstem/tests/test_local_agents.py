@@ -46,16 +46,21 @@ class TestLocalStorage(unittest.TestCase):
         result = mgr.read_json()
         self.assertEqual(result, data)
 
+    # NOTE: set_memory_context follows CommunityRAPP's contract (strict GUID
+    # or fall back to shared, never raise) — tests/test_shim_parity.py pins it.
+    # The tests here only cover behavior specific to the LOCAL disk layout.
+
     def test_user_context_isolation(self):
         from local_storage import AzureFileStorageManager
         mgr = AzureFileStorageManager()
+        user = "0f1e2d3c-4b5a-6978-8695-a4b3c2d1e0f9"
 
         # Write to shared
         mgr.set_memory_context(None)
         mgr.write_json({"shared": True})
 
         # Write to user-specific
-        mgr.set_memory_context("user-abc")
+        mgr.set_memory_context(user)
         mgr.write_json({"user": True})
 
         # Read shared — should not contain user data
@@ -63,44 +68,26 @@ class TestLocalStorage(unittest.TestCase):
         self.assertEqual(mgr.read_json(), {"shared": True})
 
         # Read user-specific
-        mgr.set_memory_context("user-abc")
+        mgr.set_memory_context(user)
         self.assertEqual(mgr.read_json(), {"user": True})
 
-    def test_user_context_rejects_path_aliases(self):
+    def test_user_context_traversal_cannot_reach_another_users_store(self):
         from local_storage import AzureFileStorageManager
 
+        owner = "0f1e2d3c-4b5a-6978-8695-a4b3c2d1e0f9"
         manager = AzureFileStorageManager()
-        manager.set_memory_context("b")
+        manager.set_memory_context(owner)
         manager.write_json({"owner": "b"})
-
-        with self.assertRaisesRegex(ValueError, "single path component"):
-            manager.set_memory_context("a/../b")
-
-        manager.set_memory_context("b")
-        self.assertEqual(manager.read_json(), {"owner": "b"})
-
-    def test_user_context_rejects_non_string_identifiers(self):
-        from local_storage import AzureFileStorageManager
-
-        manager = AzureFileStorageManager()
+        manager.set_memory_context(None)
         manager.write_json({"shared": True})
 
-        for user_guid in (0, 123, False):
-            with self.subTest(user_guid=user_guid):
-                with self.assertRaisesRegex(ValueError, "must be a string"):
-                    manager.set_memory_context(user_guid)
-
-        manager.set_memory_context(None)
+        # A traversal alias is not a valid GUID → shared fallback, owner's
+        # store untouched and unreadable through the alias.
+        self.assertFalse(manager.set_memory_context(f"x/../{owner}"))
         self.assertEqual(manager.read_json(), {"shared": True})
 
-    def test_user_context_rejects_windows_path_aliases(self):
-        from local_storage import AzureFileStorageManager
-
-        manager = AzureFileStorageManager()
-        for user_guid in ("user.", "user ", "CON", "con.txt", "COM1", "name:stream"):
-            with self.subTest(user_guid=user_guid):
-                with self.assertRaisesRegex(ValueError, "single path component"):
-                    manager.set_memory_context(user_guid)
+        manager.set_memory_context(owner)
+        self.assertEqual(manager.read_json(), {"owner": "b"})
 
     def test_named_shares_are_isolated(self):
         from local_storage import AzureFileStorageManager
@@ -121,9 +108,10 @@ class TestLocalStorage(unittest.TestCase):
 
     def test_set_memory_context(self):
         from local_storage import AzureFileStorageManager
+        guid = "0f1e2d3c-4b5a-6978-8695-a4b3c2d1e0f9"
         mgr = AzureFileStorageManager()
-        mgr.set_memory_context("guid-123")
-        self.assertEqual(mgr.current_guid, "guid-123")
+        mgr.set_memory_context(guid)
+        self.assertEqual(mgr.current_guid, guid)
         mgr.set_memory_context(None)
         self.assertIsNone(mgr.current_guid)
 

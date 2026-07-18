@@ -595,8 +595,10 @@ def test_storage_blocks_traversal(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         local_storage._safe_join("../../etc/passwd")
     m = local_storage.AzureFileStorageManager()
-    with pytest.raises(ValueError):
-        m.set_memory_context("../../escape")
+    # Cloud contract (test_shim_parity.py): a non-GUID never raises — it falls
+    # back to shared memory, so the traversal string never becomes a path.
+    assert m.set_memory_context("../../escape") is False
+    assert m.current_guid is None
 
 
 def test_storage_blocks_symlink_escape(tmp_path, monkeypatch):
