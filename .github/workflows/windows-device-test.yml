@@ -1,0 +1,146 @@
+# windows-device-test.yml — the train's REAL-WINDOWS leg (ring-owned, never
+# promoted to Grail).
+#
+# GitHub's windows-latest VMs are clean-room; Kody's battlestation is the truth:
+# real home network, real Defender/AV, real Windows PowerShell 5.1, whatever
+# Python/git the machine actually has. This workflow runs the REAL advertised
+# install path — the ring's installer cloning the ring repo over the real
+# internet — on that hardware, via the self-hosted runner registered by
+# .ring/tools/register_battlestation_runner.sh.
+#
+# SECURITY MODEL: the runner is repo-scoped and this workflow never triggers on
+# pull_request, so fork code can never reach the machine — only pushes to main
+# and manual dispatches by a repo writer.
+#
+# OFFLINE SEMANTICS: battlestation asleep ⇒ the run queues (GitHub auto-cancels
+# after 24h). The leg is advisory evidence for QUALIFY/SOAK — it never blocks
+# the promotion train.
+#
+# ISOLATION: the install runs under a sandboxed USERPROFILE/HOME inside
+# RUNNER_TEMP, so the battlestation's real ~/.brainstem (if any) is untouched;
+# teardown kills every sandbox process and deletes the sandbox. APPDATA is left
+# real on purpose: if the machine has `gh` authenticated, the brainstem's auth
+# chain finds it and the leg exercises REAL Copilot auth (soak-grade signal);
+# if not, it exercises the graceful unauthenticated path. Both are asserted.
+
+name: windows-device
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One physical machine — never two installs at once. A running test finishes
+# (teardown must complete); queued duplicates collapse to the newest.
+concurrency:
+  group: battlestation
+  cancel-in-progress: false
+
+jobs:
+  device:
+    runs-on: [self-hosted, windows, battlestation]
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell   # Windows PowerShell 5.1 — what real users run
+    env:
+      SANDBOX_HOME: ${{ runner.temp }}\device-sandbox\home
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: preconditions — tools present, port 7071 free
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git --version
+          # Runner service runs as NETWORK SERVICE by default: python/git must be
+          # on the MACHINE PATH (all-users installs). If this step can't find
+          # them, either reinstall for all users or point the service at your
+          # user account in services.msc ("GitHub Actions Runner").
+          python --version
+          $busy = Get-NetTCPConnection -LocalPort 7071 -State Listen -ErrorAction SilentlyContinue
+          if ($busy) {
+            Write-Host "::error::port 7071 is busy on the battlestation (a real brainstem running?). Stop it, then re-run this workflow."
+            exit 1
+          }
+          New-Item -ItemType Directory -Force -Path $env:SANDBOX_HOME | Out-Null
+
+      - name: run the REAL installer inside the sandboxed profile
+        run: |
+          # Same execution path as `irm | iex` and the same cmd-file-redirection
+          # launch preflight.yml proved out (Start-Process handle redirection
+          # hangs consoleless descendants). Env inheritance carries the sandbox
+          # USERPROFILE/HOME into every descendant — installer, pip, server.
+          $env:USERPROFILE = $env:SANDBOX_HOME
+          $env:HOME = $env:SANDBOX_HOME
+          $boot = "iex (Get-Content -Raw -Encoding UTF8 '$PWD\install.ps1')"
+          $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($boot))
+          Start-Process cmd -ArgumentList '/c', "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc > `"$env:RUNNER_TEMP\install.log`" 2>&1"
+
+      - name: wait for a serving brainstem, then assert
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $deadline = (Get-Date).AddMinutes(15)
+          $health = $null
+          while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            try { $health = Invoke-RestMethod -UseBasicParsing http://localhost:7071/health -TimeoutSec 5; break } catch {}
+          }
+          if (-not $health) {
+            Get-Content "$env:RUNNER_TEMP\install.log" -Tail 60 -ErrorAction SilentlyContinue | Write-Host
+            throw 'server never came up'
+          }
+          $health | ConvertTo-Json -Depth 4 | Write-Host
+          # NOTE: the installer clones ring main over the real network, so a push
+          # racing this run can move main past the checked-out candidate — the
+          # version assert fails loudly and the NEWER push's run is the valid one.
+          $ver = (Get-Content rapp_brainstem\VERSION -Raw).Trim()
+          if ($health.status -notin @('ok', 'unauthenticated')) { throw "unexpected health status: $($health.status)" }
+          if ($health.version -ne $ver) { throw "server v$($health.version) != candidate v$ver" }
+          if (-not ($health.agents -contains 'ContextMemory')) { throw "ContextMemory missing from agents: $($health.agents -join ', ')" }
+          Write-Host "health OK: $($health.status) v$($health.version)"
+
+          $idx = Invoke-WebRequest -UseBasicParsing http://localhost:7071/ -TimeoutSec 10
+          if ($idx.Content -notmatch 'RAPP Brainstem') { throw 'web UI missing "RAPP Brainstem" marker' }
+          Invoke-RestMethod -UseBasicParsing http://localhost:7071/models -TimeoutSec 10 | Out-Null
+
+          # /chat must answer JSON on 2xx AND non-2xx — never an HTML crash page.
+          try {
+            $chat = Invoke-RestMethod -UseBasicParsing -Method Post -ContentType 'application/json' `
+              -Body '{"user_input":"device preflight ping"}' http://localhost:7071/chat -TimeoutSec 180
+          } catch [System.Net.WebException] {
+            $resp = $_.Exception.Response
+            if (-not $resp) { throw }
+            $body = (New-Object System.IO.StreamReader($resp.GetResponseStream())).ReadToEnd()
+            $chat = $body | ConvertFrom-Json
+          }
+          if (-not $chat) { throw 'chat returned no parseable JSON' }
+          Write-Host ("chat contract OK: " + (($chat.PSObject.Properties.Name | Select-Object -First 3) -join ', '))
+
+      - name: collect installer log
+        if: always()
+        run: |
+          Write-Host '-- install.log (tail) --'
+          Get-Content "$env:RUNNER_TEMP\install.log" -Tail 100 -ErrorAction SilentlyContinue | Write-Host
+
+      - name: teardown — kill sandbox processes, delete sandbox
+        if: always()
+        run: |
+          Get-CimInstance Win32_Process |
+            Where-Object { $_.CommandLine -and $_.CommandLine -like "*$env:SANDBOX_HOME*" } |
+            ForEach-Object {
+              Write-Host "killing $($_.ProcessId) $($_.Name)"
+              Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+          Start-Sleep -Seconds 2
+          Remove-Item -Recurse -Force (Split-Path $env:SANDBOX_HOME) -ErrorAction SilentlyContinue
+          if (Test-Path $env:SANDBOX_HOME) { Write-Host '::warning::sandbox not fully removed' }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-device-${{ github.run_id }}
+          path: ${{ runner.temp }}/install.log
+          if-no-files-found: ignore

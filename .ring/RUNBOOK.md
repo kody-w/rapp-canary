@@ -79,6 +79,31 @@ gh run watch -R kody-w/rapp-canary                # all four rings + attestation
 Soak = days of the maintainer's own usage on ring bytes. A release earns the
 Grail gate by surviving here, not by a green dashboard alone.
 
+### Real-Windows device leg (the battlestation)
+
+GitHub's windows-latest VMs are clean-room; the battlestation (Tailscale:
+`kodysbattlestation.tail99115f.ts.net`) is real hardware, real home network,
+real Defender. One-time onboarding (mints ~1h tokens, re-run freely):
+
+```bash
+.ring/tools/register_battlestation_runner.sh        # canary only (default)
+.ring/tools/register_battlestation_runner.sh all    # every pre-grail ring
+```
+
+Paste the printed block into an ADMIN PowerShell on the battlestation (VNC
+over Tailscale). `windows-device-test.yml` then runs the REAL advertised
+install path on the device on every canary main push, plus on demand:
+
+```bash
+gh workflow run windows-device-test.yml -R kody-w/rapp-canary --ref main
+```
+
+It never triggers on pull_request (fork code can never reach the machine),
+sandboxes USERPROFILE so the device's own `~/.brainstem` is untouched, and is
+advisory: battlestation offline ⇒ the run queues (auto-cancel in 24h) and
+never blocks promotion. Canary is where the leg lives — everything enters at
+canary, and later rings receive attested copies of the same payload.
+
 ## 5. RELEASE TO GRAIL (the only human-gated step)
 
 ```bash
