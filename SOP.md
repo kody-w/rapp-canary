@@ -10,6 +10,14 @@ disagreement in the same change — never leave them split.
 The train: **Canary → Nightly → Alpha → Beta → Grail (human-only)**.
 Everything enters at Canary. Rings only ever receive promotions.
 
+**Grail is frozen production.** Real users run Grail in real time; it stays on
+its stable released version. The pre-grail rings exist precisely so
+development can be agile, experimental, and even deliberately broken (war
+games) without EVER risking a Grail user. Nothing in this playbook flows to
+Grail: routine promotion sweeps stop at Beta. A Grail release is a separate,
+rare, human-only act (`RELEASING.md`) that the maintainer initiates
+deliberately — never a side effect of anything below.
+
 ---
 
 ## §1 Mainline waves — improvements only
@@ -207,7 +215,32 @@ with the wave that runs it). Conduct rules:
 
 ---
 
-## §7 Evidence and notification
+## §7 Cadence and growth — rings are audiences, not calendar slots
+
+The instinct to add weekly/monthly/yearly rings is answered here so it isn't
+re-litigated: **no new rings without a new audience.** A ring earns its
+existence only when a distinct group of consumers needs a distinct promise
+(Chrome runs four channels with thousands of engineers; Rust runs three).
+More rings for one maintainer means more repos to freeze, more edges to
+qualify, more divergence surface — less resilience, not more.
+
+What weekly/monthly/yearly actually encode at Node/Linux scale is **cadence
+and support**, which the existing train expresses without new
+infrastructure:
+
+- **Cadence (schedule, not repos)**: Canary moves continuously; promote
+  Canary→Nightly at most daily; sweep through Beta roughly weekly when not
+  deliberately diverged; Grail moves only when the maintainer decides a
+  soaked, qualified payload has earned it.
+- **Support (tags, not repos)**: every Grail release is a permanent tag;
+  users pin back with `BRAINSTEM_VERSION`. When real users need long-lived
+  versions, designate a Grail tag as LTS and service it via the backport
+  lane (§3.1) — that is Linux-style longevity with zero new rings.
+- **Growth rule**: when the project has genuinely distinct consumer cohorts
+  (e.g. an enterprise cohort that wants monthly), add ONE ring for that
+  audience, driven by their demand — never speculatively.
+
+## §8 Evidence and notification
 
 - Preflight run ids, qualification run ids, and attestation archives are the
   currency of trust — cite them in commits; never claim green without one.
