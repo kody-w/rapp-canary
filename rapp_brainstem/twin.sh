@@ -48,7 +48,18 @@ case "$CMD" in
     init)
         [ -f "$TWIN/twin.json" ] && { echo "✗ $TWIN already exists — not overwriting" >&2; exit 1; }
         name=$(basename "$REPO")
-        mkdir -p "$TWIN/agents" "$TWIN/memories" "$TWIN/private"
+        mkdir -p "$TWIN/agents" "$TWIN/memories" "$TWIN/private/agents"
+        cat > "$TWIN/private/README.md" <<'EOF'
+# .twin/private/ — ON-DEVICE ONLY (gitignored, never travels)
+
+The public `.twin/` layer (soul.md, agents/, memories/) is committed and travels
+with the repo. This private layer stays on THIS machine and is layered on top at
+launch:
+- `private/soul.md`      → appended to the public soul (sensitive knowledge, real names, secrets)
+- `private/agents/*.py`  → private specialist agents (override public on same filename)
+- runtime (engine/, memory data, logs) lands here automatically
+Put anything here that must NOT be exposed when the public twin travels.
+EOF
         cat > "$TWIN/twin.json" <<EOF
 {
   "schema": "rapp-twin/1",
@@ -99,11 +110,24 @@ EOF
             if [ -f "$tok" ]; then cp "$tok" "$RT/.copilot_token"; chmod 600 "$RT/.copilot_token"; break; fi
         done
 
-        # Agent overlay: engine set + this repo's specialists (same name wins).
+        # Agent overlay, PUBLIC then PRIVATE (later wins on same filename):
+        #   engine set  +  .twin/agents/ (public, committed, TRAVELS)
+        #                +  .twin/private/agents/ (on-device only, NEVER travels)
         AR="$TWIN/private/agents-runtime"
         rm -rf "$AR"; mkdir -p "$AR"
         cp "$ENGINE"/agents/*.py "$AR/" 2>/dev/null || true
         cp "$TWIN"/agents/*.py "$AR/" 2>/dev/null || true
+        cp "$TWIN"/private/agents/*.py "$AR/" 2>/dev/null || true
+
+        # Soul overlay, PUBLIC then PRIVATE: .twin/soul.md is committed and
+        # travels; an optional on-device .twin/private/soul.md (sensitive project
+        # knowledge, secrets, real names) is appended and never leaves the machine.
+        SOUL_RT="$TWIN/private/soul-runtime.md"
+        cat "$TWIN/soul.md" > "$SOUL_RT" 2>/dev/null || : > "$SOUL_RT"
+        if [ -f "$TWIN/private/soul.md" ]; then
+            printf '\n\n<!-- private on-device overlay (never committed) -->\n' >> "$SOUL_RT"
+            cat "$TWIN/private/soul.md" >> "$SOUL_RT"
+        fi
 
         existing=$(lsof -ti tcp:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1) || true
         if [ -n "$existing" ]; then
@@ -114,7 +138,7 @@ EOF
 
         (
             cd "$RT"
-            TWIN_REPO_ROOT="$REPO" SOUL_PATH="$TWIN/soul.md" AGENTS_PATH="$AR" PORT="$PORT" \
+            TWIN_REPO_ROOT="$REPO" SOUL_PATH="$SOUL_RT" AGENTS_PATH="$AR" PORT="$PORT" \
                 nohup "$PY" brainstem.py > "$TWIN/private/twin.log" 2>&1 &
         )
 

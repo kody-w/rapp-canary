@@ -6,20 +6,29 @@ one tool — it is a running, project-specialized brainstem that ANY AI (Copilot
 CLI, Claude, anything that can POST JSON) invokes over the same `/chat`
 contract as the daily driver.
 
-## Layout
+## Layout — two layers: PUBLIC travels, PRIVATE stays on device
 
 ```
 .twin/
-  twin.json        manifest: name, description, port          (public, committed)
-  soul.md          the twin's identity + project knowledge    (public, committed)
-  agents/          *_agent.py specific to THIS repo           (public, committed)
-  memories/        seed knowledge notes                       (public, committed)
-  private/         runtime engine, logs, MEMORY DATA          (gitignored, on-device)
+  twin.json          manifest: name, description, port        (public, committed)
+  soul.md            identity + project knowledge, safe to share (public, committed)
+  agents/            *_agent.py safe to share                 (public, committed)
+  memories/          seed knowledge notes                     (public, committed)
+  private/           ── ON-DEVICE ONLY, gitignored, NEVER travels ──
+    soul.md          sensitive knowledge, real names, secrets → appended to public soul
+    agents/          private specialist agents → override public on same filename
+    engine/          runtime + MEMORY DATA (what the twin learns) + logs
 ```
 
-Public = the twin's portable brain, versioned with the project. Private = what
-it learns and holds on THIS device (`.twin/private/` is gitignored — memories
-never leave the machine).
+**Public layer** = the twin's portable brain, versioned with the project, safe to
+push. The whole `.twin/` directory can travel in a public repo carrying only this.
+
+**Private layer** (`.twin/private/`, gitignored) = everything sensitive that must
+stay on THIS machine. At launch `twin.sh` layers private OVER public:
+`private/soul.md` is appended to the public soul, `private/agents/*.py` override
+public agents of the same name, and learned memory lives in `private/engine/`.
+So a repo can ship a useful public twin while its secrets, private specialists,
+and real memory never leave the device.
 
 ## Run it
 
