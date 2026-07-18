@@ -79,6 +79,26 @@ gh run watch -R kody-w/rapp-canary                # all four rings + attestation
 Soak = days of the maintainer's own usage on ring bytes. A release earns the
 Grail gate by surviving here, not by a green dashboard alone.
 
+### The Flight Deck (any machine on Earth, no LAN, no signup)
+
+**https://kody-w.github.io/rapp-canary/flights.html** — the public deck.
+Every ring's Pages serves its RENDERED identity (`publish-pages.yml`,
+ring-owned, redeploys on every main push, drift-oracle gated), so real
+devices join rings through advertised one-liners:
+
+```bash
+curl -fsSL https://kody-w.github.io/rapp-<ring>/install.sh | bash    # join (real install)
+irm  https://kody-w.github.io/rapp-<ring>/install.ps1 | iex          # join (Windows)
+curl -fsSL https://kody-w.github.io/rapp-canary/flight.sh | bash -s -- <ring>            # sandboxed test flight
+curl -fsSL https://kody-w.github.io/rapp-canary/flight.sh | bash -s -- canary <branch>   # fly one feature
+```
+
+Test flights live under `~/.rapp-flight/` on port 7075 and never touch an
+existing `~/.brainstem`. IMPORTANT: never point anyone at a ring repo's
+`raw.githubusercontent.com` installer — raw main carries GRAIL identity by
+design and would install the wrong repo; the Pages copies are the only
+correct ring one-liners.
+
 ## 5. RELEASE TO GRAIL (the only human-gated step)
 
 ```bash
