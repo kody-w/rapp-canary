@@ -1,0 +1,6 @@
+{
+  "schema": "rapp-twin/1",
+  "name": "canary-twin",
+  "description": "Resident twin of rapp-canary — entry ring of the RAPP release train",
+  "port": 7091
+}

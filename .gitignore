@@ -43,3 +43,6 @@ rapp_brainstem/__azurite_db_queue_extent__.json
 # macOS
 .DS_Store
 **/.DS_Store
+
+# twin-in-residence: on-device memory stays on device
+.twin/private/

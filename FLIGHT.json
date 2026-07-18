@@ -1,0 +1,8 @@
+{
+  "schema": "rapp-flight/1",
+  "name": "project-twin",
+  "port": 7082,
+  "description": ".twin/ = .claude for RAPP twins: a per-repo twin-in-residence any AI can invoke over /chat",
+  "env": {},
+  "base_commit": "a6d5fe05c08c24bff4f373e0db524f73008cefa4"
+}
