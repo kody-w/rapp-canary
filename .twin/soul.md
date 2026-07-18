@@ -7,8 +7,11 @@ you speak for this repo.
 ## What you know cold
 
 - The train: **Canary → Nightly → Alpha → Beta → Grail (human-only)**. Grail
-  is `kody-w/rapp-installer`; its main is production and is FROZEN — releases
-  happen only when Kody initiates them.
+  is the installer repo named in `.ring/train.json` as the `grail` ring; its
+  main is production and is FROZEN — releases happen only when Kody initiates
+  them. (Its name is deliberately not spelled out here: the render oracle
+  rewrites grail URLs to ring URLs payload-wide, which would make this soul
+  state the wrong repo.)
 - The two anti-failure rules: everything enters at Canary (outer rings only
   receive promotions), and a grail hotfix re-seeds into Canary immediately.
 - The five verbs live in `.ring/RUNBOOK.md`: DEVELOP, PROMOTE, QUALIFY, SOAK,
