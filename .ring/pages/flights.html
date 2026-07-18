@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAPP Flight Deck — join a ring, fly a feature</title>
+<style>
+  :root { color-scheme: light dark; --accent:#3b82f6; --edge:rgba(127,127,127,.35); }
+  body { font-family:-apple-system,"Segoe UI",sans-serif; max-width:960px; margin:2rem auto; padding:0 1rem; line-height:1.5; }
+  h1 { font-size:1.6rem; } h2 { font-size:1.15rem; margin-top:2rem; }
+  .banner { border:1px solid var(--edge); border-left:4px solid var(--accent); border-radius:8px; padding:.8rem 1rem; margin:1rem 0; font-size:.95rem; }
+  .ring { border:1px solid var(--edge); border-radius:10px; padding:1rem 1.2rem; margin:1rem 0; }
+  .ring h3 { margin:.1rem 0 .4rem; } .risk { font-size:.85rem; color:#888; }
+  pre { background:rgba(127,127,127,.12); border:1px solid var(--edge); border-radius:8px; padding:.7rem .9rem; overflow-x:auto; font-size:.85rem; position:relative; }
+  .lbl { font-size:.8rem; color:#888; margin:.6rem 0 .2rem; text-transform:uppercase; letter-spacing:.04em; }
+  button.copy { position:absolute; top:.4rem; right:.4rem; font-size:.75rem; padding:.2rem .55rem; border-radius:6px; border:1px solid var(--edge); cursor:pointer; background:transparent; color:inherit; }
+  button.copy.ok { background:#1a7f37; color:#fff; border-color:#1a7f37; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<h1>🛫 RAPP Flight Deck</h1>
+<p>Pre-release rings of the <a href="https://github.com/kody-w/rapp-installer">RAPP Brainstem</a>,
+runnable on any machine straight from this page — no VPN, no LAN, no signup.
+Freshest first: <b>Canary → Nightly → Alpha → Beta → </b> the stable
+<a href="https://kody-w.github.io/rapp-installer/">Grail release</a>.</p>
+
+<div class="banner">⚠️ These are <b>test builds</b>. They can break — that is their job.
+Each ring is qualified by CI and an attestation chain before promotion, but only the
+<a href="https://kody-w.github.io/rapp-installer/">Grail</a> is the supported product.
+<b>Test flights</b> are fully sandboxed (<code>~/.rapp-flight/</code>, port 7075) and never
+touch an existing install. <b>Joining</b> a ring makes it this machine's real install —
+switch rings by wiping <code>~/.brainstem</code> and joining another.</div>
+
+<h2>Test-fly a ring (sandboxed — safe next to any existing install)</h2>
+<div class="lbl">macOS / Linux / WSL — pick your ring by changing the last word</div>
+<pre><code>curl -fsSL https://kody-w.github.io/rapp-canary/flight.sh | bash -s -- canary</code></pre>
+<pre><code>curl -fsSL https://kody-w.github.io/rapp-canary/flight.sh | bash -s -- beta</code></pre>
+
+<h2>Fly a specific feature (a "flight")</h2>
+<p>Any branch on <a href="https://github.com/kody-w/rapp-canary/branches">rapp-canary</a> is a
+flyable feature. Sandbox-run it with the branch name as the second argument:</p>
+<pre><code>curl -fsSL https://kody-w.github.io/rapp-canary/flight.sh | bash -s -- canary &lt;branch-name&gt;</code></pre>
+
+<h2>Join a ring (becomes this machine's real install)</h2>
+
+<div class="ring"><h3>🐤 Canary</h3><div class="risk">Freshest, riskiest — every change lands here first.</div>
+<div class="lbl">macOS / Linux</div>
+<pre><code>curl -fsSL https://kody-w.github.io/rapp-canary/install.sh | bash</code></pre>
+<div class="lbl">Windows (PowerShell)</div>
+<pre><code>irm https://kody-w.github.io/rapp-canary/install.ps1 | iex</code></pre></div>
+
+<div class="ring"><h3>🌙 Nightly</h3><div class="risk">Canary that survived promotion — still early.</div>
+<div class="lbl">macOS / Linux</div>
+<pre><code>curl -fsSL https://kody-w.github.io/rapp-nightly/install.sh | bash</code></pre>
+<div class="lbl">Windows (PowerShell)</div>
+<pre><code>irm https://kody-w.github.io/rapp-nightly/install.ps1 | iex</code></pre></div>
+
+<div class="ring"><h3>🅰️ Alpha</h3><div class="risk">Feature-complete candidates settling down.</div>
+<div class="lbl">macOS / Linux</div>
+<pre><code>curl -fsSL https://kody-w.github.io/rapp-alpha/install.sh | bash</code></pre>
+<div class="lbl">Windows (PowerShell)</div>
+<pre><code>irm https://kody-w.github.io/rapp-alpha/install.ps1 | iex</code></pre></div>
+
+<div class="ring"><h3>🅱️ Beta</h3><div class="risk">The next Grail release, soaking. Calmest ring.</div>
+<div class="lbl">macOS / Linux</div>
+<pre><code>curl -fsSL https://kody-w.github.io/rapp-beta/install.sh | bash</code></pre>
+<div class="lbl">Windows (PowerShell)</div>
+<pre><code>irm https://kody-w.github.io/rapp-beta/install.ps1 | iex</code></pre></div>
+
+<p>Found a break? That's a win — file it on the ring's repo
+(<a href="https://github.com/kody-w/rapp-canary/issues">canary</a> ·
+<a href="https://github.com/kody-w/rapp-nightly/issues">nightly</a> ·
+<a href="https://github.com/kody-w/rapp-alpha/issues">alpha</a> ·
+<a href="https://github.com/kody-w/rapp-beta/issues">beta</a>) with your OS and the
+installer/flight output. Escape hatch on any machine: wipe <code>~/.brainstem</code>
+and reinstall the <a href="https://kody-w.github.io/rapp-installer/">stable Grail</a>.</p>
+
+<script>
+document.querySelectorAll('pre').forEach(pre => {
+  const b = document.createElement('button');
+  b.className = 'copy'; b.textContent = 'copy';
+  b.onclick = () => navigator.clipboard.writeText(pre.querySelector('code').innerText).then(() => {
+    b.textContent = '✓'; b.classList.add('ok');
+    setTimeout(() => { b.textContent = 'copy'; b.classList.remove('ok'); }, 1500);
+  });
+  pre.appendChild(b);
+});
+</script>
+</body>
+</html>

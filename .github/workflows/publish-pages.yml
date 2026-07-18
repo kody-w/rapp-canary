@@ -1,0 +1,70 @@
+# publish-pages — serve this ring's RENDERED identity at kody-w.github.io/<repo>.
+#
+# Ring-owned workflow (never promoted to Grail). The payload on main keeps grail
+# identity by design; what a field machine must fetch is the RENDERED tree —
+# installers whose REPO_URL and version checks point at THIS ring. Pages root =
+# rendered docs/ (the same layout grail serves), so the advertised one-liner
+#   curl -fsSL https://kody-w.github.io/<repo>/install.sh | bash
+# installs THIS ring. The hub additionally publishes the Flight Deck
+# (/flights.html + /flight.sh) from .ring/pages/.
+name: publish-pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  render-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Render this ring's identity (drift oracle enforced)
+        shell: bash
+        run: |
+          set -euo pipefail
+          RENDER=.ring/tools/render_ring.py
+          if [ ! -f "$RENDER" ]; then
+            # non-hub rings carry only ring.json; the tool lives on the hub
+            curl -fsSL https://raw.githubusercontent.com/kody-w/rapp-canary/main/.ring/tools/render_ring.py \
+              -o "$RUNNER_TEMP/render_ring.py"
+            RENDER="$RUNNER_TEMP/render_ring.py"
+          fi
+          python "$RENDER" --repo . --config .ring/ring.json \
+            --output "$RUNNER_TEMP/rendered" --report "$RUNNER_TEMP/render.json"
+
+      - name: Assemble site (rendered docs/ root + hub flight deck)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/site"
+          cp -R "$RUNNER_TEMP/rendered/docs/." "$RUNNER_TEMP/site/"
+          if [ -d .ring/pages ]; then cp .ring/pages/* "$RUNNER_TEMP/site/"; fi
+          # the ring's own one-liner must exist and carry ring identity
+          grep -q "github.com/${GITHUB_REPOSITORY}" "$RUNNER_TEMP/site/install.sh"
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ runner.temp }}/site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
