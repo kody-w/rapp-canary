@@ -283,6 +283,16 @@ else
     fail "docs/install.sh missing (needed for curl one-liner via GitHub Pages)"
 fi
 
+# Users install the docs/ copies via GitHub Pages; every upstream gate tests the
+# root copies. If the mirrors drift, users run bytes nothing ever tested.
+for m in install.sh install.ps1 install.cmd install.command; do
+    if cmp -s "$REPO_ROOT/$m" "$REPO_ROOT/docs/$m" 2>/dev/null; then
+        pass "docs/$m is byte-identical to root $m"
+    else
+        fail "docs/$m differs from root $m — the Pages one-liner serves untested bytes"
+    fi
+done
+
 if [ ! -f "$REPO_ROOT/docs/copilot-install.html" ]; then
     pass "stale docs/copilot-install.html removed"
 else

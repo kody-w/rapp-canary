@@ -19,9 +19,11 @@
 
 name: preflight
 
+# RING REPO DIFFERENCE (ring-owned workflow, never promoted to Grail): preflight
+# runs on EVERY push including main, because promotions land directly on ring
+# mains and must turn a broken promotion into a red X within minutes.
 on:
   push:
-    branches-ignore: [main]
   workflow_dispatch:
 
 concurrency:

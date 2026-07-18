@@ -104,6 +104,19 @@ For risky changes, before merging:
 
 ## 6. Release (the only push to main)
 
+> If this release rode the pre-grail ring train (kody-w/rapp-canary →
+> nightly → alpha → beta), run the last gate first — it verifies the
+> attestation chain against beta's live tip and stages the exact qualified
+> bytes onto your release branch:
+>
+> ```bash
+> python3 <canary-checkout>/.ring/tools/grail_gate.py verify \
+>     --run-id <qualification-run> --export-to <this-release-checkout>
+> ```
+>
+> and embed the qualification run URL in the release commit and tag message.
+> The ring's day-to-day process lives in the canary repo's `.ring/RUNBOOK.md`.
+
 ```bash
 VERSION=X.Y.Z   # bump rapp_brainstem/VERSION in a release commit on the branch
 echo "$VERSION" > rapp_brainstem/VERSION
@@ -145,6 +158,16 @@ curl -fsSL https://raw.githubusercontent.com/kody-w/rapp-installer/main/rapp_bra
 ```
 
 (The Pages copy at kody-w.github.io can lag raw.githubusercontent by a few minutes.)
+
+Two more post-release rituals, each one line of effort:
+
+- **Feed the distro.** kody-w/RAPP vendors this kernel under `KERNEL_PIN.json`.
+  Bump the pin to the new tag (all vendored locations) or record an explicit
+  skip in the release notes — never let the pin drift silently (RAPP#83).
+- **Rehearse the escape hatch.** In the preflight sandbox, downgrade to the
+  previous release (`BRAINSTEM_VERSION=<prev> ... install.sh`) once. The pin
+  lever is the only remediation a broken user has; a rusted lever discovered
+  mid-incident means users stay broken.
 
 ## 8. If production breaks anyway — rollback
 
