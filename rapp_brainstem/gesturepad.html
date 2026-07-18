@@ -268,7 +268,7 @@ function pinchUp(){
   if (state.hoverKey){ state.hoverKey.id === "k-talk" ? talkEnd() : press(state.hoverKey); }
 }
 setInterval(() => {  // dwell = stare-to-select, ONCE per key-entry (never on the talk key)
-  if (!state.hoverKey || state.pinch || state.busy || state.dwellFired || state.hoverKey.id === "k-talk"){
+  if (!state.hoverKey || state.pinch || state.busy || state.dwellFired || state.deskMode || state.hoverKey.id === "k-talk"){
     dwellCircle.style.strokeDashoffset = 113; return;
   }
   const t = (performance.now() - state.dwellStart) / 1100;
