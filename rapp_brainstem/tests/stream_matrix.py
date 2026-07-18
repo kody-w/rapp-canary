@@ -14,7 +14,7 @@ total time, and any error. It prints a per-test detail table and a summary matri
 
 Usage:
     python stream_matrix.py [BASE_URL]
-    # default BASE_URL = http://127.0.0.1:7099
+    # default BASE_URL = http://127.0.0.1:7071 (the server's default port)
 
 Exit code 0 iff every model PASSED (streaming OR fallback). Nothing is committed
 or pushed — this is a read-only probe against a locally running rig.
@@ -26,7 +26,7 @@ import time
 
 import requests
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:7099"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:7071"
 
 PLAIN_PROMPT = "In 2 to 3 sentences, explain what the brainstem does in the human body."
 TOOL_PROMPT = "get my latest hacker news"
