@@ -2795,6 +2795,11 @@ def chat_stream():
 def index():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
 
+
+@app.route("/pad")
+def gesture_pad():
+    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "gesturepad.html")
+
 @app.route("/login", methods=["POST"])
 @_require_secret
 def login():

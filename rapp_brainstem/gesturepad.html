@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAPP Gesture Pad</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; background:#05060a; color:#e8e8f0; font-family:-apple-system,"Segoe UI",sans-serif; overflow:hidden; }
+  #tunnel { position:fixed; inset:0; z-index:0; }
+  #stage { position:relative; z-index:2; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; }
+
+  /* ── the pad (Codex-Micro homage) ── */
+  #pad { position:relative; padding:26px 22px 20px; border-radius:26px;
+         background:radial-gradient(circle at 30% 25%, rgba(255,255,255,.10), rgba(255,255,255,.04) 60%, rgba(255,255,255,.02));
+         border:1px solid rgba(255,255,255,.14); backdrop-filter:blur(18px);
+         box-shadow:0 24px 80px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.12); }
+  #pad .silk { position:absolute; font-size:.55rem; letter-spacing:.12em; color:rgba(255,255,255,.35); text-transform:uppercase; }
+  .silk.tl { top:8px; left:22px; } .silk.br { bottom:6px; right:22px; }
+  #leds { position:absolute; left:10px; bottom:14px; display:flex; flex-direction:column; gap:4px; }
+  .led { width:7px; height:7px; border-radius:2px; background:#222; transition:background .3s, box-shadow .3s; }
+  .led.on { background:#39d353; box-shadow:0 0 8px #39d353; }
+  .led.warn { background:#e3b341; box-shadow:0 0 8px #e3b341; }
+
+  #grid { display:grid; grid-template-columns:repeat(4, 92px); gap:12px; }
+  .key { position:relative; height:78px; border-radius:16px; border:1px solid rgba(255,255,255,.10);
+         background:linear-gradient(180deg, rgba(255,255,255,.13), rgba(255,255,255,.05));
+         box-shadow:0 6px 14px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.18);
+         color:#dfe3ee; font-size:1.35rem; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+         cursor:pointer; user-select:none; transition:transform .08s, box-shadow .15s, background .3s; }
+  .key small { font-size:.56rem; letter-spacing:.05em; color:rgba(255,255,255,.55); text-transform:uppercase; }
+  .key.hover { box-shadow:0 6px 18px rgba(0,0,0,.5), 0 0 22px var(--glow,#3b82f6), inset 0 1px 0 rgba(255,255,255,.25); }
+  .key.pressed { transform:translateY(3px) scale(.97); }
+  .key.opt { --glow:#888; }
+  .key.opt .dot { width:10px; height:10px; border-radius:50%; background:var(--glow); box-shadow:0 0 14px var(--glow), 0 0 4px var(--glow); }
+  .key.opt.empty { opacity:.28; pointer-events:none; }
+  .key.opt .lab { font-size:.68rem; line-height:1.15; text-align:center; padding:0 6px; max-height:2.4em; overflow:hidden; }
+  .key.wide { grid-column:span 2; }
+  .key.talk { background:linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.06)); font-size:1.6rem; }
+  .key.talk.listening { --glow:#22d3ee; box-shadow:0 0 26px #22d3ee88, inset 0 1px 0 rgba(255,255,255,.3); }
+  #knob { position:absolute; top:16px; right:20px; width:44px; height:44px; border-radius:50%;
+          background:radial-gradient(circle at 35% 30%, #3a3a42, #0c0c10 70%); border:1px solid rgba(255,255,255,.2);
+          box-shadow:0 4px 10px rgba(0,0,0,.6); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:.9rem; }
+  #knob.off { filter:grayscale(1) brightness(.6); }
+
+  /* ── prompt + transcript ── */
+  #prompt { min-height:1.4em; font-size:1.02rem; color:#cfe0ff; text-shadow:0 0 18px rgba(80,140,255,.4); text-align:center; max-width:640px; }
+  #feed { width:min(640px, 92vw); max-height:23vh; overflow-y:auto; font-size:.86rem; line-height:1.45;
+          padding:12px 16px; border-radius:14px; background:rgba(10,12,20,.55); border:1px solid rgba(255,255,255,.08); backdrop-filter:blur(12px); }
+  #feed .u { color:#8ab4ff; } #feed .a { color:#d9dde8; margin-bottom:.55em; white-space:pre-wrap; }
+  #feed:empty { display:none; }
+
+  /* ── cursor + dwell ring ── */
+  #cursor { position:fixed; z-index:9; width:22px; height:22px; margin:-11px 0 0 -11px; border-radius:50%; pointer-events:none;
+            background:radial-gradient(circle, rgba(120,200,255,.95) 0 30%, rgba(120,200,255,.25) 60%, transparent 70%);
+            box-shadow:0 0 18px rgba(120,200,255,.8); transition:transform .05s; }
+  #cursor.pinch { transform:scale(.55); background:radial-gradient(circle, #fff 0 40%, rgba(255,255,255,.3) 60%, transparent 70%); }
+  #dwell { position:absolute; inset:-7px; border-radius:50%; }
+  #dwell circle { fill:none; stroke:rgba(140,220,255,.9); stroke-width:3; stroke-dasharray:113; stroke-dashoffset:113; transform:rotate(-90deg); transform-origin:center; }
+
+  /* ── webcam PiP ── */
+  #pip { position:fixed; right:14px; bottom:14px; z-index:5; width:180px; border-radius:12px; overflow:hidden;
+         border:1px solid rgba(255,255,255,.15); background:#000; box-shadow:0 8px 24px rgba(0,0,0,.6); }
+  #pip video { width:100%; display:block; transform:scaleX(-1); opacity:.85; }
+  #pip canvas { position:absolute; inset:0; width:100%; height:100%; }
+  #pip.hidden { display:none; }
+  #hint { position:fixed; left:14px; bottom:14px; z-index:5; font-size:.72rem; color:rgba(255,255,255,.45); max-width:280px; line-height:1.5; }
+</style>
+</head>
+<body>
+<canvas id="tunnel"></canvas>
+<div id="stage">
+  <div id="prompt">Pinch, point, or stare — the pad listens.</div>
+  <div id="pad">
+    <span class="silk tl">RAPP · Gesture Pad</span><span class="silk br">Let's build</span>
+    <div id="leds"><div class="led" id="led-cam"></div><div class="led" id="led-face"></div><div class="led" id="led-hand"></div><div class="led" id="led-srv"></div></div>
+    <div id="knob" title="toggle spoken replies">🔊</div>
+    <div id="grid">
+      <!-- 8 RGB option slots, filled by the |||PAD||| sense -->
+      <div class="key opt empty" data-slot="0"><div class="dot"></div><div class="lab"></div></div>
+      <div class="key opt empty" data-slot="1"><div class="dot"></div><div class="lab"></div></div>
+      <div class="key opt empty" data-slot="2"><div class="dot"></div><div class="lab"></div></div>
+      <div class="key opt empty" data-slot="3"><div class="dot"></div><div class="lab"></div></div>
+      <div class="key opt empty" data-slot="4"><div class="dot"></div><div class="lab"></div></div>
+      <div class="key opt empty" data-slot="5"><div class="dot"></div><div class="lab"></div></div>
+      <div class="key opt empty" data-slot="6"><div class="dot"></div><div class="lab"></div></div>
+      <div class="key opt empty" data-slot="7"><div class="dot"></div><div class="lab"></div></div>
+      <div class="key" id="k-send">▶<small>send</small></div>
+      <div class="key" id="k-clear">⌫<small>clear</small></div>
+      <div class="key" id="k-repeat">🔁<small>repeat</small></div>
+      <div class="key" id="k-mode">🎛<small>desk/cam</small></div>
+      <div class="key wide talk" id="k-talk">🎙<small>hold to talk</small></div>
+      <div class="key" id="k-ask">🧠<small>what can you do</small></div>
+      <div class="key" id="k-dismiss">✕<small>options</small></div>
+    </div>
+  </div>
+  <div id="feed"></div>
+</div>
+<div id="cursor"><svg id="dwell" viewBox="0 0 40 40"><circle cx="20" cy="20" r="18"/></svg></div>
+<div id="pip" class="hidden"><video id="cam" autoplay playsinline muted></video><canvas id="pipc"></canvas></div>
+<div id="hint">🎙 hold-pinch (or hold-click) the mic to talk · stare 1s to select · desk mode works with just the mouse</div>
+
+<script type="module">
+/* ───────────────────────── config / server ───────────────────────── */
+const qs = new URLSearchParams(location.search);
+const BASE = qs.get("server")
+  || (location.protocol.startsWith("http") ? location.origin : "http://localhost:7071");
+const $ = id => document.getElementById(id);
+const state = { mode:"boot", history:[], lastSpoken:"", options:[], depth:0,
+                speak:true, deskMode:false, pinch:false, hoverKey:null, dwellStart:0 };
+
+/* ───────────────────────── the tunnel (state-reactive, restrained) ───────────────────────── */
+const tun = $("tunnel"), tctx = tun.getContext("2d");
+function sizeTunnel(){ tun.width = innerWidth; tun.height = innerHeight; }
+addEventListener("resize", sizeTunnel); sizeTunnel();
+let rings = Array.from({length:26}, (_,i) => ({ z: i/26 }));
+let flow = 0.0016, targetFlow = 0.0016, pulse = 0, baseHue = 210;
+function setMood(m){
+  state.mode = m;
+  targetFlow = { boot:.0016, idle:.0016, listening:.004, thinking:.011, speaking:.005 }[m] ?? .0016;
+  if (m === "speaking" || m === "listening") pulse = 1;
+}
+function drawTunnel(){
+  flow += (targetFlow - flow) * .04;  pulse *= .96;
+  const hue = (baseHue + state.depth * 14) % 360;   // the conversation slowly shifts the palette
+  tctx.fillStyle = "rgba(5,6,10,.34)"; tctx.fillRect(0,0,tun.width,tun.height);
+  const cx = tun.width/2, cy = tun.height/2 - 40;
+  for (const r of rings){
+    r.z -= flow; if (r.z <= 0.02) r.z = 1;
+    const s = (1 - r.z) ** 2.2;
+    const w = (tun.width * 1.15) * s, h = (tun.height * 1.05) * s, rad = 60 * s + 4;
+    const a = Math.min(.30, (0.05 + s * .22) * (1 + pulse * .9));
+    tctx.strokeStyle = `hsla(${(hue + r.z * 70) % 360},80%,62%,${a})`;
+    tctx.lineWidth = 1 + s * 2.2;
+    tctx.beginPath(); tctx.roundRect(cx - w/2, cy - h/2, w, h, rad); tctx.stroke();
+  }
+  requestAnimationFrame(drawTunnel);
+}
+drawTunnel();
+
+/* ───────────────────────── chat plumbing + the PAD sense ───────────────────────── */
+const feed = $("feed"), promptEl = $("prompt");
+function say(text){
+  if (!state.speak || !text) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text); u.rate = 1.04;
+  u.onstart = () => setMood("speaking"); u.onend = () => setMood("idle");
+  speechSynthesis.speak(u); state.lastSpoken = text;
+}
+function parseSenses(reply){
+  let text = reply, voice = null, pad = null;
+  const vi = text.indexOf("|||VOICE|||");
+  if (vi >= 0){ voice = text.slice(vi + 11).replace(/\|\|\|PAD\|\|\|[\s\S]*$/,"").trim(); }
+  const pm = text.match(/\|\|\|PAD\|\|\|([\s\S]*?)(\|\|\||$)/);
+  if (pm){ try { pad = JSON.parse(pm[1].trim()); } catch { /* malformed sense — ignore */ } }
+  text = text.replace(/\|\|\|VOICE\|\|\|[\s\S]*$/,"").replace(/\|\|\|PAD\|\|\|[\s\S]*?(\|\|\||$)/,"").trim();
+  return { text, voice, pad };
+}
+const HUES = [355, 120, 210, 32, 275, 180, 55, 320];
+function showOptions(pad){
+  state.options = (pad && Array.isArray(pad.options)) ? pad.options.slice(0,8) : [];
+  document.querySelectorAll(".key.opt").forEach((el,i) => {
+    const o = state.options[i];
+    el.classList.toggle("empty", !o);
+    el.style.setProperty("--glow", o ? `hsl(${HUES[i]},85%,60%)` : "#888");
+    el.querySelector(".lab").textContent = o ? o.label : "";
+  });
+  if (pad && pad.prompt){ promptEl.textContent = pad.prompt; say(pad.prompt); }
+}
+async function send(text){
+  if (!text) return;
+  feed.insertAdjacentHTML("beforeend", `<div class="u">▸ ${text}</div>`);
+  feed.scrollTop = feed.scrollHeight;
+  setMood("thinking"); promptEl.textContent = "…";
+  try {
+    const res = await fetch(`${BASE}/chat`, { method:"POST", headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ user_input:text, conversation_history:state.history }) });
+    const data = await res.json();
+    const raw = data.assistant_response ?? data.response ?? data.error ?? JSON.stringify(data);
+    const { text:clean, voice, pad } = parseSenses(String(raw));
+    state.history.push({ role:"user", content:text }, { role:"assistant", content:String(raw) });
+    state.depth++;
+    feed.insertAdjacentHTML("beforeend", `<div class="a">${clean.replace(/</g,"&lt;")}</div>`);
+    feed.scrollTop = feed.scrollHeight;
+    $("led-srv").className = "led on";
+    showOptions(pad);
+    if (!pad || !pad.prompt) promptEl.textContent = "Ready.";
+    say(voice || clean.split(/(?<=[.!?])\s/).slice(0,2).join(" "));
+    if (!voice && !state.speak) setMood("idle");
+  } catch (e){
+    $("led-srv").className = "led warn";
+    promptEl.textContent = `no brainstem at ${BASE} — is it running?`;
+    setMood("idle");
+  }
+}
+
+/* ───────────────────────── speech (hold-to-talk) ───────────────────────── */
+let rec = null, draft = "";
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+function talkStart(){
+  if (!SR){ promptEl.textContent = "speech recognition unavailable — type via ?say= or use quick keys"; return; }
+  if (rec) return;
+  rec = new SR(); rec.continuous = true; rec.interimResults = true; draft = "";
+  rec.onresult = ev => { draft = Array.from(ev.results).map(r => r[0].transcript).join(" ").trim();
+                         promptEl.textContent = `“${draft}”`; };
+  rec.onend = () => { rec = null; };
+  rec.start(); setMood("listening"); $("k-talk").classList.add("listening");
+}
+function talkEnd(){
+  $("k-talk").classList.remove("listening");
+  if (rec){ rec.stop(); }
+  setMood("idle");
+  setTimeout(() => { if (draft) send(draft); draft = ""; }, 350);
+}
+
+/* ───────────────────────── key actions ───────────────────────── */
+function press(el){
+  el.classList.add("pressed"); setTimeout(() => el.classList.remove("pressed"), 160);
+  if (el.classList.contains("opt")){
+    const o = state.options[+el.dataset.slot];
+    if (o) { showOptions(null); send(o.value ?? o.label); }
+    return;
+  }
+  switch (el.id){
+    case "k-send":    if (draft) { send(draft); draft = ""; } break;
+    case "k-clear":   feed.innerHTML = ""; state.history = []; state.depth = 0; showOptions(null);
+                      promptEl.textContent = "Cleared. Fresh tunnel."; break;
+    case "k-repeat":  say(state.lastSpoken); break;
+    case "k-mode":    setDeskMode(!state.deskMode); break;
+    case "k-ask":     send("In two short sentences: what can you do for me right now? Then use the |||PAD||| sense to offer me 4 options of things to try."); break;
+    case "k-dismiss": showOptions(null); promptEl.textContent = "Options dismissed."; break;
+    case "k-talk":    break; // handled by hold logic
+  }
+}
+document.querySelectorAll(".key").forEach(el => {
+  el.addEventListener("mousedown", () => el.id === "k-talk" && talkStart());
+  el.addEventListener("mouseup",   () => el.id === "k-talk" ? talkEnd() : press(el));
+});
+$("knob").addEventListener("click", () => {
+  state.speak = !state.speak; $("knob").classList.toggle("off", !state.speak);
+  if (!state.speak) speechSynthesis.cancel();
+});
+
+/* ───────────────────────── cursor: gaze/hand pointer + dwell + pinch ───────────────────────── */
+const cursor = $("cursor"), dwellCircle = document.querySelector("#dwell circle");
+let px = innerWidth/2, py = innerHeight/2;
+function moveCursor(x, y){
+  px = x; py = y;
+  cursor.style.left = x + "px"; cursor.style.top = y + "px";
+  const el = document.elementFromPoint(x, y)?.closest(".key");
+  if (el !== state.hoverKey){
+    state.hoverKey?.classList.remove("hover");
+    state.hoverKey = el; state.dwellStart = performance.now();
+    el?.classList.add("hover");
+  }
+}
+function pinchDown(){
+  if (state.pinch) return; state.pinch = true; cursor.classList.add("pinch");
+  if (state.hoverKey?.id === "k-talk") talkStart();
+}
+function pinchUp(){
+  if (!state.pinch) return; state.pinch = false; cursor.classList.remove("pinch");
+  if (state.hoverKey){ state.hoverKey.id === "k-talk" ? talkEnd() : press(state.hoverKey); }
+}
+setInterval(() => {  // dwell = stare-to-select (never on the talk key)
+  if (!state.hoverKey || state.pinch || state.hoverKey.id === "k-talk"){ dwellCircle.style.strokeDashoffset = 113; return; }
+  const t = (performance.now() - state.dwellStart) / 1100;
+  dwellCircle.style.strokeDashoffset = Math.max(0, 113 * (1 - t));
+  if (t >= 1){ press(state.hoverKey); state.dwellStart = performance.now() + 600; }
+}, 50);
+
+/* ───────────────────────── desk mode (no camera needed) ───────────────────────── */
+function setDeskMode(on){
+  state.deskMode = on;
+  promptEl.textContent = on ? "Desk mode: mouse is the pointer, click is the pinch." : "Camera mode.";
+  $("pip").classList.toggle("hidden", on || !camReady);
+}
+addEventListener("mousemove", e => { if (state.deskMode || !camReady) moveCursor(e.clientX, e.clientY); });
+
+/* ───────────────────────── MediaPipe: face gaze + hand pinch ───────────────────────── */
+let camReady = false;
+(async () => {
+  try {
+    const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14");
+    const files = await vision.FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    const face = await vision.FaceLandmarker.createFromOptions(files, {
+      baseOptions:{ modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" },
+      runningMode:"VIDEO", numFaces:1 });
+    const hand = await vision.HandLandmarker.createFromOptions(files, {
+      baseOptions:{ modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" },
+      runningMode:"VIDEO", numHands:1 });
+    const cam = $("cam");
+    cam.srcObject = await navigator.mediaDevices.getUserMedia({ video:{ width:640, height:480 } });
+    await cam.play();
+    camReady = true; $("led-cam").className = "led on"; $("pip").classList.remove("hidden");
+    const pip = $("pipc"), pctx = pip.getContext("2d");
+    let sx = .5, sy = .5;                       // smoothed pointer (normalized)
+    const loop = () => {
+      const now = performance.now();
+      const f = face.detectForVideo(cam, now), h = hand.detectForVideo(cam, now);
+      pip.width = pip.clientWidth; pip.height = pip.clientHeight;
+      pctx.clearRect(0,0,pip.width,pip.height);
+      let nx = null, ny = null, gain = 1.6;
+      if (h.landmarks?.length){
+        $("led-hand").className = "led on";
+        const lm = h.landmarks[0], tip = lm[8], th = lm[4];
+        nx = tip.x; ny = tip.y; gain = 1.25;
+        const span = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
+        const pinchNow = Math.hypot(tip.x - th.x, tip.y - th.y) / (span || 1) < .38;
+        pinchNow ? pinchDown() : (Math.hypot(tip.x - th.x, tip.y - th.y) / (span || 1) > .5 && pinchUp());
+        pctx.fillStyle = "#22d3ee";
+        for (const p of [tip, th]){ pctx.beginPath(); pctx.arc((1-p.x)*pip.width, p.y*pip.height, 4, 0, 7); pctx.fill(); }
+      } else { $("led-hand").className = "led"; pinchUp(); }
+      if (nx === null && f.faceLandmarks?.length){
+        $("led-face").className = "led on";
+        const iL = f.faceLandmarks[0][468], iR = f.faceLandmarks[0][473];
+        nx = (iL.x + iR.x)/2; ny = (iL.y + iR.y)/2 + 0.06;
+      } else if (nx === null){ $("led-face").className = "led"; }
+      if (nx !== null && !state.deskMode){
+        const tx = (0.5 - (nx - 0.5) * gain) , ty = (0.5 + (ny - 0.5) * gain);   // mirrored + gained
+        sx += (tx - sx) * .28; sy += (ty - sy) * .28;
+        moveCursor(sx * innerWidth, sy * innerHeight);
+      }
+      requestAnimationFrame(loop);
+    };
+    loop();
+  } catch (e){
+    setDeskMode(true);
+    promptEl.textContent = "No camera — desk mode (mouse = pointer, click = pinch).";
+  }
+})();
+
+/* ───────────────────────── boot ───────────────────────── */
+fetch(`${BASE}/health`).then(r => r.json()).then(() => { $("led-srv").className = "led on"; })
+  .catch(() => { $("led-srv").className = "led warn"; });
+setMood("idle");
+if (qs.get("say")) send(qs.get("say"));
+</script>
+</body>
+</html>
