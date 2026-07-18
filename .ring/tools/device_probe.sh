@@ -98,9 +98,20 @@ EOF
   check "/chat answers JSON (never crashes)" bash -c \
     'curl -s -X POST http://localhost:7071/chat -H "Content-Type: application/json" -d "{\"user_input\":\"device probe ping\"}" | python3 -c "import json,sys; json.load(sys.stdin)"'
   VENVPY="$SANDBOX/.brainstem/venv/bin/python"
-  check "unit tests (pytest, install venv)" env HOME="$SANDBOX" "$VENVPY" -m pytest "$SRC/rapp_brainstem/tests/" -q
-  check "installer test suite" env HOME="$SANDBOX" PATH="$SANDBOX/.brainstem/venv/bin:$PATH" \
-    bash -c "cd '$SRC' && bash tests/test_installer.sh"
+  # The sacred installer ships RUNTIME deps only — pytest is a dev tool it will
+  # never install. Add it to the install venv here so the suites below actually
+  # run. Without this the probe reported a FALSE failure on every real machine
+  # ("No module named pytest"), which read as a real defect and trained readers
+  # to ignore red. If pytest can't be installed (offline), say so and skip the
+  # two suites rather than reporting them as failures.
+  if "$VENVPY" -m pip install -q pytest >>"$WORK/probe.log" 2>&1; then
+    check "unit tests (pytest, install venv)" env HOME="$SANDBOX" "$VENVPY" -m pytest "$SRC/rapp_brainstem/tests/" -q
+    check "installer test suite" env HOME="$SANDBOX" PATH="$SANDBOX/.brainstem/venv/bin:$PATH" \
+      bash -c "cd '$SRC' && bash tests/test_installer.sh"
+  else
+    echo "  SKIP unit tests + installer suite (pytest unavailable — offline?)"
+    PASS+=("test suites skipped: pytest could not be installed (offline)")
+  fi
 fi
 
 # Teardown the server before reporting — the VM may live on.
