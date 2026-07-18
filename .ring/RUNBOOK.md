@@ -79,61 +79,32 @@ gh run watch -R kody-w/rapp-canary                # all four rings + attestation
 Soak = days of the maintainer's own usage on ring bytes. A release earns the
 Grail gate by surviving here, not by a green dashboard alone.
 
-### Real-Windows device leg (the battlestation)
+### Any device, zero-config, reported into an issue
 
-GitHub's windows-latest VMs are clean-room; the battlestation (Tailscale:
-`kodysbattlestation.tail99115f.ts.net`) is real hardware, real home network,
-real Defender. One-time onboarding (mints ~1h tokens, re-run freely):
-
-```bash
-.ring/tools/register_battlestation_runner.sh        # canary only (default)
-.ring/tools/register_battlestation_runner.sh all    # every pre-grail ring
-```
-
-Paste the printed block into an ADMIN PowerShell on the battlestation (VNC
-over Tailscale). `windows-device-test.yml` then runs the REAL advertised
-install path on the device on every canary main push, plus on demand:
+Real-device testing is PULL-based: no runner registration, no tailnet
+linkage, nothing to configure. On ANY machine with internet — a fresh VM, a
+spare laptop, the battlestation — one line does the whole job:
 
 ```bash
-gh workflow run windows-device-test.yml -R kody-w/rapp-canary --ref main
+curl -sL https://raw.githubusercontent.com/kody-w/rapp-canary/main/.ring/tools/device_probe.sh \
+  | bash -s -- --ring canary --report-issue 42
 ```
 
-It never triggers on pull_request (fork code can never reach the machine),
-sandboxes USERPROFILE so the device's own `~/.brainstem` is untouched, and is
-advisory: battlestation offline ⇒ the run queues (auto-cancel in 24h) and
-never blocks promotion. Canary is where the leg lives — everything enters at
-canary, and later rings receive attested copies of the same payload.
+That line is the entire interface: hand it to Copilot (or any agent) on the
+device and it needs no other context. The probe pulls the ring, runs the REAL
+installer inside a throwaway sandbox HOME, runs the full test suite plus live
+health/chat asserts, prints a findings report, and — only when
+`--report-issue` is given — posts it to that issue on the ring repo with
+`gh`. Reporting is OFF by default. `--ring nightly|alpha|beta` picks the
+ring; `--ref flight/<name>` tests a flight; `--keep` preserves the sandbox.
+It REFUSES to run when :7071 is busy (the installer kills existing
+listeners — a probe must never execute that against a real brainstem).
 
-### Any device, on demand, reported into an issue
-
-The battlestation generalizes to a fleet: register any tailnet machine
-(`--os macos`/`linux` prints a bash block instead of PowerShell):
-
-```bash
-.ring/tools/register_device_runner.sh --device rappter-one --os macos
-.ring/tools/register_device_runner.sh --device battlestation --os windows all
-```
-
-Then ANY agent (Copilot, Claude) or human fires a device test with one
-command — this line is the whole interface an agent needs to know:
-
-```bash
-gh workflow run device-test.yml -R kody-w/rapp-canary \
-  -f device=rappter-one -f report_issue=42    # report_issue optional — reporting is OFF by default
-```
-
-or, from inside a GitHub issue (collaborators only — the run rocket-reacts to
-ack, then posts the verdict back to the same thread):
-
-```
-/device-test rappter-one
-```
-
-`device-test.yml` resolves the device label, runs the real installer sandboxed
-on that machine (PowerShell 5.1 path or unix path per `runner.os`), tears the
-sandbox down, and — only when an issue is in play — comments the verdict + run
-link. It never triggers on pull_request. The workflow is ring-owned: copy the
-file to another ring repo to give that ring its own fleet surface.
+Blow the VM away afterwards — nothing outside `/tmp` is touched. (A
+self-hosted-runner "push mode" was built and retired in favor of this: rings
+are installable everywhere via the Flight Deck one-liners, so devices pull
+tests; nothing needs to be enrolled. Windows devices use the Flight Deck's
+`irm | iex` one-liners; a PowerShell probe twin is future work.)
 
 ## 5. RELEASE TO GRAIL (the only human-gated step)
 
