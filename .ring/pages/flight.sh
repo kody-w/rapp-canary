@@ -34,6 +34,16 @@ echo "🛫 flight: $RING @ $BRANCH -> $FLIGHT_HOME (port $FLIGHT_PORT)"
 if [ -f "$FLIGHT_HOME/flight.pid" ] && kill -0 "$(cat "$FLIGHT_HOME/flight.pid")" 2>/dev/null; then
     kill "$(cat "$FLIGHT_HOME/flight.pid")"; sleep 1
 fi
+# One test flight per machine per port, last one wins: a DIFFERENT slug's
+# flight may still hold the port — without this, the new server dies on bind
+# and the health check below answers from the OLD instance (false ✅).
+if command -v lsof >/dev/null; then
+    prev=$(lsof -ti tcp:"$FLIGHT_PORT" -sTCP:LISTEN 2>/dev/null | head -1) || true
+    if [ -n "${prev:-}" ]; then
+        echo "   (stopping previous flight holding :$FLIGHT_PORT — PID $prev)"
+        kill "$prev" 2>/dev/null || true; sleep 1
+    fi
+fi
 rm -rf "$FLIGHT_HOME/src" "$FLIGHT_HOME/render"; mkdir -p "$FLIGHT_HOME"
 
 git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$FLIGHT_HOME/src"
@@ -64,8 +74,12 @@ if [ ! -d "$FLIGHT_HOME/venv" ]; then python3 -m venv "$FLIGHT_HOME/venv"; fi
         nohup "$FLIGHT_HOME/venv/bin/python" brainstem.py > "$FLIGHT_HOME/flight.log" 2>&1 &
     echo $! > "$FLIGHT_HOME/flight.pid"
 )
+SERVER_PID=$(cat "$FLIGHT_HOME/flight.pid")
 for _ in $(seq 1 20); do
     sleep 1
+    # Success means OUR server is serving — a health answer alone could come
+    # from a previous flight if this one died on startup (e.g. port bind).
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then break; fi
     if curl -fsS "http://localhost:$FLIGHT_PORT/health" >/dev/null 2>&1; then
         echo "✅ $RING@$SHA is flying: http://localhost:$FLIGHT_PORT"
         echo "   auth (optional): open the UI and use Login — GitHub device flow"
@@ -75,5 +89,9 @@ for _ in $(seq 1 20); do
     fi
 done
 tail -5 "$FLIGHT_HOME/flight.log" >&2
-echo "✗ flight did not answer /health in 20s (log above) — please report this on kody-w/rapp-$RING" >&2
+if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "✗ flight server exited during startup (log above) — please report this on kody-w/rapp-$RING" >&2
+else
+    echo "✗ flight did not answer /health in 20s (log above) — please report this on kody-w/rapp-$RING" >&2
+fi
 exit 1
