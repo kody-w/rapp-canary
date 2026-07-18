@@ -37,6 +37,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Experimental-flight poison pill (SOP.md §4): flight/* branches carry
+      # FLIGHT.json at the repo root and must never reach main — main feeds the
+      # promotion train. A flight merged to main turns preflight red before any
+      # operator can promote it. (On flight/* branches the marker is expected.)
+      - name: no flight marker on main
+        if: github.ref == 'refs/heads/main'
+        run: |
+          if [ -f FLIGHT.json ]; then
+            echo "::error file=FLIGHT.json::FLIGHT.json on main — an experimental flight was merged into the train. Revert the merge (SOP.md §4)."
+            exit 1
+          fi
+
       - name: bash syntax
         run: |
           bash -n install.sh
