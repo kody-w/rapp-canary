@@ -39,6 +39,24 @@ TARGET="$(cd "$TARGET" && pwd)" || die "target not found: $1"
 git -C "$TARGET" remote -v | grep -q "aibast-agents-library" \
     || die "$TARGET does not look like an aibast-agents-library checkout"
 
+# The downstream channel ships from the grail, never from a ring or a fork.
+# Rehearsing a sync from elsewhere is an explicit act: RAPP_SYNC_ALLOW_NONGRAIL=1.
+SRC_ORIGIN="$(git -C "$SRC" remote get-url origin 2>/dev/null || echo none)"
+if ! echo "$SRC_ORIGIN" | grep -qi "github\.com[:/]kody-w/rapp-installer"; then
+    [ "${RAPP_SYNC_ALLOW_NONGRAIL:-0}" = "1" ] \
+        || die "source origin is $SRC_ORIGIN, not kody-w/rapp-installer — set RAPP_SYNC_ALLOW_NONGRAIL=1 only for a rehearsal, never a real sync"
+    say "${YELLOW}⚠ REHEARSAL: syncing from $SRC_ORIGIN, not the grail${NC}"
+fi
+
+# Downstream deltas the rewrite can't express live in <target>/.sync/patches/.
+# A target without that directory is either brand-new or silently missing its
+# patches — make the operator say so out loud.
+if ! compgen -G "$TARGET/.sync/patches/*.patch" > /dev/null; then
+    [ "${RAPP_SYNC_ALLOW_NO_PATCHES:-0}" = "1" ] \
+        || die "$TARGET has no .sync/patches/*.patch — if this target genuinely carries no downstream patches, re-run with RAPP_SYNC_ALLOW_NO_PATCHES=1"
+    say "${YELLOW}⚠ no downstream patches present — proceeding on explicit override${NC}"
+fi
+
 # Upstream must be clean and should be a tagged release — the downstream
 # channel consumes releases, not work in progress.
 [ -z "$(git -C "$SRC" status --porcelain)" ] || die "upstream checkout is dirty — sync from a clean tagged release"
@@ -135,6 +153,20 @@ fi
 LEAKS=$(cd "$TARGET" && grep -l "kody-w/rapp-installer\|kody-w.github.io/rapp-installer" \
         "${SYNCED_TEXT[@]}" 2>/dev/null || true)
 [ -z "$LEAKS" ] || die "rewrite missed upstream references in: $LEAKS"
+
+# ---- guard: ring-owned files must never reach a downstream ----
+[ ! -e "$TARGET/.ring" ] || die "ring overlay leaked downstream: $TARGET/.ring"
+for wf in autonomous-pre-grail.yml test-pre-grail-rings.yml; do
+    [ ! -e "$TARGET/.github/workflows/$wf" ] \
+        || die "ring workflow leaked downstream: .github/workflows/$wf"
+done
+
+# ---- informational: deliberate content-repo refs that stay kody-w ----
+# (CommunityRAPP / AI-Agent-Templates / RAR are dependencies, not identity;
+#  the downstream scrub reviews them by hand — this just makes them visible)
+CONTENT_REFS=$(cd "$TARGET" && grep -l "kody-w/CommunityRAPP\|kody-w/AI-Agent-Templates\|kody-w/RAR" \
+        "${SYNCED_TEXT[@]}" 2>/dev/null | wc -l | tr -d ' ')
+say "  ${YELLOW}•${NC} $CONTENT_REFS synced files carry deliberate kody-w content-repo refs (review, don't rewrite)"
 
 # ---- report drift in downstream-owned files ----
 say ""
