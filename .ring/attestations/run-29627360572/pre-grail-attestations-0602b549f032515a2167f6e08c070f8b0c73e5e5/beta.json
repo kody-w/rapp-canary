@@ -1,0 +1,15 @@
+{
+  "parent": {
+    "ring": "alpha",
+    "sha256": "99ed5967a13effb71fa915eab6c428284fab3b542f963ba471d08830e7404ee0"
+  },
+  "payload": {
+    "commit": "0602b549f032515a2167f6e08c070f8b0c73e5e5",
+    "repository": "kody-w/rapp-beta",
+    "shared_sha256": "41e2a3fec8609fe0f10aa3c23e46046873ef0760ed2fa1f0bfbc09aeeafa8e66",
+    "tree": "844956a3859cb1b7cb397be710cbdb49ce14e4e5"
+  },
+  "result": "passed",
+  "ring": "beta",
+  "schema": "rapp-ring-attestation/1"
+}
