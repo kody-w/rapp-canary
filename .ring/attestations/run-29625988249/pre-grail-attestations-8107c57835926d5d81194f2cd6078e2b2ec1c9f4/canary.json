@@ -1,0 +1,12 @@
+{
+  "parent": null,
+  "payload": {
+    "commit": "e2a0c2f5e42859303c50676449e08a0236144f49",
+    "repository": "kody-w/rapp-canary",
+    "shared_sha256": "e113fcf6422eb110baa076e265f6b7fa0ffe106ce3dc0e2fec830dc10b5112c2",
+    "tree": "1d84ff92cdaa49043c2405dd6803efe6fb775a13"
+  },
+  "result": "passed",
+  "ring": "canary",
+  "schema": "rapp-ring-attestation/1"
+}
