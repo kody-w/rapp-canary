@@ -1,9 +1,32 @@
 # Cartridges — an `.egg` that travels inside an `agent.py`
 
+Every `.egg` travels the same way: as one `agent.py` that either **carries**
+the egg or **references** it from a public source. Same carrier, same refusal
+discipline, same delegation — the only difference is where the bytes come from.
+
 ```bash
+# embedded — carries the egg, works offline and across an air gap
 python3 rapp_brainstem/tools/cartridge.py pack thing.egg
-#   -> thing_cartridge_agent.py   (one file)
+
+# referenced — fetches once from the published egg hub, digest pinned
+python3 rapp_brainstem/tools/cartridge.py ref grandma-rose
+
+# referenced from any URL (a digest is mandatory)
+python3 rapp_brainstem/tools/cartridge.py ref https://…/x.egg --sha256 <hex> \
+        --mirror https://…/mirror/x.egg
 ```
+
+|              | embedded | referenced |
+|---|---|---|
+| carrier size | egg × 1.33 + ~12 KB | ~13 KB, any egg |
+| network      | never | once, then cached |
+| air gap      | yes | no |
+| digest       | pinned | pinned |
+
+`ref <slug>` resolves against `kody-w/rapp-egg-hub`, whose index already
+publishes `sha256`, `raw_url`, `egg_schema` and `size_bytes` per entry
+(`rapp-egg-hub/2.0`). Nothing here invents a registry — Article XLVII forbids
+that, and the hub exists.
 
 AirDrop that file, or take it in at **Agents → Receive an agent**. On the next
 message the brainstem has it.
@@ -33,7 +56,7 @@ next kind that ships.
 
 The cartridge therefore does exactly three things:
 
-1. **verify** — SHA-256 of the embedded egg, checked before anything is written
+1. **verify** — SHA-256 checked before anything is written, in both modes
 2. **land** — write the egg byte-identical into `~/.brainstem-eggs`
    (`RAPP_EGG_LANDING` to override)
 3. **hand over** — call the universal hatcher, using the hatcher's *own declared
@@ -60,3 +83,24 @@ verified egg on disk. Refusing is the specified behaviour, not a limitation.
 Base64 is 1.33×, plus a fixed ~12 KB of carrier. A 27 KB egg becomes a 51 KB
 agent; a 167 KB egg becomes about 235 KB. That is the price of one file the
 receiver already understands.
+
+## A reference is not trust in a URL
+
+The digest is pinned at pack time. If a source later serves different bytes the
+cartridge **refuses them**, and says so in those words rather than burying it in
+a list of transport errors — "the network is down" and "the source substituted
+the payload" are different facts, and only one of them is an attack.
+
+An unpinned reference cannot be built at all: `ref` exits rather than emit a
+cartridge that would hand on whatever a URL serves next month.
+
+## Two honest edges
+
+- **Name collisions are the kernel's call.** Two cartridges for the same egg
+  declare the same agent name, and `/agents/import` returns `409` and preserves
+  the first. That is the conflict check working; pass `--name` to differentiate.
+- **A rejected cartridge may still land its egg.** Validation imports the file,
+  which runs `__init__`, which lands the (verified) egg — then a later
+  conflict check can still reject the agent. The egg on disk is byte-correct
+  and the hatcher was never called, so nothing is inconsistent; it is just
+  worth knowing before it surprises you.

@@ -34,6 +34,7 @@ guesses, and it never writes outside the landing directory.
 
 import argparse
 import base64
+import pprint
 import hashlib
 import json
 import os
@@ -176,6 +177,10 @@ EGG_SCHEMA = {schema!r}
 EGG_KIND = {kind!r}
 EGG_SHA256 = {sha256!r}
 EGG_BYTES = {size}
+MODE = {mode!r}
+# Tried in order. Every entry must serve the SAME bytes — the digest above is
+# what makes a mirror a mirror rather than a second source of truth.
+SOURCES = {sources}
 LANDING = os.path.expanduser(os.getenv("RAPP_EGG_LANDING", {landing!r}))
 
 EGG_B64 = (
@@ -183,16 +188,69 @@ EGG_B64 = (
 )
 
 
-def egg_bytes():
-    """Decode and verify. A cartridge that hands over unverified bytes is worse
-    than one that fails, because the failure surfaces later and somewhere else."""
-    raw = base64.b64decode("".join(EGG_B64.split()))
+def _verify(raw, origin):
     got = hashlib.sha256(raw).hexdigest()
     if got != EGG_SHA256:
         raise ValueError(
-            f"embedded egg failed its checksum: expected {{EGG_SHA256[:16]}}, "
-            f"got {{got[:16]}} — this cartridge was altered in transit")
+            f"egg from {{origin}} failed its checksum: expected "
+            f"{{EGG_SHA256[:16]}}, got {{got[:16]}} — refusing to hand on bytes "
+            f"that are not the ones this cartridge was built for")
     return raw
+
+
+def _cached():
+    """A landed egg that still matches the digest is the payload. This is what
+    makes a referenced cartridge fetch exactly once, ever."""
+    dest = os.path.join(LANDING, EGG_FILENAME)
+    if not os.path.isfile(dest):
+        return None
+    try:
+        with open(dest, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    return raw if hashlib.sha256(raw).hexdigest() == EGG_SHA256 else None
+
+
+def egg_bytes(timeout=15):
+    """The payload, verified, however it arrives.
+
+    Embedded cartridges carry it. Referenced cartridges fetch it once from a
+    public source and cache it. Either way the SHA-256 is pinned at pack time,
+    so a reference is not a trust relationship with a URL — if the source ever
+    serves different bytes, this refuses them."""
+    if EGG_B64:
+        return _verify(base64.b64decode("".join(EGG_B64.split())), "the cartridge")
+    hit = _cached()
+    if hit is not None:
+        return hit
+    if not SOURCES:
+        raise ValueError("this cartridge references an egg but lists no source")
+    import urllib.request
+    errors, tampered = [], []
+    for url in SOURCES:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                raw = r.read()
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{{url}} -> {{type(e).__name__}}: {{e}}")
+            continue
+        try:
+            return _verify(raw, url)
+        except ValueError as e:
+            # Reached the source and it served the WRONG BYTES. That is a
+            # different fact from "the network is down", and burying it in a
+            # list of transport errors is how a substituted payload goes
+            # unnoticed. Report it first and on its own.
+            tampered.append(str(e))
+    if tampered:
+        raise ValueError(
+            "REFUSED: a source served bytes that do not match the digest this "
+            "cartridge pins. " + " | ".join(tampered))
+    raise ValueError(
+        "could not fetch the referenced egg from any source. "
+        + " | ".join(errors)
+        + ". An embedded cartridge (cartridge pack) needs no network.")
 
 
 def _marker_path():
@@ -238,11 +296,9 @@ class {cls}(BasicAgent):
     def _save(self):
         os.makedirs(LANDING, exist_ok=True)
         dest = os.path.join(LANDING, EGG_FILENAME)
+        if _cached() is not None:
+            return dest, False                  # already here, byte-identical
         raw = egg_bytes()
-        if os.path.exists(dest):
-            with open(dest, "rb") as fh:
-                if hashlib.sha256(fh.read()).hexdigest() == EGG_SHA256:
-                    return dest, False          # already here, byte-identical
         tmp = dest + ".part"
         with open(tmp, "wb") as fh:
             fh.write(raw)
@@ -369,6 +425,135 @@ if __name__ == "__main__":
 '''
 
 
+EGG_HUB_INDEX = ("https://raw.githubusercontent.com/kody-w/"
+                 "rapp-egg-hub/main/index.json")
+
+
+def hub_lookup(slug, index_url=None):
+    """Resolve a slug against the published egg hub.
+
+    The hub already publishes sha256, raw_url, egg_schema and size_bytes per
+    entry (`rapp-egg-hub/2.0`), which is everything a referenced cartridge
+    needs. Nothing here invents a registry — Article XLVII forbids that, and
+    the hub exists."""
+    import urllib.request
+    with urllib.request.urlopen(index_url or EGG_HUB_INDEX, timeout=20) as r:
+        idx = json.loads(r.read())
+    base = (idx.get("raw_base") or "").rstrip("/")
+    for e in idx.get("eggs") or []:
+        if e.get("slug") == slug or e.get("name") == slug:
+            url = e.get("raw_url") or (
+                f"{base}/{str(e.get('egg_path') or '').lstrip('/')}" if base else None)
+            return {"slug": e.get("slug"), "url": url,
+                    "sha256": e.get("sha256"), "size": e.get("size_bytes"),
+                    "schema": e.get("egg_schema"), "kind": e.get("kind"),
+                    "name": e.get("display_name") or e.get("name")}
+    return None
+
+
+def emit(out, *, stem, egg_name, meta, sha, size, mode, payload, sources,
+         agent_name=None):
+    manifest = {
+        "schema": "rapp-agent/1.0",
+        "name": f"@cartridge/{stem}",
+        "kind": "agent",
+        "version": "1.0.0",
+        "summary": f"Self-bootstrapping cartridge carrying {egg_name}.",
+        "tags": ["cartridge", "egg", "portable", "singleton", mode],
+        "ring": "frontier",
+        "capabilities": (["credential-access", "filesystem-write", "dynamic-code"]
+                         + (["network"] if mode == "ref" else [])),
+        "carries": {"egg": egg_name, "schema": meta.get("schema"),
+                    "kind": meta.get("kind"), "sha256": sha, "mode": mode},
+    }
+    agent_name = agent_name or re.sub(r"[^0-9A-Za-z_-]", "_", f"{stem}_cartridge")[:60]
+    text = TEMPLATE.format(
+        title=(meta.get("name") or stem).replace("_", " ").title(),
+        egg_name=egg_name, container=meta.get("container") or "referenced",
+        schema=meta.get("schema"), kind=meta.get("kind"),
+        kind_desc=meta.get("kind") or "unknown-kind",
+        size=size or 0, sha256=sha,
+        manifest=pprint.pformat(manifest, indent=4, width=74,
+                                sort_dicts=False),
+        payload=payload, landing=LANDING_DEFAULT, mode=mode,
+        sources=pprint.pformat(sources, indent=4, width=74),
+        cls=_class(stem) + "CartridgeAgent", agent_name=agent_name,
+    )
+    # Never emit a cartridge that will not load. compile() alone is not enough:
+    # it catches SyntaxError, but a bad literal (a JSON `null` in Python source)
+    # is a NameError that only appears when the module is EXECUTED — which is
+    # precisely what the receiving brainstem does on import. So execute it here,
+    # in a throwaway namespace. Nothing runs at module scope except constants
+    # and a class definition; the agent's __init__ is not called.
+    try:
+        compile(text, out, "exec")
+    except SyntaxError as e:
+        sys.exit(f"cartridge: generated file does not compile "
+                 f"(line {e.lineno}: {e.msg}) — refusing to write it")
+    try:
+        exec(compile(text, out, "exec"), {"__name__": "_cartridge_probe"})
+    except Exception as e:  # noqa: BLE001
+        sys.exit(f"cartridge: generated file does not import "
+                 f"({type(e).__name__}: {e}) — refusing to write a cartridge "
+                 f"the receiving brainstem would roll back")
+    with open(out, "w") as fh:
+        fh.write(text)
+    return out
+
+
+def cmd_ref(args):
+    """A cartridge that references its egg from a public source.
+
+    Same carrier, same refusal discipline, same delegation to the hatcher — the
+    only difference is where the bytes come from. The digest is pinned at pack
+    time, so a reference is not a trust relationship with a URL: if the source
+    ever serves different bytes, the cartridge refuses them."""
+    target = args.target
+    if target.startswith(("http://", "https://")):
+        url, sha, size = target, args.sha256, None
+        if not sha:
+            if not args.allow_unpinned:
+                sys.exit("cartridge: refusing to build an unpinned reference. "
+                         "Pass --sha256, or point at a hub slug which publishes "
+                         "one. Without a digest the cartridge would hand on "
+                         "whatever that URL serves later.")
+            sys.exit("cartridge: --allow-unpinned is deliberately not "
+                     "implemented; pin the digest.")
+        meta = {"schema": args.schema, "kind": args.kind,
+                "name": args.name, "container": "referenced"}
+        egg_name = args.egg_name or os.path.basename(url.split("?")[0])
+        stem = _snake(args.name or re.sub(r"\.egg$", "", egg_name))
+        sources = [url] + list(args.mirror or [])
+    else:
+        hit = hub_lookup(target, args.index)
+        if not hit:
+            sys.exit(f"cartridge: {target!r} is not in the egg hub index. "
+                     f"Pass a full URL with --sha256 instead.")
+        if not hit.get("url") or not hit.get("sha256"):
+            sys.exit(f"cartridge: hub entry {target!r} has no raw_url or sha256 "
+                     f"— cannot build a verifiable reference from it.")
+        url, sha, size = hit["url"], hit["sha256"], hit.get("size")
+        meta = {"schema": hit.get("schema"), "kind": hit.get("kind"),
+                "name": hit.get("name"), "container": "referenced"}
+        egg_name = os.path.basename(url.split("?")[0])
+        stem = _snake(hit.get("slug") or egg_name)
+        sources = [url] + list(args.mirror or [])
+
+    out = args.out or f"{stem}_cartridge_agent.py"
+    emit(out, stem=stem, egg_name=egg_name, meta=meta, sha=sha, size=size or 0,
+         mode="ref", payload='    ""', sources=sources)
+    print(f"  referenced {egg_name} -> {out}")
+    print(f"    schema      {meta.get('schema')}")
+    print(f"    kind        {meta.get('kind')}")
+    print(f"    egg         {(size or 0):,} bytes   sha {sha[:16]}")
+    print(f"    sources     {len(sources)}")
+    for s in sources:
+        print(f"      - {s}")
+    print(f"    cartridge   {os.path.getsize(out):,} bytes")
+    print("\n  Fetches once, verifies against the pinned digest, then caches.")
+    return 0
+
+
 def cmd_pack(args):
     src = os.path.abspath(args.egg)
     if not os.path.isfile(src):
@@ -391,40 +576,9 @@ def cmd_pack(args):
     lines = [b64[i:i + 76] for i in range(0, len(b64), 76)]
     payload = "\n".join(f'    "{ln}"' for ln in lines)
 
-    manifest = {
-        "schema": "rapp-agent/1.0",
-        "name": f"@cartridge/{stem}",
-        "kind": "agent",
-        "version": "1.0.0",
-        "summary": f"Self-bootstrapping cartridge carrying {egg_name}.",
-        "tags": ["cartridge", "egg", "portable", "singleton"],
-        "ring": "frontier",
-        "capabilities": ["credential-access", "filesystem-write", "dynamic-code"],
-        "carries": {"egg": egg_name, "schema": meta["schema"],
-                    "kind": meta["kind"], "sha256": sha},
-    }
-    agent_name = re.sub(r"[^0-9A-Za-z_-]", "_", f"{stem}_cartridge")[:60]
     out = args.out or f"{stem}_cartridge_agent.py"
-    text = TEMPLATE.format(
-        title=(meta.get("name") or stem).replace("_", " ").title(),
-        egg_name=egg_name, container=meta["container"],
-        schema=meta["schema"], kind=meta["kind"],
-        kind_desc=meta["kind"] or "unknown-kind",
-        size=len(raw), sha256=sha,
-        manifest=json.dumps(manifest, indent=4),
-        payload=payload, landing=LANDING_DEFAULT,
-        cls=_class(stem) + "CartridgeAgent", agent_name=agent_name,
-    )
-    # Never emit a cartridge that will not load — the receiving brainstem would
-    # roll it back and the operator would be left guessing which end broke.
-    try:
-        compile(text, out, "exec")
-    except SyntaxError as e:
-        sys.exit(f"cartridge: generated file does not compile "
-                 f"(line {e.lineno}: {e.msg}) — refusing to write it")
-    with open(out, "w") as fh:
-        fh.write(text)
-
+    emit(out, stem=stem, egg_name=egg_name, meta=meta, sha=sha, size=len(raw),
+         mode="embed", payload=payload, sources=[])
     print(f"  packed {egg_name} -> {out}")
     print(f"    container   {meta['container']}")
     print(f"    schema      {meta['schema']}")
@@ -432,7 +586,6 @@ def cmd_pack(args):
     print(f"    egg         {len(raw):,} bytes   sha {sha[:16]}")
     print(f"    cartridge   {os.path.getsize(out):,} bytes "
           f"({os.path.getsize(out)/max(1,len(raw)):.2f}x)")
-    print(f"    agent       {agent_name}")
     print("\n  One file. AirDrop it, or import it at Agents -> Receive an agent.")
     return 0
 
@@ -469,6 +622,18 @@ def main(argv=None):
     q.add_argument("-o", "--out")
     q.add_argument("--name")
     q.set_defaults(fn=cmd_pack)
+    q = sub.add_parser("ref", help="reference an egg from a public source")
+    q.add_argument("target", help="an egg-hub slug, or a full https URL")
+    q.add_argument("-o", "--out")
+    q.add_argument("--sha256", help="required when target is a URL")
+    q.add_argument("--mirror", action="append", help="additional source, same bytes")
+    q.add_argument("--index", help="alternate hub index URL")
+    q.add_argument("--schema"); q.add_argument("--kind"); q.add_argument("--name")
+    q.add_argument("--egg-name")
+    q.add_argument("--allow-unpinned", action="store_true",
+                   help=argparse.SUPPRESS)
+    q.set_defaults(fn=cmd_ref)
+
     q = sub.add_parser("inspect", help="what is this cartridge carrying?")
     q.add_argument("cartridge")
     q.set_defaults(fn=cmd_inspect)
