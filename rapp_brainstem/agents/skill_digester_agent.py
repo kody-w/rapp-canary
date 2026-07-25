@@ -85,6 +85,15 @@ __manifest__ = {
     "tier": "core",
     "trust": "community",
     "version": "1.0.0",
+    # Maturity ring and capability declaration, for deployments running under a
+    # RAPP strain (kody-w/rapp-light). The capabilities below are not a claim —
+    # a strain verifies them against this file's syntax tree and withholds the
+    # agent if the code reaches anything not listed here.
+    #   credential-access  os.getenv("SKILL_FEED_PATH")
+    #   filesystem-write   materialising agent.py; moving refused files aside
+    #   dynamic-code       compile(), to refuse a cartridge that would not parse
+    "ring": "frontier",
+    "capabilities": ["credential-access", "filesystem-write", "dynamic-code"],
     "tags": ["skills", "hot-load", "toaster", "portability", "singleton"],
     "example_call": {
         "args": {"action": "status"},
