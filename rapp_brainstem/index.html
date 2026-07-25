@@ -673,6 +673,26 @@
   .agent-list .export-btn:hover { border-color: #58a6ff; color: #58a6ff; }
   .agent-list .del-btn:hover { border-color: #f85149; color: #f85149; }
 
+  /* ── AirDrop: the link cable between two devices ── */
+  .agent-list .airdrop-btn:hover { border-color: #3fb950; color: #3fb950; }
+  .airdrop-receive { margin-top: 12px; text-align: center; }
+  .airdrop-receive .panel-btn {
+    background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+    border-radius: 6px; padding: 8px 14px; font-size: 12px;
+    cursor: pointer; transition: all 0.15s; width: 100%;
+  }
+  .airdrop-receive .panel-btn.primary { background: #238636; border-color: #238636; }
+  .airdrop-receive .panel-btn.primary:hover { background: #2ea043; }
+  .airdrop-hint {
+    font-size: 10px; color: #8b949e; margin-top: 6px; line-height: 1.4;
+  }
+  .airdrop-hint-active { color: #3fb950; }
+  /* On a phone the controls wrap, and a 3px target is not a target. */
+  @media (max-width: 600px), (pointer: coarse) {
+    .agent-list .agent-controls { flex-wrap: wrap; gap: 6px; }
+    .agent-list .export-btn { padding: 8px 12px; font-size: 12px; }
+  }
+
   /* ── RAR registry search ── */
   .rar-search { margin: 4px 0 8px; }
   #rar-search-input {
@@ -888,6 +908,15 @@
   }
   body.light-mode .agent-list .export-btn:hover { border-color: #0969da; color: #0969da; }
   body.light-mode .agent-list .del-btn:hover { border-color: #cf222e; }
+  body.light-mode .agent-list .airdrop-btn:hover { border-color: #1a7f37; color: #1a7f37; }
+  body.light-mode .airdrop-receive .panel-btn {
+    background: #f6f8fa; color: #24292e; border-color: #d0d7de;
+  }
+  body.light-mode .airdrop-receive .panel-btn.primary {
+    background: #1f883d; border-color: #1f883d; color: #ffffff;
+  }
+  body.light-mode .airdrop-hint { color: #57606a; }
+  body.light-mode .airdrop-hint-active { color: #1a7f37; }
   body.light-mode #model-select {
     background: #ffffff; color: #24292e; border-color: #d0d7de;
   }
@@ -1122,8 +1151,20 @@
         <ul class="agent-list" id="agent-list-ul">
           <!-- Populated by JS -->
         </ul>
+        <!-- Receiving side of the link cable. Drag & drop does not exist on a
+             phone, so an AirDropped agent needs a tap target to get in. -->
+        <div class="airdrop-receive">
+          <input type="file" id="airdrop-input" accept=".py,text/x-python,text/plain" multiple hidden
+                 onchange="receiveAirdroppedAgents(this)">
+          <button class="panel-btn primary" onclick="document.getElementById('airdrop-input').click()">
+            Receive an agent
+          </button>
+          <div class="airdrop-hint" id="airdrop-hint">
+            AirDropped a file? Tap here and pick it from Files.
+          </div>
+        </div>
         <div style="font-size:10px; color:#8b949e; margin-top:12px; text-align:center;">
-          Drag & drop agent.py files anywhere to install new agents
+          Drag &amp; drop agent.py files anywhere to install new agents
         </div>
       </div>
     </div>
@@ -1766,6 +1807,163 @@
     document.body.classList.add('light-mode');
   }
 
+  // ── AirDrop: the link cable between two devices ───────────────────────────
+  //
+  // A RAPP capability is one self-contained agent.py, so moving a capability
+  // between devices is moving one file. AirDrop already does that well; this
+  // just hands the file to the OS share sheet and takes it back on the far end.
+  //
+  // Two constraints shape the whole implementation:
+  //
+  //  1. navigator.share() with files needs a SECURE CONTEXT. http://localhost
+  //     counts; http://192.168.x.x does NOT. So a phone browsing the brainstem
+  //     over the LAN cannot open the share sheet, and gets the download path
+  //     instead (save the file, then AirDrop it from Files).
+  //  2. iOS discards the user-gesture context across an `await`. Fetching the
+  //     file and then calling share() in the same handler throws
+  //     NotAllowedError on iPhone while working fine on macOS. So the file is
+  //     fetched on pointerdown and shared on click.
+  const _agentFileCache = new Map();
+
+  function _airdropCapability() {
+    if (!window.isSecureContext) return 'insecure';
+    if (!navigator.canShare) return 'unsupported';
+    return 'sheet';
+  }
+
+  // Say which path this device is on BEFORE the user taps, not after. A phone
+  // reaching the brainstem at http://192.168.x.x is not a secure context, so
+  // the share sheet is unavailable there and no amount of tapping will summon
+  // it — which is confusing unless it is said out loud.
+  function updateAirdropHint() {
+    const hint = document.getElementById('airdrop-hint');
+    if (!hint || hint.classList.contains('airdrop-hint-active')) return;
+    const mode = _airdropCapability();
+    if (mode === 'sheet') {
+      hint.textContent = 'AirDrop sends straight from here. Received a file? Tap to pick it from Files.';
+    } else if (mode === 'insecure') {
+      hint.textContent = 'Opened over the network, so AirDrop goes via Files: '
+        + 'tap AirDrop to save, then share it from Files. '
+        + 'Open the brainstem on localhost for the share sheet.';
+    } else {
+      hint.textContent = 'This browser has no share sheet — AirDrop saves the file, '
+        + 'then share it from Files. Received one? Tap to pick it.';
+    }
+  }
+
+  async function _fetchAgentFile(filename) {
+    const res = await fetch(`${API}/agents/export/${encodeURIComponent(filename)}`);
+    if (!res.ok) throw new Error(`could not read ${filename} (${res.status})`);
+    const blob = await res.blob();
+    // text/x-python is what the file is; some share targets are happier with a
+    // type they recognise, and the .py extension carries the meaning anyway.
+    return new File([blob], filename, { type: 'text/x-python' });
+  }
+
+  function prefetchAgentFile(filename) {
+    if (_agentFileCache.has(filename)) return;
+    _agentFileCache.set(filename, _fetchAgentFile(filename).catch(e => {
+      _agentFileCache.delete(filename);
+      throw e;
+    }));
+  }
+
+  function _airdropFallback(filename, why) {
+    // No share sheet available. Download it, and say plainly what to do next —
+    // a silent download that the user has to guess about is a dead end.
+    window.open(`${API}/agents/export/${encodeURIComponent(filename)}`, '_blank');
+    const hint = document.getElementById('airdrop-hint');
+    if (hint) {
+      hint.textContent = `${filename} saved. Open Files → long-press it → Share → AirDrop.`;
+      hint.classList.add('airdrop-hint-active');
+      setTimeout(() => hint.classList.remove('airdrop-hint-active'), 12000);
+    }
+    console.info('[airdrop] share sheet unavailable:', why);
+  }
+
+  async function airdropAgent(filename) {
+    if (!window.isSecureContext || !navigator.canShare) {
+      return _airdropFallback(filename, !window.isSecureContext
+        ? 'not a secure context (open the brainstem on localhost for the share sheet)'
+        : 'this browser has no Web Share API');
+    }
+    let file;
+    try {
+      // Already in flight from pointerdown — awaiting a resolved promise keeps
+      // the gesture on iOS, where awaiting a fresh fetch would not.
+      file = await (_agentFileCache.get(filename) || _fetchAgentFile(filename));
+    } catch (e) {
+      alert(`Could not read ${filename}: ${e.message}`);
+      return;
+    }
+    if (!navigator.canShare({ files: [file] })) {
+      return _airdropFallback(filename, 'this browser will not share a .py file');
+    }
+    try {
+      await navigator.share({
+        files: [file],
+        title: filename,
+        text: `RAPP agent: ${filename}`
+      });
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;     // user closed the sheet
+      if (e && e.name === 'NotAllowedError') {
+        return _airdropFallback(filename,
+          'the browser dropped the user gesture before the sheet opened');
+      }
+      _airdropFallback(filename, e && e.message ? e.message : String(e));
+    }
+  }
+
+  async function receiveAirdroppedAgents(input) {
+    const files = Array.from(input.files || []);
+    input.value = '';                                // allow re-picking the same file
+    const hint = document.getElementById('airdrop-hint');
+    const say = (msg) => {
+      if (!hint) return;
+      hint.textContent = msg;
+      hint.classList.add('airdrop-hint-active');
+    };
+    if (!files.length) return;
+    let installed = 0;
+    for (const file of files) {
+      if (!file.name.endsWith('.py')) {
+        say(`${file.name} is not an agent.py — skipped.`);
+        continue;
+      }
+      if (!confirm(`Install ${file.name}? This executes Python code on your machine.`)) continue;
+      const fd = new FormData();
+      fd.append('file', file);
+      // The brainstem verifies this digest against the bytes it received, so a
+      // file truncated in transit is refused rather than half-installed.
+      try {
+        const buf = await file.arrayBuffer();
+        const digest = await crypto.subtle.digest('SHA-256', buf);
+        fd.append('sha256', Array.from(new Uint8Array(digest))
+          .map(b => b.toString(16).padStart(2, '0')).join(''));
+      } catch (e) {
+        // crypto.subtle is itself secure-context-only. Importing without the
+        // digest is what the drag & drop path has always done, so this is a
+        // degradation, not a failure — but say so rather than pretend.
+        console.info('[airdrop] no integrity digest available:', e);
+      }
+      try {
+        const res = await fetch(`${API}/agents/import`, { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          installed++;
+          say(`Installed ${file.name}. It is live on your next message.`);
+        } else {
+          say(`${file.name}: ${data.error}`);
+        }
+      } catch (err) {
+        say(`${file.name}: ${err}`);
+      }
+    }
+    if (installed) loadAgentsList();
+    if (hint) setTimeout(() => hint.classList.remove('airdrop-hint-active'), 12000);
+  }
+
   // ── Agents Panel (installed *_agent.py files) ──
   function toggleAgentsPanel() {
     const p = document.getElementById('agents-panel');
@@ -1806,6 +2004,7 @@
       const data = await res.json();
       const ul = document.getElementById('agent-list-ul');
       ul.innerHTML = '';
+      updateAirdropHint();
       if (!data.files || data.files.length === 0) {
         ul.innerHTML = '<li><span class="agent-name" style="color:#8b949e">No agents found.</span></li>';
         return;
@@ -1844,6 +2043,19 @@
           window.open(`${API}/agents/export/${encodeURIComponent(item.filename)}`, '_blank');
         };
 
+        // Send this agent to another device over AirDrop (or any share target).
+        // A single-file agent.py is already the whole capability, so the link
+        // cable between two devices is just the file.
+        const dropBtn = document.createElement('button');
+        dropBtn.className = 'export-btn airdrop-btn';
+        dropBtn.textContent = 'AirDrop';
+        dropBtn.title = 'Send this agent to another device';
+        // iOS drops the user-gesture context across an await, so the file is
+        // fetched on press and shared on release. Without this, share() throws
+        // NotAllowedError on iPhone even though the same code works on a Mac.
+        dropBtn.addEventListener('pointerdown', () => prefetchAgentFile(item.filename));
+        dropBtn.onclick = () => airdropAgent(item.filename);
+
         const delBtn = document.createElement('button');
         delBtn.className = 'export-btn del-btn';
         delBtn.style.color = '#f85149';
@@ -1865,6 +2077,7 @@
         };
 
         controls.appendChild(expBtn);
+        controls.appendChild(dropBtn);
         controls.appendChild(delBtn);
 
         li.appendChild(nameWrap);
