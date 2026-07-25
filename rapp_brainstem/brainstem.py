@@ -1907,13 +1907,191 @@ def _auto_install(package, declared=frozenset()):
     _failed_installs.add(package)
     return False
 
+# ── SKILL.md hot-load ────────────────────────────────────────────────────────
+# The brainstem accepts three shapes in agents/ and treats them as one thing:
+#
+#   *_agent.py        code. Loads exactly as it always has.
+#   toasted SKILL.md  carries an RCI capsule, and the capsule CONTAINS the
+#                     agent source -- so it is restored and executed as code.
+#                     "Works just like an agent.py" is literal, not analogous.
+#   raw SKILL.md      prose with no canonical form. Toasted IN MEMORY on load
+#                     and exposed as a SPEC-tier agent that returns its own
+#                     instructions.
+#
+# This is not architecturally pure -- a raw skill has no deterministic layer,
+# and pretending otherwise would be a lie. It is here for INTEROP: it is how a
+# brainstem consumes the skill corpora everyone else already has, without
+# asking anyone to convert anything first.
+#
+# FOUR RULES THAT KEEP IT FROM BEING A FOOTGUN
+#   1. Never rewrite the user's file. Toasting happens in memory. A runtime
+#      that silently edits files in agents/ is a runtime nobody can trust.
+#   2. Cache by (path, mtime, size). load_agents() runs on EVERY /chat, and
+#      re-deriving a corpus of skills per request is a latency bug waiting to
+#      be blamed on the model.
+#   3. agent.py WINS a name collision. Code is the canonical form; prose does
+#      not get to shadow it.
+#   4. Tier is visible. A raw skill is SPEC tier -- it returns instructions, it
+#      does not compute. /health reports which shape each capability came from
+#      so nobody mistakes prose for code.
+
+_SKILL_CACHE = {}
+_CAPSULE_RE = re.compile(r"rci-capsule:v1:([A-Za-z0-9+/=]+)")
+_GENERATED_RE = re.compile(
+    r"\n?<!-- toaster:generated:begin -->.*?<!-- toaster:generated:end -->\n?", re.S)
+
+
+def _skill_frontmatter(text):
+    """Minimal YAML front-matter reader: name/description scalars only."""
+    if not text.startswith("---"):
+        return {}, text
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}, text
+    head, rest = text[3:end], text[end + 4:]
+    out = {}
+    for line in head.splitlines():
+        m = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
+        if not m:
+            continue
+        k, v = m.group(1), m.group(2).strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        out[k] = v
+    return out, rest.lstrip("\n")
+
+
+def _skill_capsule(text):
+    m = _CAPSULE_RE.search(text)
+    if not m:
+        return None
+    try:
+        import base64, gzip
+        return json.loads(gzip.decompress(base64.b64decode(m.group(1))))
+    except Exception:
+        return None
+
+
+def _agent_from_capsule(rci, filepath):
+    """A toasted skill carries the agent source in its capsule. Restore and
+    execute it -- this is the same code path as a .py file, so a toasted skill
+    is not 'like' an agent, it IS one."""
+    pres = (rci or {}).get("preserved", {}).get("agent")
+    if not pres:
+        return {}
+    try:
+        import base64, gzip, hashlib
+        src = gzip.decompress(base64.b64decode(pres["b64"]))
+        if hashlib.sha256(src).hexdigest() != pres.get("sha256"):
+            _quarantine_agent(filepath, "?", "capsule payload failed its checksum")
+            return {}
+    except Exception as e:
+        _quarantine_agent(filepath, "?", f"unreadable capsule: {e}")
+        return {}
+    tmp = os.path.join(tempfile.gettempdir(),
+                       f"_skill_{abs(hash(filepath))}_agent.py")
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(src)
+        return _load_agent_from_file(tmp)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _spec_agent_from_skill(fm, body, filepath):
+    """A raw skill has no code. Expose it honestly: a SPEC-tier capability that
+    returns its own instructions. It does not compute -- the model does, from
+    the text. Claiming otherwise would make prose indistinguishable from code."""
+    # BasicAgent lives in the agents package, not this module -- each agent
+    # file imports it itself, so the brainstem never had it in scope.
+    try:
+        from agents.basic_agent import BasicAgent as _Base
+    except ImportError:
+        from basic_agent import BasicAgent as _Base
+
+    slug = fm.get("name") or os.path.basename(os.path.dirname(filepath) or "skill")
+    name = "".join(w[:1].upper() + w[1:] for w in re.split(r"[^A-Za-z0-9]+", slug) if w)
+    desc = fm.get("description") or f"Skill {slug}"
+    instructions = _GENERATED_RE.sub("", body).strip()
+
+    class _SkillAgent(_Base):
+        def __init__(self):
+            self.name = name or "Skill"
+            self.metadata = {"name": self.name, "description": desc,
+                             "parameters": {"type": "object", "properties": {},
+                                            "required": []}}
+            super().__init__(name=self.name, metadata=self.metadata)
+
+        def perform(self, **kwargs):
+            text = instructions
+            for k, v in (kwargs or {}).items():
+                text = text.replace("{{" + k + "}}", str(v))
+            return text
+
+    inst = _SkillAgent()
+    inst._rapp_tier = "SPEC"
+    inst._rapp_source = "raw-skill"
+    return {inst.name: inst}
+
+
+def _load_skill_from_file(filepath):
+    """Load a SKILL.md as an agent. Cached on (mtime, size) -- load_agents runs
+    on every /chat."""
+    try:
+        st = os.stat(filepath)
+        key = (filepath, st.st_mtime, st.st_size)
+    except OSError:
+        return {}
+    hit = _SKILL_CACHE.get(filepath)
+    if hit and hit[0] == key:
+        return hit[1]
+    try:
+        text = open(filepath, encoding="utf-8", errors="replace").read()
+    except Exception as e:
+        _quarantine_agent(filepath, "?", f"unreadable skill: {e}")
+        return {}
+
+    fm, body = _skill_frontmatter(text)
+    rci = _skill_capsule(text)
+
+    # A .md without skill front-matter is NOT a skill -- it is a README, a note,
+    # a changelog. Digesting it would mint a capability out of prose nobody
+    # offered, named after whatever directory it happened to sit in. Spit it
+    # back out and say why. Being fed something is not consent to swallow it.
+    if not rci and not (fm.get("name") and fm.get("description")):
+        _quarantine_agent(
+            filepath, "?",
+            "not a skill: no rci capsule and no name/description front-matter. "
+            "A SKILL.md needs `name:` and `description:`; plain markdown is "
+            "documentation, not a capability.")
+        _SKILL_CACHE[filepath] = (key, {})
+        return {}
+    loaded = _agent_from_capsule(rci, filepath) if rci else {}
+    if loaded:
+        for inst in loaded.values():
+            inst._rapp_tier = "EXEC"
+            inst._rapp_source = "toasted-skill"
+    else:
+        loaded = _spec_agent_from_skill(fm, body, filepath)
+    _SKILL_CACHE[filepath] = (key, loaded)
+    return loaded
+
+
 def load_agents():
     agents = {}
     pattern = os.path.join(AGENTS_PATH, "*_agent.py")
     files = sorted(glob.glob(pattern))
+    # Skills load AFTER code, so a *_agent.py always wins a name collision.
+    # Code is the canonical form; prose does not get to shadow it.
+    skill_files = sorted(glob.glob(os.path.join(AGENTS_PATH, "*.md"))
+                         + glob.glob(os.path.join(AGENTS_PATH, "*", "SKILL.md")))
 
-    for filepath in files:
-        loaded = _load_agent_from_file(filepath)
+    for filepath in files + skill_files:
+        loaded = (_load_skill_from_file(filepath)
+                  if filepath.endswith(".md") else _load_agent_from_file(filepath))
         for name, instance in loaded.items():
             if name in agents:
                 _quarantine_agent(
@@ -1928,7 +2106,8 @@ def load_agents():
     # Rebuild the quarantine registry to this sweep: drop entries for files that are
     # gone (deleted/renamed). Each present file was just re-validated above.
     with _quarantine_lock:
-        for gone in [f for f in _quarantined_agents if f not in files]:
+        for gone in [f for f in _quarantined_agents
+                     if f not in files and f not in skill_files]:
             _quarantined_agents.pop(gone, None)
 
     print(f"[brainstem] {len(agents)} agent(s) ready.")
