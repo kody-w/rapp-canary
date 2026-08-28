@@ -96,7 +96,9 @@ function Check-ForUpgrade {
 function Install-WithWinget {
     param([string]$PackageId, [string]$Name)
     Write-Host "  [..] Installing $Name via winget..." -ForegroundColor Yellow
-    winget install --id $PackageId --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Null
+    Write-Host "       This can take several minutes; winget progress will appear below." -ForegroundColor Gray
+    winget install --id $PackageId --accept-source-agreements --accept-package-agreements --silent 2>&1 |
+        ForEach-Object { Write-Host "       $_" }
     # Refresh PATH for this session
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 }
@@ -222,27 +224,42 @@ function Setup-Venv {
     }
 
     $sysPy = Resolve-PythonExe
-    Write-Host "  Creating virtual environment..."
+    Write-Host "  [..] Creating Python virtual environment (can take a minute under antivirus scanning)..."
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    & $sysPy -m venv $VENV_DIR 2>&1 | Out-Null
+    $venvStart = Get-Date
+    & $sysPy -m venv $VENV_DIR 2>&1 | ForEach-Object { Write-Host "       $_" }
     if (-not (Test-Path (Get-VenvPython))) {
         # Some minimal Python installs need ensurepip primed before venv works.
-        & $sysPy -m ensurepip --upgrade 2>&1 | Out-Null
-        & $sysPy -m venv $VENV_DIR 2>&1 | Out-Null
+        Write-Host "  [..] venv did not appear - priming ensurepip and retrying..." -ForegroundColor Yellow
+        & $sysPy -m ensurepip --upgrade 2>&1 | ForEach-Object { Write-Host "       $_" }
+        & $sysPy -m venv $VENV_DIR 2>&1 | ForEach-Object { Write-Host "       $_" }
     }
     $ErrorActionPreference = $prev
+    Write-Host ("  [OK] Virtual environment created ({0}s)" -f [int]((Get-Date) - $venvStart).TotalSeconds) -ForegroundColor Green
 
     if (-not (Test-Path (Get-VenvPython))) {
         Write-Host "  [X] Failed to create virtual environment at $VENV_DIR" -ForegroundColor Red
         throw "venv creation failed"
     }
 
-    # Upgrade pip inside the venv (best-effort; venv already ships pip).
+    # Upgrade pip inside the venv. OPTIONAL: the venv already ships a working pip.
+    # Behind a corporate proxy this step used to retry silently for ~5 minutes and
+    # looked like the installer had hung on "Creating virtual environment" — so it
+    # is now visible, capped, and skipped on failure.
+    Write-Host "  [..] Updating pip (optional, capped at ~30s)..." -ForegroundColor Gray
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    & (Get-VenvPython) -m pip install --upgrade pip 2>&1 | Out-Null
+    $pipStart = Get-Date
+    & (Get-VenvPython) -m pip install --upgrade pip --disable-pip-version-check --timeout 15 --retries 1 2>&1 |
+        ForEach-Object { Write-Host "       $_" }
+    $pipOk = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prev
+    if ($pipOk) {
+        Write-Host ("  [OK] pip updated ({0}s)" -f [int]((Get-Date) - $pipStart).TotalSeconds) -ForegroundColor Green
+    } else {
+        Write-Host "  [!] pip self-upgrade skipped (network) - continuing with the bundled pip" -ForegroundColor Yellow
+    }
     Write-Host "  [OK] Virtual environment ready" -ForegroundColor Green
 }
 
@@ -660,7 +677,8 @@ function Run-PipInstall {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $py -m pip install -r $reqFile 2>&1 | ForEach-Object { "$_" }
+        Write-Host "  [..] Installing Python dependencies (pip output below)..." -ForegroundColor Gray
+        & $py -m pip install --progress-bar on --disable-pip-version-check --timeout 15 --retries 2 -r $reqFile 2>&1 | ForEach-Object { "$_" }
         # `--user` is only valid (and only needed) on the system-python fallback; it
         # errors inside a venv, so skip it when installing into the venv.
         if ($LASTEXITCODE -ne 0 -and $py -ne (Get-VenvPython)) {
