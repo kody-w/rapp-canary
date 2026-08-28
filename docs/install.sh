@@ -21,6 +21,34 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# Run a long step with a spinner + elapsed seconds so a slow network/AV scan
+# never looks like a hang. Output is captured and shown only on failure.
+run_with_heartbeat() {
+    local label="$1"; shift
+    local log_file
+    log_file=$(mktemp "${TMPDIR:-/tmp}/brainstem-progress-XXXXXX")
+    "$@" >"$log_file" 2>&1 &
+    local pid=$!
+    local started=$SECONDS
+    local frame=0
+    while kill -0 "$pid" 2>/dev/null; do
+        local glyph
+        case "$frame" in 0) glyph='|';; 1) glyph='/';; 2) glyph='-';; *) glyph='\';; esac
+        printf "\r  [%s] %s (%ss)" "$glyph" "$label" "$((SECONDS - started))"
+        frame=$(( (frame + 1) % 4 ))
+        sleep 1
+    done
+    local status=0
+    wait "$pid" || status=$?
+    if [ "$status" -eq 0 ]; then
+        printf "\r  [✓] %s (%ss)\n" "$label" "$((SECONDS - started))"
+        rm -f "$log_file"; return 0
+    fi
+    printf "\r  [✗] %s failed after %ss\n" "$label" "$((SECONDS - started))"
+    cat "$log_file" >&2
+    rm -f "$log_file"; return "$status"
+}
+
 read_input() {
     local prompt="$1" default="$2" result
     if [ -t 0 ]; then
@@ -394,7 +422,7 @@ install_brainstem() {
             fi
         fi
     else
-        echo "  Fresh install — cloning repository..."
+        echo "  Fresh install — downloading the Brainstem (progress below)..."
         # A broken prior install (src present but .git gone) may still hold the user's
         # soul, .env, and custom agents — none of which are in git. Preserve them
         # before wiping so a re-run can't silently destroy the user's work. The common
@@ -409,7 +437,7 @@ install_brainstem() {
             [ -d "$DATA_DIR" ] && cp -R "$DATA_DIR" "$FRESH_BACKUP/.brainstem_data" 2>/dev/null || true
         fi
         rm -rf "$BRAINSTEM_HOME/src" 2>/dev/null || true
-        git clone --quiet "$REPO_URL" "$BRAINSTEM_HOME/src" || {
+        git clone --progress "$REPO_URL" "$BRAINSTEM_HOME/src" || {
             echo -e "  ${RED}✗${NC} Clone failed — check your network and re-run the installer"
             if [ -n "$FRESH_BACKUP" ]; then
                 echo -e "    Your soul, agents, and config were preserved at: ${FRESH_BACKUP}"
@@ -464,18 +492,20 @@ setup_venv() {
         rm -rf "$VENV_DIR"
     fi
 
-    echo "  Creating virtual environment..."
-    "$PYTHON_CMD" -m venv "$VENV_DIR" 2>/dev/null || {
+    if ! run_with_heartbeat "Creating Python virtual environment" "$PYTHON_CMD" -m venv "$VENV_DIR"; then
         # Some systems need ensurepip first
         "$PYTHON_CMD" -m ensurepip 2>/dev/null || true
-        "$PYTHON_CMD" -m venv "$VENV_DIR" || {
+        run_with_heartbeat "Retrying Python virtual environment" "$PYTHON_CMD" -m venv "$VENV_DIR" || {
             echo -e "  ${RED}✗${NC} Failed to create virtual environment"
             echo "    Try: $PYTHON_CMD -m pip install virtualenv"
             exit 1
         }
-    }
-    # Ensure pip is up to date inside the venv
-    "$VENV_DIR/bin/python" -m pip install --upgrade pip --quiet 2>/dev/null || true
+    fi
+    # pip self-upgrade is optional (the venv already ships a working pip). Behind a
+    # proxy this used to retry silently for minutes and look like a hang, so it is
+    # capped and visible now.
+    run_with_heartbeat "Updating pip (optional)" "$VENV_DIR/bin/python" -m pip install --upgrade pip --disable-pip-version-check --timeout 15 --retries 1 \
+        || echo -e "  ${YELLOW}⚠${NC} pip self-upgrade skipped (network) — continuing with bundled pip"
     echo -e "  ${GREEN}✓${NC} Virtual environment ready"
 }
 
@@ -483,8 +513,8 @@ setup_deps() {
     echo ""
     echo "Installing dependencies..."
     local req_file="$BRAINSTEM_HOME/src/rapp_brainstem/requirements.txt"
-    "$VENV_DIR/bin/pip" install -r "$req_file" --quiet 2>/dev/null || \
-        "$VENV_DIR/bin/pip" install -r "$req_file"
+    run_with_heartbeat "Installing Python dependencies" "$VENV_DIR/bin/python" -m pip install -r "$req_file" --disable-pip-version-check --timeout 15 --retries 2 || \
+        "$VENV_DIR/bin/python" -m pip install -r "$req_file" --progress-bar on
 
     # Verify the critical imports actually work
     if ! "$VENV_DIR/bin/python" -c "import flask, flask_cors, requests, dotenv, pyzipper" 2>/dev/null; then
@@ -504,8 +534,8 @@ ensure_deps() {
 
     echo -e "  ${YELLOW}⚠${NC} Missing dependencies — installing..."
     local req_file="$BRAINSTEM_HOME/src/rapp_brainstem/requirements.txt"
-    "$VENV_DIR/bin/pip" install -r "$req_file" --quiet 2>/dev/null || \
-        "$VENV_DIR/bin/pip" install -r "$req_file"
+    run_with_heartbeat "Installing missing Python dependencies" "$VENV_DIR/bin/python" -m pip install -r "$req_file" --disable-pip-version-check --timeout 15 --retries 2 || \
+        "$VENV_DIR/bin/python" -m pip install -r "$req_file" --progress-bar on
 
     if ! "$VENV_DIR/bin/python" -c "import flask, flask_cors, requests, dotenv, pyzipper" 2>/dev/null; then
         echo -e "  ${RED}✗${NC} Dependencies failed — try: $VENV_DIR/bin/pip install -r $req_file"
