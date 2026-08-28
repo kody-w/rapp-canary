@@ -1,0 +1,30 @@
+{
+  "name": "brainstem",
+  "owner": {
+    "name": "RAPP"
+  },
+  "description": "Install a local RAPP Brainstem and the RAR agent and skill marketplace from Microsoft Scout or GitHub Copilot CLI.",
+  "plugins": [
+    {
+      "name": "rapp",
+      "description": "Install and verify the local RAPP Brainstem, then register and install the unified RAR marketplace plugin.",
+      "source": ".",
+      "skills": [
+        "./skills/rapp-bootstrap"
+      ],
+      "version": "1.0.0",
+      "repository": "https://github.com/kody-w/rapp-installer",
+      "license": "MIT",
+      "category": "development",
+      "tags": [
+        "rapp",
+        "brainstem",
+        "rar",
+        "microsoft scout",
+        "github copilot cli",
+        "local first",
+        "agent skills"
+      ]
+    }
+  ]
+}

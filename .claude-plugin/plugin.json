@@ -1,0 +1,20 @@
+{
+  "name": "rapp",
+  "version": "1.0.0",
+  "description": "Install and verify a local RAPP Brainstem plus the unified RAR marketplace plugin.",
+  "author": {
+    "name": "RAPP",
+    "url": "https://github.com/kody-w"
+  },
+  "homepage": "https://kody-w.github.io/rapp-installer/",
+  "repository": "https://github.com/kody-w/rapp-installer",
+  "license": "MIT",
+  "keywords": [
+    "rapp",
+    "brainstem",
+    "rar",
+    "scout",
+    "copilot-cli",
+    "local-first"
+  ]
+}

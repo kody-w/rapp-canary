@@ -119,6 +119,43 @@ fi
 
 echo ""
 
+# ── plugin marketplace + repository policy tests ─────────────────────────────
+
+echo "--- Copilot plugin marketplace ---"
+
+if python3 - "$REPO_ROOT" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+marketplace = json.loads(
+    (root / ".claude-plugin" / "marketplace.json").read_text()
+)
+plugin = json.loads(
+    (root / ".claude-plugin" / "plugin.json").read_text()
+)
+assert marketplace["name"] == "brainstem"
+assert marketplace["plugins"][0]["name"] == "rapp"
+assert marketplace["plugins"][0]["version"] == plugin["version"]
+assert (root / "skills" / "rapp-bootstrap" / "SKILL.md").is_file()
+PY
+then
+    pass "Copilot marketplace and plugin manifests agree"
+else
+    fail "Copilot marketplace or plugin manifest is invalid"
+fi
+
+for policy_file in CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md SUPPORT.md MARKETPLACE_CHARTER.md; do
+    if [ -s "$REPO_ROOT/$policy_file" ]; then
+        pass "repository policy present: $policy_file"
+    else
+        fail "repository policy missing: $policy_file"
+    fi
+done
+
+echo ""
+
 # ── index.html tests ─────────────────────────────────────────────────────────
 
 echo "--- index.html ---"
