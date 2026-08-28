@@ -57,7 +57,7 @@ afterward so Scout or Copilot CLI discovers the RAR skill manager.
 
 The `rapp@x` identity is governed by
 [MARKETPLACE_CHARTER.md](MARKETPLACE_CHARTER.md) and RAR Constitution Article
-XXIV. The same manifests are also loadable by Claude Code.
+XXV. The same manifests are also loadable by Claude Code.
 
 ---
 

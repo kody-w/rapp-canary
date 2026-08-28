@@ -1,7 +1,7 @@
 # `rapp@x` Marketplace Charter
 
 RAPP Installer follows
-[RAR Constitution Article XXIV](https://github.com/kody-w/RAR/blob/main/CONSTITUTION.md#article-xxiv--the-rappx-marketplace-identity).
+[RAR Constitution Article XXV](https://github.com/kody-w/RAR/blob/main/CONSTITUTION.md#article-xxv--the-rappx-marketplace-identity).
 This charter applies the constitutional marketplace identity without changing
 the Brainstem kernel or its Grail.
 
