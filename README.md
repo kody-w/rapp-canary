@@ -22,6 +22,34 @@ brainstem       # start the server → localhost:7071
 
 ---
 
+## Install Brainstem + RAR from Scout or Copilot CLI
+
+RAPP Installer follows the same plugin-marketplace pattern used by Microsoft
+Power CAT Skills:
+
+| Plugin identity | Purpose |
+|---|---|
+| `rapp@brainstem` | Install and verify Brainstem, then install RAR |
+| `rapp@rar` | Operate RAR, skills, exports, and callback bootstrap |
+
+```bash
+copilot plugin marketplace add kody-w/rapp-installer
+copilot plugin install rapp@brainstem
+```
+
+Or ask Scout:
+
+```text
+Add the kody-w/rapp-installer marketplace and install
+rapp@brainstem. Then install my local Brainstem and RAR.
+```
+
+The `rapp-bootstrap` skill installs and verifies Brainstem, then registers the
+`kody-w/RAR` marketplace and installs `rapp@rar`. Start a new conversation
+afterward so Scout or Copilot CLI discovers the RAR skill manager.
+
+---
+
 ## Or: Start with the Cloud Backend (Hippocampus)
 
 Want persistent memory, Azure Functions, and a path to Copilot Studio? Skip the brainstem and go straight to Tier 2:
