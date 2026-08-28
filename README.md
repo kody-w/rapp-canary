@@ -37,6 +37,13 @@ copilot plugin marketplace add kody-w/rapp-installer
 copilot plugin install rapp@brainstem
 ```
 
+Claude Code uses the same marketplace:
+
+```bash
+claude plugin marketplace add kody-w/rapp-installer
+claude plugin install rapp@brainstem
+```
+
 Or ask Scout:
 
 ```text
@@ -47,6 +54,10 @@ rapp@brainstem. Then install my local Brainstem and RAR.
 The `rapp-bootstrap` skill installs and verifies Brainstem, then registers the
 `kody-w/RAR` marketplace and installs `rapp@rar`. Start a new conversation
 afterward so Scout or Copilot CLI discovers the RAR skill manager.
+
+The `rapp@x` identity is governed by
+[MARKETPLACE_CHARTER.md](MARKETPLACE_CHARTER.md) and RAR Constitution Article
+XXIV. The same manifests are also loadable by Claude Code.
 
 ---
 

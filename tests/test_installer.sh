@@ -146,7 +146,7 @@ else
     fail "Copilot marketplace or plugin manifest is invalid"
 fi
 
-for policy_file in CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md SUPPORT.md; do
+for policy_file in CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md SUPPORT.md MARKETPLACE_CHARTER.md; do
     if [ -s "$REPO_ROOT/$policy_file" ]; then
         pass "repository policy present: $policy_file"
     else

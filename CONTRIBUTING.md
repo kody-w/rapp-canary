@@ -19,7 +19,8 @@ Microsoft affiliation or endorsement.
 | Vulnerability | [Private security advisory](https://github.com/kody-w/rapp-installer/security/advisories/new) |
 
 Read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [SECURITY.md](SECURITY.md), and
-[SUPPORT.md](SUPPORT.md) before participating.
+[SUPPORT.md](SUPPORT.md) before participating. Marketplace contributions must
+also follow [MARKETPLACE_CHARTER.md](MARKETPLACE_CHARTER.md).
 
 ## Development workflow
 
@@ -55,6 +56,13 @@ Install the bootstrap plugin with:
 ```bash
 copilot plugin marketplace add kody-w/rapp-installer
 copilot plugin install rapp@brainstem
+```
+
+Claude Code uses the same identity:
+
+```bash
+claude plugin marketplace add kody-w/rapp-installer
+claude plugin install rapp@brainstem
 ```
 
 Marketplace and skill changes must keep these files consistent:
