@@ -248,11 +248,12 @@ jobs:
             if [ "$i" = 120 ]; then echo "server never came up"; cat "$RUNNER_TEMP/install.log" 2>/dev/null | tail -60; exit 1; fi
           done
           cat "$RUNNER_TEMP/health.json"
-          python3 - "$RUNNER_TEMP/health.json" "$BRANCH_VERSION" <<'EOF'
+          python3 - "$RUNNER_TEMP/health.json" "$BRANCH_VERSION" "$HOME/.brainstem/src/rapp_brainstem" <<'EOF'
           import json, sys
           d = json.load(open(sys.argv[1]))
           assert d.get("status") in ("ok", "unauthenticated"), d
           assert d.get("version") == sys.argv[2], f'server v{d.get("version")} != candidate v{sys.argv[2]}'
+          assert d.get("brainstem_dir") == sys.argv[3], f'server path {d.get("brainstem_dir")} != {sys.argv[3]}'
           assert "ContextMemory" in (d.get("agents") or []), d.get("agents")
           print("health OK:", d.get("status"), "v" + d.get("version"))
           EOF

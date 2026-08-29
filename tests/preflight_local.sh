@@ -41,6 +41,12 @@ fi
 CANDIDATE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 
 PORT="${PREFLIGHT_PORT:-7091}"
+OCCUPANT=$(/usr/sbin/lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)
+if [ -n "$OCCUPANT" ]; then
+    echo "  ✗ preflight port $PORT is already held by PID $OCCUPANT" >&2
+    echo "    Choose another PREFLIGHT_PORT; refusing a false-positive health check." >&2
+    exit 2
+fi
 SANDBOX="$(mktemp -d /tmp/brainstem-preflight-XXXXXX)"
 FAKE_HOME="$SANDBOX/home"
 BARE="$SANDBOX/fake-origin.git"
@@ -59,8 +65,13 @@ cleanup() {
     if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
         kill "$SERVER_PID" 2>/dev/null || true
     fi
-    # Belt & braces: kill anything still holding the SANDBOX port (never 7071).
-    /usr/sbin/lsof -ti:"$PORT" 2>/dev/null | xargs kill 2>/dev/null || true
+    # Belt & braces: stop descendants still holding the SANDBOX port (never 7071).
+    for _ in $(seq 1 20); do
+        listeners=$(/usr/sbin/lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
+        [ -n "$listeners" ] || break
+        for listener in $listeners; do kill "$listener" 2>/dev/null || true; done
+        sleep 0.1
+    done
     echo ""
     echo "  Sandbox kept for inspection: $SANDBOX"
     echo "  (installer log: $LOG — rm -rf when done)"
@@ -211,11 +222,13 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ✓ $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "  ✗ $1"; }
 
-python3 - "$HEALTH" "$BRANCH_VERSION" <<'EOF' && ok "health: status + candidate version + agents" || bad "health contract"
+python3 - "$HEALTH" "$BRANCH_VERSION" "$FAKE_HOME/.brainstem/src/rapp_brainstem" <<'EOF' \
+    && ok "health: status + candidate version + sandbox path + agents" || bad "health contract"
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d.get("status") in ("ok", "unauthenticated"), d
 assert d.get("version") == sys.argv[2], f'{d.get("version")} != {sys.argv[2]}'
+assert d.get("brainstem_dir") == sys.argv[3], f'{d.get("brainstem_dir")} != {sys.argv[3]}'
 assert "ContextMemory" in (d.get("agents") or []), d.get("agents")
 EOF
 INSTALLED_COMMIT="$(git -C "$FAKE_HOME/.brainstem/src" rev-parse HEAD 2>/dev/null || true)"
