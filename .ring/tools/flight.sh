@@ -35,7 +35,8 @@ case "$cmd" in
         [ -n "$name" ] || usage
         base="$FLIGHTS_HOME/$name"
         src="$base/src"
-        mkdir -p "$base"
+        state="$base/state"
+        mkdir -p "$base" "$state"
 
         origin_url=$(git -C "$REPO_ROOT" remote get-url origin)
         if [ ! -d "$src/.git" ]; then
@@ -59,11 +60,29 @@ case "$cmd" in
         fi
         "$base/venv/bin/pip" install -q -r "$src/rapp_brainstem/requirements.txt"
 
-        # Borrow the daily driver's auth read-only so a flight needs no re-login.
-        daily_token="$HOME/.brainstem/src/rapp_brainstem/.copilot_token"
-        if [ -f "$daily_token" ] && [ ! -f "$src/rapp_brainstem/.copilot_token" ]; then
-            cp "$daily_token" "$src/rapp_brainstem/.copilot_token"
-            chmod 600 "$src/rapp_brainstem/.copilot_token"
+        # Borrow auth into the flight's OWN state directory. Account switching or
+        # recorder writes inside a flight must never mutate the daily driver.
+        for name_in_state in .copilot_token .copilot_session; do
+            [ -f "$state/$name_in_state" ] && continue
+            for source in "$HOME/.brainstem/state/$name_in_state" \
+                          "$HOME/.brainstem/src/rapp_brainstem/$name_in_state"; do
+                if [ -f "$source" ]; then
+                    cp "$source" "$state/$name_in_state"
+                    chmod 600 "$state/$name_in_state"
+                    break
+                fi
+            done
+        done
+        # Older flight branches predate BRAINSTEM_STATE_DIR. Keep their auth
+        # isolated too by mirroring the flight-local copy into that flight's own
+        # checkout, never the daily driver's checkout.
+        if ! grep -q '^def _state_dir():' "$src/rapp_brainstem/brainstem.py"; then
+            for name_in_state in .copilot_token .copilot_session; do
+                if [ -f "$state/$name_in_state" ]; then
+                    cp "$state/$name_in_state" "$src/rapp_brainstem/$name_in_state"
+                    chmod 600 "$src/rapp_brainstem/$name_in_state"
+                fi
+            done
         fi
 
         # FLIGHT.json env block → exported for the server process only.
@@ -87,7 +106,8 @@ PY
             # shellcheck disable=SC1090
             . "$envfile"
             set +a
-            PORT="$port" nohup "$base/venv/bin/python" brainstem.py \
+            BRAINSTEM_STATE_DIR="$state" PORT="$port" \
+                nohup "$base/venv/bin/python" "$src/rapp_brainstem/brainstem.py" \
                 > "$base/flight.log" 2>&1 &
         )
 

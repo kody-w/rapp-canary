@@ -42,8 +42,8 @@ is on, treat it as a feature.
 **Wave mechanics** (per `.ring/RUNBOOK.md` §1):
 
 1. Branch off canary `main` (`fix/…`, `harden/…`, `ops/…` — never `flight/…`).
-2. Push; preflight must go green (8 jobs: static + fresh/upgrade e2e on
-   macOS/Ubuntu/Windows + fresh-nopip).
+2. Push; preflight must go green (static + fresh/upgrade/repair e2e on
+   macOS/Ubuntu/Windows + the Windows fresh-nopip leg).
 3. Dual review gate (§5) for any non-trivial wave.
 4. Merge `--no-ff` to canary main; main preflight green.
 5. Promote edge-by-edge, qualify the whole train, archive evidence

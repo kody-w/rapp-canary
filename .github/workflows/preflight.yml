@@ -11,6 +11,8 @@
 #   fresh   — factory machine, no prior install (the new-user path)
 #   upgrade — machine already running REAL production main, upgraded to the
 #             candidate (the existing-user path; asserts soul/agents/.env survive)
+#   repair  — existing production state with a missing .git directory, forcing
+#             the destructive re-clone path while asserting all user state survives
 #   fresh-nopip — Windows only: Python exists but has NO pip module (corp-managed
 #             images, stripped installs — the machine class behind the v0.6.2
 #             field failure). The installer must bootstrap pip itself.
@@ -115,7 +117,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
-        scenario: [fresh, upgrade]
+        scenario: [fresh, upgrade, repair]
         include:
           - os: windows-latest
             scenario: fresh-nopip
@@ -123,7 +125,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # upgrade scenario needs real origin/main as the baseline
+          fetch-depth: 0   # existing-install scenarios need real origin/main as the baseline
 
       - uses: actions/setup-python@v5
         with:
@@ -152,22 +154,24 @@ jobs:
           set -euxo pipefail
           BARE="$RUNNER_TEMP/fake-origin.git"
           git clone --bare . "$BARE"
-          git -C "$BARE" update-ref refs/heads/main "$GITHUB_SHA"
-          git -C "$BARE" symbolic-ref HEAD refs/heads/main
+          git -c safe.bareRepository=all --git-dir="$BARE" update-ref refs/heads/main "$GITHUB_SHA"
+          git -c safe.bareRepository=all --git-dir="$BARE" symbolic-ref HEAD refs/heads/main
           # Preserve the real production tip so the upgrade scenario can start there.
-          git -C "$BARE" update-ref refs/heads/production-baseline "$(git rev-parse origin/main)"
+          git -c safe.bareRepository=all --git-dir="$BARE" \
+            update-ref refs/heads/production-baseline "$(git rev-parse origin/main)"
           BARE_URL="file://$(echo "$BARE" | sed 's|\\|/|g; s|^\([A-Za-z]\):|/\1:|')"
           git config --global "url.${BARE_URL}.insteadOf" "https://github.com/kody-w/rapp-installer.git"
           echo "BARE=$BARE" >> "$GITHUB_ENV"
 
-      - name: seed existing production install (upgrade only)
-        if: matrix.scenario == 'upgrade'
+      - name: seed existing production install
+        if: matrix.scenario == 'upgrade' || matrix.scenario == 'repair'
         shell: bash
         run: |
           set -euxo pipefail
           git clone "$BARE" "$HOME/.brainstem/src"
           git -C "$HOME/.brainstem/src" reset --hard origin/production-baseline
-          # A real user's fingerprints: custom agent, edited soul, edited .env
+          # A real user's fingerprints: custom agent, edited soul/.env, and every
+          # legacy state file that used to live inside the checkout.
           cat > "$HOME/.brainstem/src/rapp_brainstem/agents/preflight_custom_agent.py" <<'EOF'
           from agents.basic_agent import BasicAgent
           class PreflightCustomAgent(BasicAgent):
@@ -182,17 +186,53 @@ jobs:
           echo "" >> "$HOME/.brainstem/src/rapp_brainstem/soul.md"
           echo "PREFLIGHT-SOUL-MARKER" >> "$HOME/.brainstem/src/rapp_brainstem/soul.md"
           printf 'GITHUB_MODEL=auto\nPORT=7071\n# PREFLIGHT-ENV-MARKER\n' > "$HOME/.brainstem/src/rapp_brainstem/.env"
+          LEGACY_STATE="$HOME/.brainstem/src/rapp_brainstem"
+          printf '{"access_token":"ghu_PREFLIGHT_STATE_SURVIVOR","refresh_token":null,"saved_at":1}\n' > "$LEGACY_STATE/.copilot_token"
+          printf '{"token":"preflight-expired-session","endpoint":"https://api.githubcopilot.com","expires_at":1}\n' > "$LEGACY_STATE/.copilot_session"
+          printf 'preflight-lan-secret\n' > "$LEGACY_STATE/.brainstem_secret"
+          printf '{"model":"gpt-4o"}\n' > "$LEGACY_STATE/.brainstem_model"
+          printf '[{"type":"preflight-state-marker","level":"info"}]\n' > "$LEGACY_STATE/.brainstem_book.json"
+          if [ "${{ matrix.scenario }}" = "repair" ]; then
+            cat > "$LEGACY_STATE/brainstem.py" <<'PY'
+          import json
+          import os
+          import sys
+          import time
+
+          destination = sys.argv[1]
+          payload = {"model": "gpt-4o", "legacy_writer_pid": os.getpid()}
+          while True:
+              temporary = destination + ".writer"
+              with open(temporary, "w", encoding="utf-8") as handle:
+                  json.dump(payload, handle)
+              os.replace(temporary, destination)
+              time.sleep(0.05)
+          PY
+            nohup python "$LEGACY_STATE/brainstem.py" "$LEGACY_STATE/.brainstem_model" \
+              > "$RUNNER_TEMP/legacy-writer.log" 2>&1 &
+            echo "LEGACY_WRITER_PID=$!" >> "$GITHUB_ENV"
+            cat > "$RUNNER_TEMP/legacy_decoy.py" <<'PY'
+          import time
+          time.sleep(600)
+          PY
+            nohup python "$RUNNER_TEMP/legacy_decoy.py" "$LEGACY_STATE/brainstem.py" \
+              > "$RUNNER_TEMP/legacy-decoy.log" 2>&1 &
+            echo "LEGACY_DECOY_PID=$!" >> "$GITHUB_ENV"
+            sleep 1
+            rm -rf "$HOME/.brainstem/src/.git"
+            echo "started live legacy writer and removed .git to force repair"
+          fi
 
       # Auth + remote-version checks must fail FAST and GRACEFULLY (that graceful
       # degradation is itself part of what we're testing). Black-hole the endpoints.
       - name: block network auth endpoints (unix)
         if: runner.os != 'Windows'
-        run: printf '127.0.0.1 github.com\n127.0.0.1 raw.githubusercontent.com\n' | sudo tee -a /etc/hosts
+        run: printf '127.0.0.1 github.com\n127.0.0.1 api.github.com\n127.0.0.1 raw.githubusercontent.com\n' | sudo tee -a /etc/hosts
 
       - name: block network auth endpoints (windows)
         if: runner.os == 'Windows'
         shell: powershell
-        run: Add-Content -Path "$env:SystemRoot\System32\drivers\etc\hosts" -Value "127.0.0.1 github.com", "127.0.0.1 raw.githubusercontent.com"
+        run: Add-Content -Path "$env:SystemRoot\System32\drivers\etc\hosts" -Value "127.0.0.1 github.com", "127.0.0.1 api.github.com", "127.0.0.1 raw.githubusercontent.com"
 
       - name: run the real installer (unix)
         if: runner.os != 'Windows'
@@ -228,17 +268,26 @@ jobs:
         run: |
           set -uo pipefail
           BRANCH_VERSION="$(tr -d '[:space:]' < rapp_brainstem/VERSION)"
-          for i in $(seq 1 120); do
-            sleep 5
-            if curl -sf "http://localhost:7071/health" -o "$RUNNER_TEMP/health.json"; then break; fi
-            if [ "$i" = 120 ]; then echo "server never came up"; cat "$RUNNER_TEMP/install.log" 2>/dev/null | tail -60; exit 1; fi
+          for i in $(seq 1 60); do
+            sleep 3
+            if curl -sf --max-time 2 "http://localhost:7071/health" -o "$RUNNER_TEMP/health.json"; then break; fi
+            if [ "$i" = 60 ]; then echo "server never came up"; cat "$RUNNER_TEMP/install.log" 2>/dev/null | tail -60; exit 1; fi
           done
+          INSTALLED_COMMIT="$(git -C "$HOME/.brainstem/src" rev-parse 'HEAD^{commit}')"
+          [[ "$INSTALLED_COMMIT" == "$GITHUB_SHA" ]] || {
+            echo "installed $INSTALLED_COMMIT, expected candidate $GITHUB_SHA" >&2
+            exit 1
+          }
+          echo "installed exact candidate: $INSTALLED_COMMIT"
           cat "$RUNNER_TEMP/health.json"
           python3 - "$RUNNER_TEMP/health.json" "$BRANCH_VERSION" <<'EOF'
-          import json, sys
+          import json, os, sys
           d = json.load(open(sys.argv[1]))
           assert d.get("status") in ("ok", "unauthenticated"), d
           assert d.get("version") == sys.argv[2], f'server v{d.get("version")} != candidate v{sys.argv[2]}'
+          expected = os.path.realpath(os.path.join(os.path.expanduser("~"), ".brainstem", "src", "rapp_brainstem"))
+          actual = os.path.realpath(d.get("brainstem_dir") or "")
+          assert actual == expected, f'server path {actual} != {expected}'
           assert "ContextMemory" in (d.get("agents") or []), d.get("agents")
           print("health OK:", d.get("status"), "v" + d.get("version"))
           EOF
@@ -252,13 +301,30 @@ jobs:
             -d '{"user_input":"preflight ping"}' | python3 -c "import json,sys; d=json.load(sys.stdin); print('chat contract OK:', list(d)[:3])"
 
       - name: assert user files survived the upgrade
-        if: matrix.scenario == 'upgrade'
+        if: matrix.scenario == 'upgrade' || matrix.scenario == 'repair'
         shell: bash
         run: |
           set -euxo pipefail
           test -f "$HOME/.brainstem/src/rapp_brainstem/agents/preflight_custom_agent.py"
           grep -q "PREFLIGHT-SOUL-MARKER" "$HOME/.brainstem/src/rapp_brainstem/soul.md"
           grep -q "PREFLIGHT-ENV-MARKER" "$HOME/.brainstem/src/rapp_brainstem/.env"
+          grep -q "ghu_PREFLIGHT_STATE_SURVIVOR" "$HOME/.brainstem/state/.copilot_token"
+          grep -q "preflight-expired-session" "$HOME/.brainstem/state/.copilot_session"
+          grep -q "preflight-lan-secret" "$HOME/.brainstem/state/.brainstem_secret"
+          grep -q "gpt-4o" "$HOME/.brainstem/state/.brainstem_model"
+          grep -q "preflight-state-marker" "$HOME/.brainstem/state/.brainstem_book.json"
+          if [ "${{ matrix.scenario }}" = "repair" ]; then
+            grep -q "legacy_writer_pid" "$HOME/.brainstem/state/.brainstem_model"
+            if kill -0 "$LEGACY_WRITER_PID" 2>/dev/null; then
+              echo "legacy state writer is still running" >&2
+              exit 1
+            fi
+            if ! kill -0 "$LEGACY_DECOY_PID" 2>/dev/null; then
+              echo "unrelated process mentioning brainstem.py was terminated" >&2
+              exit 1
+            fi
+            kill "$LEGACY_DECOY_PID" 2>/dev/null || true
+          fi
           curl -sf http://localhost:7071/health | python3 -c "
           import json,sys; d=json.load(sys.stdin)
           assert 'PreflightCustom' in (d.get('agents') or []), d.get('agents')
