@@ -3607,6 +3607,7 @@ def health():
             "agents": list(agents.keys()),
             "quarantined": _quarantine_snapshot(),
             "auth_error": "invalid_credentials" if invalid_credential else None,
+            "brainstem_dir": os.path.dirname(os.path.abspath(__file__)),
         })
 
 @app.route("/debug/auth", methods=["GET"])
