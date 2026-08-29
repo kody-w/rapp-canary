@@ -280,6 +280,11 @@ def _validate_policy(policy: dict) -> None:
         raise PreprodError("preprod policy must target the preprod environment")
     if policy.get("control_plane_only") is not True:
         raise PreprodError("preprod must remain a Canary-owned control-plane feature")
+    if policy.get("deployment_branch") != "main":
+        raise PreprodError("preprod deployments must come from main")
+    reviewers = policy.get("minimum_required_reviewers")
+    if not isinstance(reviewers, int) or reviewers < 1:
+        raise PreprodError("preprod must require at least one reviewer")
     if policy.get("same_artifact_to_grail") is not True:
         raise PreprodError("policy must require the same artifact to reach Grail")
     if policy.get("human_approval_required") is not True:

@@ -2,6 +2,8 @@
   "schema": "rapp-preprod-policy/1",
   "environment": "preprod",
   "control_plane_only": true,
+  "deployment_branch": "main",
+  "minimum_required_reviewers": 1,
   "max_candidate_age_hours": 168,
   "max_artifact_bytes": 104857600,
   "max_unpacked_bytes": 536870912,

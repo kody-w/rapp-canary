@@ -48,6 +48,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      deployments: read
     outputs:
       artifact_name: ${{ steps.package.outputs.artifact_name }}
       beta_commit: ${{ steps.evidence.outputs.beta_commit }}
@@ -131,6 +132,22 @@ jobs:
             https://github.com/kody-w/rapp-installer.git \
             "refs/tags/$ROLLBACK_REF" "refs/tags/$ROLLBACK_REF^{}" >/dev/null
           [[ "$SOAK_EVIDENCE_URL" == https://github.com/* ]]
+
+          ENVIRONMENT=$(gh api \
+            "repos/kody-w/rapp-canary/environments/preprod")
+          REVIEWERS=$(jq '
+            [.protection_rules[]
+             | select(.type == "required_reviewers")
+             | .reviewers[]] | length
+          ' <<<"$ENVIRONMENT")
+          MIN_REVIEWERS=$(jq -r .minimum_required_reviewers \
+            .ring/preprod-policy.json)
+          [[ "$REVIEWERS" -ge "$MIN_REVIEWERS" ]]
+          [[ "$(jq -r .deployment_branch_policy.custom_branch_policies <<<"$ENVIRONMENT")" == "true" ]]
+          BRANCH_POLICIES=$(gh api \
+            "repos/kody-w/rapp-canary/environments/preprod/deployment-branch-policies")
+          [[ "$(jq '[.branch_policies[] | select(.type == "branch" and .name == "main")] | length' \
+            <<<"$BRANCH_POLICIES")" == "1" ]]
 
           echo "beta_commit=$BETA_COMMIT" >> "$GITHUB_OUTPUT"
           echo "qualification_url=$QUALIFICATION_URL" >> "$GITHUB_OUTPUT"
