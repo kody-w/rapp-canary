@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -167,6 +168,38 @@ def _repo_slug(remote_url: str) -> str | None:
     return None
 
 
+def _verify_github_provenance(
+    manifest: dict,
+    subjects: tuple[Path, ...],
+) -> None:
+    for subject in subjects:
+        result = subprocess.run(
+            [
+                "gh",
+                "attestation",
+                "verify",
+                str(subject),
+                "-R",
+                QUALIFICATION_REPOSITORY,
+                "--signer-workflow",
+                "kody-w/rapp-canary/.github/workflows/stage-preprod.yml",
+                "--source-ref",
+                "refs/heads/main",
+                "--signer-digest",
+                manifest["evidence"]["control_plane"]["commit"],
+                "--deny-self-hosted-runners",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode:
+            raise PreprodError(
+                f"GitHub provenance verification failed for {subject.name}: "
+                f"{result.stderr.strip()}"
+            )
+
+
 def _candidate_files(source: Path) -> list[Path]:
     tracked = subprocess.run(
         ["git", "-C", str(source), "ls-files", "-z"],
@@ -299,7 +332,10 @@ def package_candidate(
         raise PreprodError("candidate owner is required")
     if not re.fullmatch(r"[0-9a-f]{40}", control_plane_commit):
         raise PreprodError("control-plane commit must be a full lowercase SHA")
-    if not model_id.strip() or model_id.strip().lower() == "auto":
+    if (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", model_id)
+        or model_id.lower() == "auto"
+    ):
         raise PreprodError("Preprod requires an explicit model id")
     for label, value in (
         ("qualification URL", qualification_url),
@@ -560,8 +596,11 @@ def verify_candidate(
             raise PreprodError(f"invalid subject {key}")
     if (
         not isinstance(runtime.get("model_id"), str)
-        or not runtime["model_id"].strip()
-        or runtime["model_id"].strip().lower() == "auto"
+        or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}",
+            runtime["model_id"],
+        )
+        or runtime["model_id"].lower() == "auto"
         or runtime.get("data_classification") != "synthetic"
     ):
         raise PreprodError("runtime configuration is not production-safe")
@@ -797,32 +836,10 @@ def export_candidate(
     ):
         raise PreprodError("rollback Brainstem frame does not match readiness manifest")
     if verify_provenance:
-        for subject in (artifact, manifest_path, *(materials or {}).values()):
-            result = subprocess.run(
-                [
-                    "gh",
-                    "attestation",
-                    "verify",
-                    str(subject),
-                    "-R",
-                    QUALIFICATION_REPOSITORY,
-                    "--signer-workflow",
-                    "kody-w/rapp-canary/.github/workflows/stage-preprod.yml",
-                    "--source-ref",
-                    "refs/heads/main",
-                    "--signer-digest",
-                    manifest["evidence"]["control_plane"]["commit"],
-                    "--deny-self-hosted-runners",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode:
-                raise PreprodError(
-                    f"GitHub provenance verification failed for {subject.name}: "
-                    f"{result.stderr.strip()}"
-                )
+        _verify_github_provenance(
+            manifest,
+            (artifact, manifest_path, *(materials or {}).values()),
+        )
 
     members = _validate_archive(artifact)
     candidate_paths = {member.name for member in members}
@@ -895,6 +912,145 @@ def export_candidate(
     return changed
 
 
+def _extract_archive(artifact: Path, destination: Path) -> None:
+    members = _validate_archive(artifact)
+    destination.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(artifact, "r:gz") as archive:
+        for member in members:
+            output = destination / member.name
+            output.parent.mkdir(parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                raise PreprodError(f"cannot read artifact member: {member.name}")
+            with output.open("wb") as handle:
+                while chunk := source.read(1024 * 1024):
+                    handle.write(chunk)
+            os.chmod(output, 0o755 if member.mode & stat.S_IXUSR else 0o644)
+
+
+def prepare_runtime(
+    artifact: Path,
+    manifest_path: Path,
+    destination: Path,
+    state_dir: Path,
+    policy_path: Path,
+    materials: dict[str, Path],
+    platform_name: str | None = None,
+    verify_provenance: bool = True,
+    install_dependencies: bool = True,
+) -> dict:
+    manifest = verify_candidate(
+        artifact,
+        manifest_path,
+        policy_path,
+        materials=materials,
+    )
+    if manifest["status"] != "seaworthy":
+        raise PreprodError("only a seaworthy artifact can prepare a runtime")
+    if verify_provenance:
+        _verify_github_provenance(
+            manifest,
+            (artifact, manifest_path, *materials.values()),
+        )
+
+    platform_key = platform_name or {
+        "linux": "linux",
+        "darwin": "macos",
+        "win32": "windows",
+    }.get(sys.platform)
+    material_name = f"dependency-material-{platform_key}"
+    if material_name not in materials:
+        raise PreprodError(f"no sealed dependency material for {platform_key}")
+    destination = destination.resolve()
+    state_dir = state_dir.resolve()
+    if destination.exists():
+        raise PreprodError("runtime destination must not already exist")
+    try:
+        state_dir.relative_to(destination)
+    except ValueError:
+        pass
+    else:
+        raise PreprodError("runtime state must live outside the release directory")
+    state_dir.mkdir(parents=True, exist_ok=True)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.prepare")
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    try:
+        source_dir = temporary / "src"
+        dependencies = temporary / "dependencies"
+        _extract_archive(artifact, source_dir)
+        _extract_archive(materials[material_name], dependencies)
+        lock = dependencies / "requirements.lock"
+        wheelhouse = dependencies / "wheelhouse"
+        if not lock.is_file() or not wheelhouse.is_dir():
+            raise PreprodError("sealed dependency material is incomplete")
+
+        if install_dependencies:
+            venv = temporary / "venv"
+            result = subprocess.run(
+                [sys.executable, "-m", "venv", str(venv)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode:
+                raise PreprodError(f"cannot create sealed runtime venv: {result.stderr}")
+            python = (
+                venv / "Scripts" / "python.exe"
+                if platform_key == "windows"
+                else venv / "bin" / "python"
+            )
+            result = subprocess.run(
+                [
+                    str(python),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--no-index",
+                    "--find-links",
+                    str(wheelhouse),
+                    "-r",
+                    str(lock),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode:
+                raise PreprodError(
+                    "cannot install sealed dependencies: " + result.stderr.strip()
+                )
+
+        _write_json(
+            temporary / "deployment.json",
+            {
+                "schema": "rapp-seaworthy-deployment/1",
+                "artifact_sha256": manifest["subject"]["artifact_sha256"],
+                "brainstem_sha256": manifest["subject"]["brainstem_sha256"],
+                "material": material_name,
+                "material_sha256": manifest["deployment_materials"][material_name]["sha256"],
+                "model_id": manifest["runtime"]["model_id"],
+                "state_dir": str(state_dir),
+            },
+        )
+        (temporary / "runtime.env").write_text(
+            f"BRAINSTEM_STATE_DIR={state_dir}\n"
+            f"GITHUB_MODEL={manifest['runtime']['model_id']}\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return {
+        "source": destination / "src",
+        "venv": destination / "venv",
+        "deployment": destination / "deployment.json",
+    }
+
+
 def _parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser()
@@ -949,6 +1105,14 @@ def _parse_args() -> argparse.Namespace:
     bundle = subparsers.add_parser("bundle")
     bundle.add_argument("--source", type=Path, required=True)
     bundle.add_argument("--artifact", type=Path, required=True)
+
+    prepare = subparsers.add_parser("prepare-runtime")
+    prepare.add_argument("--artifact", type=Path, required=True)
+    prepare.add_argument("--manifest", type=Path, required=True)
+    prepare.add_argument("--destination", type=Path, required=True)
+    prepare.add_argument("--state-dir", type=Path, required=True)
+    prepare.add_argument("--platform", choices=("linux", "macos", "windows"))
+    prepare.add_argument("--material", action="append", default=[])
     return parser.parse_args()
 
 
@@ -1020,9 +1184,20 @@ def main() -> int:
                 materials=_parse_material_specs(args.material),
             )
             print(f"GRAIL HANDOFF — {changed} paths staged from exact preprod artifact")
-        else:
+        elif args.command == "bundle":
             digest = build_artifact(args.source.resolve(), args.artifact.resolve())
             print(f"DEPLOYMENT MATERIAL — {digest} ({args.artifact.name})")
+        else:
+            result = prepare_runtime(
+                args.artifact.resolve(),
+                args.manifest.resolve(),
+                args.destination.resolve(),
+                args.state_dir.resolve(),
+                args.policy.resolve(),
+                _parse_material_specs(args.material),
+                platform_name=args.platform,
+            )
+            print(f"SEALED RUNTIME — source={result['source']} venv={result['venv']}")
     except (OSError, PreprodError) as error:
         print(f"preprod gate failed: {error}", file=os.sys.stderr)
         return 1

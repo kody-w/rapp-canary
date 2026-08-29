@@ -2,11 +2,10 @@ name: Autonomous Pre-Grail Matrix
 
 on:
   push:
-    branches:
-      - setup/ring-overlay
     paths:
       - ".ring/**"
       - ".github/workflows/autonomous-pre-grail.yml"
+      - ".github/workflows/stage-preprod.yml"
   workflow_dispatch:
   schedule:
     - cron: "17 3 * * *"
@@ -23,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      RAPP_RING_REF: ${{ github.ref_name == 'setup/ring-overlay' && 'setup/ring-overlay' || 'main' }}
+      RAPP_RING_REF: ${{ github.ref_name }}
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -53,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      RAPP_RING_REF: ${{ github.ref_name == 'setup/ring-overlay' && 'setup/ring-overlay' || 'main' }}
+      RAPP_RING_REF: ${{ github.ref_name }}
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5

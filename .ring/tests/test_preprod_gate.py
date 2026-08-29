@@ -403,6 +403,45 @@ class PreprodGateTests(unittest.TestCase):
                 materials=self.materials,
             )
 
+    def test_prepare_runtime_uses_the_sealed_platform_material(self):
+        self.package()
+        sealed_path = self.root / "seaworthy.json"
+        GATE.seal_candidate(
+            self.artifact,
+            self.manifest,
+            sealed_path,
+            POLICY,
+            "789",
+            "https://github.com/kody-w/rapp-canary/actions/runs/789",
+            "github-environment:preprod",
+            self.materials,
+            sealed_at=self.issued + timedelta(hours=2),
+        )
+        destination = self.root / "runtime"
+        state_dir = self.root / "state"
+        result = GATE.prepare_runtime(
+            self.artifact,
+            sealed_path,
+            destination,
+            state_dir,
+            POLICY,
+            self.materials,
+            platform_name="linux",
+            verify_provenance=False,
+            install_dependencies=False,
+        )
+        self.assertTrue((result["source"] / "rapp_brainstem" / "brainstem.py").is_file())
+        self.assertTrue(
+            (destination / "dependencies" / "requirements.lock").is_file()
+        )
+        deployment = json.loads(result["deployment"].read_text(encoding="utf-8"))
+        self.assertEqual(deployment["material"], "dependency-material-linux")
+        self.assertEqual(deployment["state_dir"], str(state_dir.resolve()))
+        self.assertIn(
+            "GITHUB_MODEL=gpt-4o",
+            (destination / "runtime.env").read_text(encoding="utf-8"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

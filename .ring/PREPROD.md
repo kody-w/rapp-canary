@@ -88,19 +88,22 @@ Enterprise deployment also consumes the sealed platform dependency bundle;
 the public one-liner remains unchanged.
 
 For an enterprise-managed runtime, unpack the matching dependency material and
-install without consulting a package index:
+prepare the entire runtime without consulting a package index:
 
 ```bash
-tar -xzf dependency-material-linux.tar.gz -C /tmp/rapp-dependencies
-python3 -m venv /opt/rapp/venv
-/opt/rapp/venv/bin/python -m pip install \
-  --no-index \
-  --find-links /tmp/rapp-dependencies/wheelhouse \
-  -r /tmp/rapp-dependencies/requirements.lock
+python3 <canary-checkout>/.ring/tools/preprod_gate.py prepare-runtime \
+  --artifact /path/to/rapp-preprod-<sha>.tar.gz \
+  --manifest /path/to/seaworthy.json \
+  --destination /opt/rapp/releases/<sha> \
+  --state-dir /var/lib/rapp \
+  --material dependency-material-linux=/path/to/dependency-material-linux.tar.gz \
+  --material dependency-material-macos=/path/to/dependency-material-macos.tar.gz \
+  --material dependency-material-windows=/path/to/dependency-material-windows.tar.gz
 ```
 
-Use the macOS or Windows material on those platforms. The material archive and
-its SBOM are hash-bound in `seaworthy.json` and independently attested.
+The command verifies provenance for the source, manifest, and every platform
+material; selects the current platform; extracts into a new release directory;
+and installs only from the sealed wheelhouse with `--no-index`.
 
 ## Unknown-unknown strategy
 
