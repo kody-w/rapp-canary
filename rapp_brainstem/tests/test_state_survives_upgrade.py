@@ -155,6 +155,11 @@ class InstallerMigratesBeforeReplacingTheCheckout(unittest.TestCase):
         self.assertIn("copy_state_file_atomically", helper)
         self.assertIn("write_state_migration_marker", helper)
         self.assertLess(
+            install.index("stop_existing_brainstem"),
+            install.index("migrate_legacy_state"),
+            "shell installer snapshots legacy state before quiescing its writer",
+        )
+        self.assertLess(
             install.index("migrate_legacy_state"),
             install.index('rm -rf "$BRAINSTEM_HOME/src"'),
             "shell installer deletes the checkout before preserving legacy state",
@@ -177,6 +182,11 @@ class InstallerMigratesBeforeReplacingTheCheckout(unittest.TestCase):
         )
         self.assertIn("Copy-StateFileAtomically", helper)
         self.assertIn("Write-StateMigrationMarker", helper)
+        self.assertLess(
+            install.index("Stop-ExistingBrainstem"),
+            install.index("Migrate-LegacyState"),
+            "PowerShell installer snapshots legacy state before quiescing its writer",
+        )
         self.assertLess(
             install.index("Migrate-LegacyState"),
             install.index('Remove-Item -Recurse -Force "$BRAINSTEM_HOME\\src"'),

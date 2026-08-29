@@ -622,6 +622,10 @@ function Install-Brainstem {
     if (-not (Test-Path $BRAINSTEM_HOME)) {
         New-Item -ItemType Directory -Force -Path $BRAINSTEM_HOME | Out-Null
     }
+    Capture-LegacyRuntimeStateOwner
+    if ($script:LegacyRuntimeWasActive) {
+        Stop-ExistingBrainstem
+    }
     Migrate-LegacyState
 
     if (Test-Path "$BRAINSTEM_HOME\src\.git") {

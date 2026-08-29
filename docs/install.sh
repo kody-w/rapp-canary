@@ -453,6 +453,10 @@ install_brainstem() {
     echo ""
     echo "Installing RAPP Brainstem..."
     mkdir -p "$BRAINSTEM_HOME"
+    capture_legacy_runtime_state_owner
+    if [ "$LEGACY_RUNTIME_WAS_ACTIVE" = true ]; then
+        stop_existing_brainstem
+    fi
     if ! migrate_legacy_state; then
         echo -e "  ${RED}✗${NC} Existing state was not preserved; refusing to replace the checkout"
         return 1
