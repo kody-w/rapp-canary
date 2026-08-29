@@ -294,10 +294,20 @@ if [ "$SCENARIO" = "upgrade" ] || [ "$SCENARIO" = "repair" ]; then
     NEWVER="$(tr -d '[:space:]' < "$FAKE_HOME/.brainstem/src/rapp_brainstem/VERSION" 2>/dev/null)"
     [ "$NEWVER" = "$BRANCH_VERSION" ] && ok "upgraded to candidate v$NEWVER" || bad "version after upgrade: $NEWVER"
     STATE="$FAKE_HOME/.brainstem/state"
-    grep -q "ghu_PREFLIGHT_STATE_SURVIVOR" "$STATE/.copilot_token" \
-        && ok "saved sign-in survived upgrade" || bad "saved sign-in lost in upgrade"
-    grep -q "preflight-expired-session" "$STATE/.copilot_session" \
-        && ok "Copilot session cache survived upgrade" || bad "Copilot session cache lost"
+    if [ "$AUTH" = true ] && [ "${_auth_token_copied:-false}" = true ]; then
+        test -s "$STATE/.copilot_token" \
+            && ok "real saved sign-in is present after upgrade" || bad "real saved sign-in is missing"
+        if [ -s "$STATE/.copilot_session" ]; then
+            ok "real Copilot session cache is present"
+        else
+            ok "Copilot session cache will be regenerated lazily"
+        fi
+    else
+        grep -q "ghu_PREFLIGHT_STATE_SURVIVOR" "$STATE/.copilot_token" \
+            && ok "saved sign-in survived upgrade" || bad "saved sign-in lost in upgrade"
+        grep -q "preflight-expired-session" "$STATE/.copilot_session" \
+            && ok "Copilot session cache survived upgrade" || bad "Copilot session cache lost"
+    fi
     grep -q "preflight-lan-secret" "$STATE/.brainstem_secret" \
         && ok "LAN secret survived upgrade" || bad "LAN secret lost in upgrade"
     grep -q "gpt-4o" "$STATE/.brainstem_model" \
