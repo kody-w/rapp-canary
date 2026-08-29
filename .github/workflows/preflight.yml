@@ -242,10 +242,10 @@ jobs:
         run: |
           set -uo pipefail
           BRANCH_VERSION="$(tr -d '[:space:]' < rapp_brainstem/VERSION)"
-          for i in $(seq 1 120); do
-            sleep 5
-            if curl -sf "http://localhost:7071/health" -o "$RUNNER_TEMP/health.json"; then break; fi
-            if [ "$i" = 120 ]; then echo "server never came up"; cat "$RUNNER_TEMP/install.log" 2>/dev/null | tail -60; exit 1; fi
+          for i in $(seq 1 60); do
+            sleep 3
+            if curl -sf --max-time 2 "http://localhost:7071/health" -o "$RUNNER_TEMP/health.json"; then break; fi
+            if [ "$i" = 60 ]; then echo "server never came up"; cat "$RUNNER_TEMP/install.log" 2>/dev/null | tail -60; exit 1; fi
           done
           INSTALLED_COMMIT="$(git -C "$HOME/.brainstem/src" rev-parse 'HEAD^{commit}')"
           [[ "$INSTALLED_COMMIT" == "$GITHUB_SHA" ]] || {
