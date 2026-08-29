@@ -602,12 +602,73 @@ function Prepare-LegacyRuntimeState {
     }
 }
 
+function Get-ConfiguredBrainstemPorts {
+    $ports = New-Object "System.Collections.Generic.HashSet[int]"
+    $ports.Add(7071) | Out-Null
+    $configured = 0
+    if ([int]::TryParse([string]$env:PORT, [ref]$configured) -and $configured -gt 0) {
+        $ports.Add($configured) | Out-Null
+    }
+    $envFile = "$BRAINSTEM_HOME\src\rapp_brainstem\.env"
+    if (Test-Path -LiteralPath $envFile -PathType Leaf) {
+        foreach ($line in Get-Content -LiteralPath $envFile -ErrorAction SilentlyContinue) {
+            if ($line -match '^\s*PORT\s*=\s*["'']?(\d+)') {
+                $ports.Add([int]$Matches[1]) | Out-Null
+            }
+        }
+    }
+    return @($ports)
+}
+
+function Quiesce-LegacyStateWriters {
+    $legacyScript = "$BRAINSTEM_HOME\src\rapp_brainstem\brainstem.py"
+    if (-not (Test-Path -LiteralPath $legacyScript -PathType Leaf)) { return }
+    $legacyNormalized = $legacyScript.Replace('/', '\').ToLowerInvariant()
+    $listenerOwners = @{}
+    foreach ($port in Get-ConfiguredBrainstemPorts) {
+        try {
+            foreach ($listener in Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop) {
+                $listenerOwners[[int]$listener.OwningProcess] = $true
+            }
+        } catch {}
+    }
+
+    $targets = @{}
+    $ambiguous = @()
+    foreach ($process in Get-CimInstance Win32_Process -ErrorAction Stop) {
+        $commandLine = [string]$process.CommandLine
+        if (-not $commandLine -or $commandLine -notmatch '(?i)python.*brainstem\.py') { continue }
+        $normalized = $commandLine.Replace('/', '\').ToLowerInvariant()
+        $pidValue = [int]$process.ProcessId
+        if ($normalized.Contains($legacyNormalized)) {
+            $targets[$pidValue] = $true
+        } elseif ($listenerOwners.ContainsKey($pidValue)) {
+            $targets[$pidValue] = $true
+        } elseif ($normalized -notmatch '(?i)[a-z]:\\[^"]*\\brainstem\.py') {
+            $ambiguous += $pidValue
+        }
+    }
+    if ($ambiguous.Count -gt 0) {
+        throw "Cannot identify brainstem process(es) $($ambiguous -join ', '); refusing a destructive migration"
+    }
+
+    foreach ($pidValue in $targets.Keys) {
+        Write-Host "  [!] Stopping legacy state writer (PID $pidValue)..." -ForegroundColor Yellow
+        Stop-Process -Id $pidValue -Force -ErrorAction Stop
+    }
+    foreach ($pidValue in $targets.Keys) {
+        try { Wait-Process -Id $pidValue -Timeout 5 -ErrorAction SilentlyContinue } catch {}
+        if (Get-Process -Id $pidValue -ErrorAction SilentlyContinue) {
+            throw "Legacy state writer PID $pidValue did not exit"
+        }
+    }
+}
+
 function Stop-ExistingBrainstem {
-    # Stop the old writer before the final legacy-state snapshot. Otherwise a token
-    # refresh or account switch can land after migration and vanish with the checkout.
-    try {
-        $listeners = Get-NetTCPConnection -LocalPort 7071 -State Listen -ErrorAction SilentlyContinue
-        if ($listeners) {
+    foreach ($port in Get-ConfiguredBrainstemPorts) {
+        try {
+            $listeners = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+            if (-not $listeners) { continue }
             $ownerPids = @($listeners | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique)
             foreach ($ownerPid in $ownerPids) {
                 if ($ownerPid -and $ownerPid -ne 0) {
@@ -616,8 +677,8 @@ function Stop-ExistingBrainstem {
                 }
             }
             Start-Sleep -Seconds 1
-        }
-    } catch {}
+        } catch {}
+    }
 }
 
 function Install-Brainstem {
@@ -629,7 +690,7 @@ function Install-Brainstem {
     }
     Capture-LegacyRuntimeStateOwner
     if ($script:LegacyRuntimeWasActive) {
-        Stop-ExistingBrainstem
+        Quiesce-LegacyStateWriters
     }
     Migrate-LegacyState
 
@@ -980,6 +1041,9 @@ function Create-Env {
 
 function Launch-Brainstem {
     Capture-LegacyRuntimeStateOwner
+    if ($script:LegacyRuntimeWasActive) {
+        Quiesce-LegacyStateWriters
+    }
     Stop-ExistingBrainstem
     try {
         Sync-LiveLegacyState
@@ -1222,7 +1286,7 @@ function Launch-Brainstem {
     } | Out-Null
 
     $py = Resolve-RunPython
-    & $py brainstem.py
+    & $py "$BRAINSTEM_HOME\src\rapp_brainstem\brainstem.py"
 }
 
 function Main {

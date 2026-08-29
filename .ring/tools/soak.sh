@@ -91,7 +91,7 @@ do_start() {
     (
         cd "$SOAK_HOME/render/rapp_brainstem"
         HOME="$SOAK_HOME" BRAINSTEM_STATE_DIR="$state" PORT="$SOAK_PORT" \
-            nohup "$SOAK_HOME/venv/bin/python" brainstem.py \
+            nohup "$SOAK_HOME/venv/bin/python" "$SOAK_HOME/render/rapp_brainstem/brainstem.py" \
             > "$SOAK_HOME/soak.log" 2>&1 &
         echo $! > "$SOAK_HOME/soak.pid"
     )

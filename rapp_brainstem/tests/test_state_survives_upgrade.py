@@ -155,7 +155,7 @@ class InstallerMigratesBeforeReplacingTheCheckout(unittest.TestCase):
         self.assertIn("copy_state_file_atomically", helper)
         self.assertIn("write_state_migration_marker", helper)
         self.assertLess(
-            install.index("stop_existing_brainstem"),
+            install.index("quiesce_legacy_state_writers"),
             install.index("migrate_legacy_state"),
             "shell installer snapshots legacy state before quiescing its writer",
         )
@@ -183,7 +183,7 @@ class InstallerMigratesBeforeReplacingTheCheckout(unittest.TestCase):
         self.assertIn("Copy-StateFileAtomically", helper)
         self.assertIn("Write-StateMigrationMarker", helper)
         self.assertLess(
-            install.index("Stop-ExistingBrainstem"),
+            install.index("Quiesce-LegacyStateWriters"),
             install.index("Migrate-LegacyState"),
             "PowerShell installer snapshots legacy state before quiescing its writer",
         )
@@ -200,6 +200,12 @@ class InstallerMigratesBeforeReplacingTheCheckout(unittest.TestCase):
         self.assertIn("Prepare-LegacyRuntimeState", powershell)
         self.assertIn("sync_live_legacy_state", shell)
         self.assertIn("Sync-LiveLegacyState", powershell)
+        self.assertIn("legacy_writer_pids", shell)
+        self.assertIn("Quiesce-LegacyStateWriters", powershell)
+        self.assertIn("ps -axo pid=,command=", shell)
+        self.assertIn("Get-CimInstance Win32_Process", powershell)
+        self.assertIn("did not exit", shell)
+        self.assertIn("did not exit", powershell)
         self.assertIn(".legacy-state-migrated-v1", shell)
         self.assertIn(".legacy-state-migrated-v1", powershell)
 

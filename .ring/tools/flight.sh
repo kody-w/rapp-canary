@@ -107,7 +107,7 @@ PY
             . "$envfile"
             set +a
             BRAINSTEM_STATE_DIR="$state" PORT="$port" \
-                nohup "$base/venv/bin/python" brainstem.py \
+                nohup "$base/venv/bin/python" "$src/rapp_brainstem/brainstem.py" \
                 > "$base/flight.log" 2>&1 &
         )
 

@@ -438,8 +438,102 @@ prepare_legacy_runtime_state() {
     done
 }
 
+legacy_writer_pids() {
+    local legacy_dir="$BRAINSTEM_HOME/src/rapp_brainstem"
+    [ -d "$legacy_dir" ] || return 0
+    local canonical_dir
+    canonical_dir=$(cd "$legacy_dir" 2>/dev/null && pwd -P) || return 0
+
+    ps -axo pid=,command= | while read -r pid command_line; do
+        case "$command_line" in
+            *[Pp]ython*brainstem.py*) ;;
+            *) continue ;;
+        esac
+
+        if [[ "$command_line" == *"$legacy_dir/brainstem.py"* ]] \
+                || [[ "$command_line" == *"$canonical_dir/brainstem.py"* ]]; then
+            echo "$pid"
+            continue
+        fi
+
+        local cwd=""
+        if [ -L "/proc/$pid/cwd" ]; then
+            cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+        elif command -v lsof >/dev/null 2>&1; then
+            cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+        fi
+        if [ -n "$cwd" ]; then
+            local canonical_cwd
+            canonical_cwd=$(cd "$cwd" 2>/dev/null && pwd -P) || canonical_cwd="$cwd"
+            [ "$canonical_cwd" = "$canonical_dir" ] && echo "$pid"
+        else
+            # A relative `python brainstem.py` with an unknowable cwd might be the
+            # writer we are about to delete. Refuse instead of guessing.
+            echo "?$pid"
+        fi
+    done
+}
+
+quiesce_legacy_state_writers() {
+    local records record pid
+    records=$(legacy_writer_pids)
+    for record in $records; do
+        case "$record" in
+            \?*)
+                echo -e "  ${RED}✗${NC} Cannot identify brainstem process ${record#?}; refusing a destructive migration"
+                return 1
+                ;;
+            *)
+                pid="$record"
+                echo -e "  ${YELLOW}⚠${NC} Stopping legacy state writer (PID $pid)..."
+                kill "$pid" 2>/dev/null || {
+                    echo -e "  ${RED}✗${NC} Could not stop legacy state writer PID $pid"
+                    return 1
+                }
+                ;;
+        esac
+    done
+
+    for _ in $(seq 1 50); do
+        local alive=false
+        for record in $records; do
+            case "$record" in \?*) continue ;; esac
+            if kill -0 "$record" 2>/dev/null; then alive=true; break; fi
+        done
+        [ "$alive" = false ] && return 0
+        sleep 0.1
+    done
+    echo -e "  ${RED}✗${NC} A legacy brainstem did not exit; state migration aborted"
+    return 1
+}
+
+configured_brainstem_port() {
+    if [[ "${PORT:-}" =~ ^[0-9]+$ ]]; then
+        echo "$PORT"
+        return
+    fi
+    local env_file="$BRAINSTEM_HOME/src/rapp_brainstem/.env"
+    if [ -f "$env_file" ]; then
+        local configured
+        configured=$(awk -F= '
+            /^[[:space:]]*PORT[[:space:]]*=/ {
+                value=$2
+                gsub(/[[:space:]"\047]/, "", value)
+                if (value ~ /^[0-9]+$/) port=value
+            }
+            END { if (port) print port }
+        ' "$env_file")
+        if [ -n "$configured" ]; then
+            echo "$configured"
+            return
+        fi
+    fi
+    echo 7071
+}
+
 stop_existing_brainstem() {
-    local port="${PORT:-7071}"
+    local port
+    port=$(configured_brainstem_port)
     local existing_pid
     existing_pid=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null | head -1)
     if [ -n "$existing_pid" ]; then
@@ -455,7 +549,7 @@ install_brainstem() {
     mkdir -p "$BRAINSTEM_HOME"
     capture_legacy_runtime_state_owner
     if [ "$LEGACY_RUNTIME_WAS_ACTIVE" = true ]; then
-        stop_existing_brainstem
+        quiesce_legacy_state_writers || return 1
     fi
     if ! migrate_legacy_state; then
         echo -e "  ${RED}✗${NC} Existing state was not preserved; refusing to replace the checkout"
@@ -761,6 +855,9 @@ launch_brainstem() {
     export PATH="$BRAINSTEM_BIN:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
     capture_legacy_runtime_state_owner
+    if [ "$LEGACY_RUNTIME_WAS_ACTIVE" = true ]; then
+        quiesce_legacy_state_writers || return 1
+    fi
     stop_existing_brainstem
     if ! sync_live_legacy_state; then
         echo -e "  ${RED}✗${NC} Could not capture final state from the stopped server"
@@ -1045,17 +1142,17 @@ finally:
     # Use exec to replace shell — but only if stdin is a terminal.
     # When piped (curl | bash), exec can lose the TTY and hang.
     if [ -t 0 ]; then
-        exec "$venv_python" brainstem.py
+        exec "$venv_python" "$BRAINSTEM_HOME/src/rapp_brainstem/brainstem.py"
     elif ( : </dev/tty ) 2>/dev/null; then
         # Piped installer with a USABLE controlling terminal — reattach stdin.
         # Test by opening it: the /dev/tty node exists even without a controlling
         # terminal (ssh without -t, CI), where only the open fails — a bare `-e`
         # check would take this branch and die on the redirect.
-        "$venv_python" brainstem.py </dev/tty
+        "$venv_python" "$BRAINSTEM_HOME/src/rapp_brainstem/brainstem.py" </dev/tty
     else
         # No controlling terminal at all (ssh without -t, CI, a container). Reattaching
         # /dev/tty would error out; just run the server on the inherited stdin.
-        "$venv_python" brainstem.py
+        "$venv_python" "$BRAINSTEM_HOME/src/rapp_brainstem/brainstem.py"
     fi
 }
 
