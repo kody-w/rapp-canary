@@ -13,7 +13,7 @@ set -euo pipefail
 SOAK_HOME="${SOAK_HOME:-$HOME/.brainstem-soak}"
 SOAK_PORT="${SOAK_PORT:-7073}"
 RING_REPO="${RING_REPO:-https://github.com/kody-w/rapp-canary.git}"
-TOKEN_SOURCE="${TOKEN_SOURCE:-$HOME/.brainstem/src/rapp_brainstem/.copilot_token}"
+TOKEN_SOURCE="${TOKEN_SOURCE:-}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 say() { echo "[soak] $1"; }
@@ -38,7 +38,8 @@ do_stop() {
 do_start() {
     local auth="${1:-auth}"
     pid_alive && die "already running (pid $(cat "$SOAK_HOME/soak.pid")) — use refresh"
-    mkdir -p "$SOAK_HOME"
+    local state="$SOAK_HOME/state"
+    mkdir -p "$SOAK_HOME" "$state"
 
     say "cloning canary main"
     rm -rf "$SOAK_HOME/src"
@@ -62,16 +63,35 @@ do_start() {
         -r "$SOAK_HOME/render/rapp_brainstem/requirements.txt"
 
     if [ "$auth" = "auth" ]; then
-        [ -f "$TOKEN_SOURCE" ] || die "no Copilot token at $TOKEN_SOURCE (use --no-auth for an unauthenticated soak)"
-        cp "$TOKEN_SOURCE" "$SOAK_HOME/render/rapp_brainstem/.copilot_token"
+        local token_source="$TOKEN_SOURCE"
+        if [ -z "$token_source" ]; then
+            for candidate in "$HOME/.brainstem/state/.copilot_token" \
+                             "$HOME/.brainstem/src/rapp_brainstem/.copilot_token"; do
+                if [ -f "$candidate" ]; then token_source="$candidate"; break; fi
+            done
+        fi
+        [ -n "$token_source" ] && [ -f "$token_source" ] \
+            || die "no Copilot token found (use --no-auth for an unauthenticated soak)"
+        cp "$token_source" "$state/.copilot_token"
+        chmod 600 "$state/.copilot_token"
+        for session_source in "$HOME/.brainstem/state/.copilot_session" \
+                              "$HOME/.brainstem/src/rapp_brainstem/.copilot_session"; do
+            if [ -f "$session_source" ]; then
+                cp "$session_source" "$state/.copilot_session"
+                chmod 600 "$state/.copilot_session"
+                break
+            fi
+        done
         say "real Copilot token installed (soak-local copy)"
+    else
+        rm -f "$state/.copilot_token" "$state/.copilot_session"
     fi
 
     say "launching on :$SOAK_PORT"
     (
         cd "$SOAK_HOME/render/rapp_brainstem"
-        HOME="$SOAK_HOME" PORT="$SOAK_PORT" \
-            nohup "$SOAK_HOME/venv/bin/python" brainstem.py \
+        HOME="$SOAK_HOME" BRAINSTEM_STATE_DIR="$state" PORT="$SOAK_PORT" \
+            nohup "$SOAK_HOME/venv/bin/python" "$SOAK_HOME/render/rapp_brainstem/brainstem.py" \
             > "$SOAK_HOME/soak.log" 2>&1 &
         echo $! > "$SOAK_HOME/soak.pid"
     )
