@@ -458,7 +458,12 @@ function Resolve-PinnedTag {
 function Move-StateFileIntoPlace {
     param([string]$Temporary, [string]$Destination)
     if (Test-Path -LiteralPath $Destination) {
-        [System.IO.File]::Replace($Temporary, $Destination, $null)
+        $backup = "$Destination.replace-backup-$([Guid]::NewGuid().ToString('N'))"
+        try {
+            [System.IO.File]::Replace($Temporary, $Destination, $backup)
+        } finally {
+            Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+        }
     } else {
         [System.IO.File]::Move($Temporary, $Destination)
     }

@@ -240,6 +240,11 @@ class InstallerMigratesBeforeReplacingTheCheckout(unittest.TestCase):
     def test_windows_accepts_plaintext_tokens_and_keeps_a_403_sign_in(self):
         source = self._source("install.ps1")
         self.assertIn("$savedToken = $rawToken", source)
+        self.assertNotIn(
+            "Replace($Temporary, $Destination, $null)",
+            source,
+            "Windows PowerShell 5.1 rejects a null File.Replace backup path",
+        )
         post_start = source.index("if ($pollResp.access_token)")
         post_end = source.index("$error_code = $pollResp.error", post_start)
         post_login = source[post_start:post_end]
