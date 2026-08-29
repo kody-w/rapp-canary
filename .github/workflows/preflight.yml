@@ -154,10 +154,11 @@ jobs:
           set -euxo pipefail
           BARE="$RUNNER_TEMP/fake-origin.git"
           git clone --bare . "$BARE"
-          git -C "$BARE" update-ref refs/heads/main "$GITHUB_SHA"
-          git -C "$BARE" symbolic-ref HEAD refs/heads/main
+          git -c safe.bareRepository=all --git-dir="$BARE" update-ref refs/heads/main "$GITHUB_SHA"
+          git -c safe.bareRepository=all --git-dir="$BARE" symbolic-ref HEAD refs/heads/main
           # Preserve the real production tip so the upgrade scenario can start there.
-          git -C "$BARE" update-ref refs/heads/production-baseline "$(git rev-parse origin/main)"
+          git -c safe.bareRepository=all --git-dir="$BARE" \
+            update-ref refs/heads/production-baseline "$(git rev-parse origin/main)"
           BARE_URL="file://$(echo "$BARE" | sed 's|\\|/|g; s|^\([A-Za-z]\):|/\1:|')"
           git config --global "url.${BARE_URL}.insteadOf" "https://github.com/kody-w/rapp-installer.git"
           echo "BARE=$BARE" >> "$GITHUB_ENV"
