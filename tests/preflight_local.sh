@@ -53,6 +53,7 @@ BARE="$SANDBOX/fake-origin.git"
 SHIMS="$SANDBOX/shims"
 LOG="$SANDBOX/install.log"
 SERVER_PID=""
+LEGACY_WRITER_PID=""
 
 mkdir -p "$FAKE_HOME" "$SHIMS"
 
@@ -62,6 +63,9 @@ mkdir -p "$FAKE_HOME" "$SHIMS"
 export GIT_CONFIG_GLOBAL="$FAKE_HOME/.gitconfig"
 
 cleanup() {
+    if [ -n "$LEGACY_WRITER_PID" ] && kill -0 "$LEGACY_WRITER_PID" 2>/dev/null; then
+        kill "$LEGACY_WRITER_PID" 2>/dev/null || true
+    fi
     if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
         kill "$SERVER_PID" 2>/dev/null || true
     fi
@@ -147,8 +151,28 @@ EOF
         "$LEGACY_STATE"/.brainstem_book.json
     SEEDED_COMMIT="$(git -C "$FAKE_HOME/.brainstem/src" rev-parse --short HEAD)"
     if [ "$SCENARIO" = "repair" ]; then
+        cat > "$SANDBOX/legacy_writer.py" <<'PY'
+import json
+import os
+import sys
+import time
+
+destination = sys.argv[2]
+payload = {"model": "gpt-4o", "legacy_writer_pid": os.getpid()}
+while True:
+    temporary = destination + ".writer"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    os.replace(temporary, destination)
+    time.sleep(0.05)
+PY
+        nohup python3 "$SANDBOX/legacy_writer.py" \
+            "$LEGACY_STATE/brainstem.py" "$LEGACY_STATE/.brainstem_model" \
+            > "$SANDBOX/legacy-writer.log" 2>&1 &
+        LEGACY_WRITER_PID=$!
+        sleep 0.2
         rm -rf "$FAKE_HOME/.brainstem/src/.git"
-        echo "  ✓ seeded production baseline ($SEEDED_COMMIT) + user files/state, then removed .git"
+        echo "  ✓ seeded production baseline ($SEEDED_COMMIT) + live legacy writer, then removed .git"
     else
         echo "  ✓ seeded production baseline ($SEEDED_COMMIT) + user files/state"
     fi
@@ -270,6 +294,15 @@ if [ "$SCENARIO" = "upgrade" ] || [ "$SCENARIO" = "repair" ]; then
         && ok "model choice survived upgrade" || bad "model choice lost in upgrade"
     grep -q "preflight-state-marker" "$STATE/.brainstem_book.json" \
         && ok "flight recorder survived upgrade" || bad "flight recorder lost in upgrade"
+    if [ "$SCENARIO" = "repair" ]; then
+        grep -q "legacy_writer_pid" "$STATE/.brainstem_model" \
+            && ok "final live-writer state survived repair" || bad "live-writer state was lost"
+        if kill -0 "$LEGACY_WRITER_PID" 2>/dev/null; then
+            bad "legacy state writer was not stopped"
+        else
+            ok "legacy state writer was stopped before replacement"
+        fi
+    fi
 fi
 
 if [ "$AUTH" = true ] && [ "${_auth_token_copied:-false}" = true ]; then

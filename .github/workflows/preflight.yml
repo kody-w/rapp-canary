@@ -193,8 +193,28 @@ jobs:
           printf '{"model":"gpt-4o"}\n' > "$LEGACY_STATE/.brainstem_model"
           printf '[{"type":"preflight-state-marker","level":"info"}]\n' > "$LEGACY_STATE/.brainstem_book.json"
           if [ "${{ matrix.scenario }}" = "repair" ]; then
+            cat > "$RUNNER_TEMP/legacy_writer.py" <<'PY'
+          import json
+          import os
+          import sys
+          import time
+
+          destination = sys.argv[2]
+          payload = {"model": "gpt-4o", "legacy_writer_pid": os.getpid()}
+          while True:
+              temporary = destination + ".writer"
+              with open(temporary, "w", encoding="utf-8") as handle:
+                  json.dump(payload, handle)
+              os.replace(temporary, destination)
+              time.sleep(0.05)
+          PY
+            nohup python "$RUNNER_TEMP/legacy_writer.py" \
+              "$LEGACY_STATE/brainstem.py" "$LEGACY_STATE/.brainstem_model" \
+              > "$RUNNER_TEMP/legacy-writer.log" 2>&1 &
+            echo "LEGACY_WRITER_PID=$!" >> "$GITHUB_ENV"
+            sleep 1
             rm -rf "$HOME/.brainstem/src/.git"
-            echo "removed .git to force the destructive repair path"
+            echo "started live legacy writer and removed .git to force repair"
           fi
 
       # Auth + remote-version checks must fail FAST and GRACEFULLY (that graceful
@@ -287,6 +307,13 @@ jobs:
           grep -q "preflight-lan-secret" "$HOME/.brainstem/state/.brainstem_secret"
           grep -q "gpt-4o" "$HOME/.brainstem/state/.brainstem_model"
           grep -q "preflight-state-marker" "$HOME/.brainstem/state/.brainstem_book.json"
+          if [ "${{ matrix.scenario }}" = "repair" ]; then
+            grep -q "legacy_writer_pid" "$HOME/.brainstem/state/.brainstem_model"
+            if kill -0 "$LEGACY_WRITER_PID" 2>/dev/null; then
+              echo "legacy state writer is still running" >&2
+              exit 1
+            fi
+          fi
           curl -sf http://localhost:7071/health | python3 -c "
           import json,sys; d=json.load(sys.stdin)
           assert 'PreflightCustom' in (d.get('agents') or []), d.get('agents')
