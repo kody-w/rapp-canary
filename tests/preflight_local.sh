@@ -222,13 +222,15 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ✓ $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "  ✗ $1"; }
 
-python3 - "$HEALTH" "$BRANCH_VERSION" "$FAKE_HOME/.brainstem/src/rapp_brainstem" <<'EOF' \
+HOME="$FAKE_HOME" python3 - "$HEALTH" "$BRANCH_VERSION" <<'EOF' \
     && ok "health: status + candidate version + sandbox path + agents" || bad "health contract"
-import json, sys
+import json, os, sys
 d = json.load(open(sys.argv[1]))
 assert d.get("status") in ("ok", "unauthenticated"), d
 assert d.get("version") == sys.argv[2], f'{d.get("version")} != {sys.argv[2]}'
-assert d.get("brainstem_dir") == sys.argv[3], f'{d.get("brainstem_dir")} != {sys.argv[3]}'
+expected = os.path.realpath(os.path.join(os.path.expanduser("~"), ".brainstem", "src", "rapp_brainstem"))
+actual = os.path.realpath(d.get("brainstem_dir") or "")
+assert actual == expected, f'{actual} != {expected}'
 assert "ContextMemory" in (d.get("agents") or []), d.get("agents")
 EOF
 INSTALLED_COMMIT="$(git -C "$FAKE_HOME/.brainstem/src" rev-parse HEAD 2>/dev/null || true)"
