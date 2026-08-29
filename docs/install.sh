@@ -303,10 +303,119 @@ maybe_refresh_soul() {
     return 0
 }
 
+copy_state_file_atomically() {
+    local source="$1" destination="$2"
+    local directory temporary
+    directory=$(dirname "$destination")
+    temporary=$(mktemp "$directory/.$(basename "$destination").migrate-XXXXXX") || return 1
+    if ! cp -p "$source" "$temporary" || ! chmod 600 "$temporary" || ! mv -f "$temporary" "$destination"; then
+        rm -f "$temporary" 2>/dev/null || true
+        return 1
+    fi
+}
+
+write_state_migration_marker() {
+    local state_dir="$1"
+    local marker="$state_dir/.legacy-state-migrated-v1"
+    local temporary
+    temporary=$(mktemp "$state_dir/.legacy-state-migrated-v1.XXXXXX") || return 1
+    if ! printf '1\n' > "$temporary" || ! chmod 600 "$temporary" || ! mv -f "$temporary" "$marker"; then
+        rm -f "$temporary" 2>/dev/null || true
+        return 1
+    fi
+}
+
+installed_runtime_uses_external_state() {
+    local brainstem="$BRAINSTEM_HOME/src/rapp_brainstem/brainstem.py"
+    [ -f "$brainstem" ] && grep -q '^def _state_dir():' "$brainstem"
+}
+
+migrate_legacy_state() {
+    local legacy_dir="$BRAINSTEM_HOME/src/rapp_brainstem"
+    local state_dir="$BRAINSTEM_HOME/state"
+    local marker="$state_dir/.legacy-state-migrated-v1"
+    local names=".copilot_token .copilot_session .brainstem_secret .brainstem_model .brainstem_book.json"
+    local name src dst
+    local migrated=0
+    local legacy_authoritative=false
+
+    if ! mkdir -p "$state_dir"; then
+        echo -e "  ${RED}✗${NC} Could not create persistent state directory: $state_dir"
+        return 1
+    fi
+
+    # If the currently installed runtime predates external state, its in-tree
+    # files are authoritative. This is what makes a rollback and later upgrade
+    # preserve account switches and intentional deletions made by the old runtime.
+    if [ -f "$legacy_dir/brainstem.py" ] && ! installed_runtime_uses_external_state; then
+        legacy_authoritative=true
+    elif [ -f "$marker" ]; then
+        return 0
+    fi
+
+    for name in $names; do
+        src="$legacy_dir/$name"
+        dst="$state_dir/$name"
+        if [ "$legacy_authoritative" = true ]; then
+            if [ -f "$src" ]; then
+                if ! copy_state_file_atomically "$src" "$dst"; then
+                    echo -e "  ${RED}✗${NC} Could not preserve $name outside the checkout"
+                    return 1
+                fi
+                migrated=$((migrated + 1))
+            elif [ -e "$dst" ] || [ -L "$dst" ]; then
+                if ! rm -f "$dst"; then
+                    echo -e "  ${RED}✗${NC} Could not propagate removal of $name"
+                    return 1
+                fi
+            fi
+        elif [ -f "$src" ] && [ ! -e "$dst" ] && [ ! -L "$dst" ]; then
+            if ! copy_state_file_atomically "$src" "$dst"; then
+                echo -e "  ${RED}✗${NC} Could not preserve $name outside the checkout"
+                return 1
+            fi
+            migrated=$((migrated + 1))
+        fi
+    done
+
+    if ! write_state_migration_marker "$state_dir"; then
+        echo -e "  ${RED}✗${NC} Could not record completion of state migration"
+        return 1
+    fi
+    [ "$migrated" -eq 0 ] || echo -e "  ${GREEN}✓${NC} Migrated $migrated persistent state file(s)"
+}
+
+prepare_legacy_runtime_state() {
+    local legacy_dir="$BRAINSTEM_HOME/src/rapp_brainstem"
+    local state_dir="$BRAINSTEM_HOME/state"
+    local names=".copilot_token .copilot_session .brainstem_secret .brainstem_model .brainstem_book.json"
+    local name source destination
+
+    [ -f "$legacy_dir/brainstem.py" ] || return 0
+    installed_runtime_uses_external_state && return 0
+
+    for name in $names; do
+        source="$state_dir/$name"
+        destination="$legacy_dir/$name"
+        if [ -f "$source" ]; then
+            if ! copy_state_file_atomically "$source" "$destination"; then
+                echo -e "  ${RED}✗${NC} Could not prepare $name for the pinned legacy runtime"
+                return 1
+            fi
+        elif [ -e "$destination" ] || [ -L "$destination" ]; then
+            rm -f "$destination" || return 1
+        fi
+    done
+}
+
 install_brainstem() {
     echo ""
     echo "Installing RAPP Brainstem..."
     mkdir -p "$BRAINSTEM_HOME"
+    if ! migrate_legacy_state; then
+        echo -e "  ${RED}✗${NC} Existing state was not preserved; refusing to replace the checkout"
+        return 1
+    fi
 
     local AGENTS_DIR="$BRAINSTEM_HOME/src/rapp_brainstem/agents"
     local SOUL_FILE="$BRAINSTEM_HOME/src/rapp_brainstem/soul.md"
@@ -476,6 +585,10 @@ install_brainstem() {
             echo -e "  ${GREEN}✓${NC} Preserved your soul, agents, memories, and config"
         fi
     fi
+    if ! prepare_legacy_runtime_state; then
+        echo -e "  ${RED}✗${NC} Could not prepare persistent state for this runtime"
+        return 1
+    fi
     echo -e "  ${GREEN}✓${NC} Source code ready"
 }
 
@@ -602,6 +715,10 @@ create_env() {
 launch_brainstem() {
     export PATH="$BRAINSTEM_BIN:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
+    if ! migrate_legacy_state; then
+        echo -e "  ${YELLOW}⚠${NC} Could not migrate legacy state; continuing with the existing checkout"
+    fi
+
     # Refresh from the repo before launching (no-op if already current). Skip when
     # a version is pinned — pulling main would move off the pinned tag — and on a
     # detached HEAD (an earlier pin), which a bare pull can't fast-forward anyway.
@@ -633,7 +750,12 @@ launch_brainstem() {
         ensure_deps
     fi
 
-    local token_file="$BRAINSTEM_HOME/src/rapp_brainstem/.copilot_token"
+    local state_dir="$BRAINSTEM_HOME/state"
+    local token_file="$state_dir/.copilot_token"
+    local legacy_token="$BRAINSTEM_HOME/src/rapp_brainstem/.copilot_token"
+    if [ ! -f "$token_file" ] && [ -f "$legacy_token" ]; then
+        token_file="$legacy_token"
+    fi
     local client_id="Iv1.b507a08c87ecfe98"
 
     # Step 1: Copilot authentication (device code flow)
@@ -670,9 +792,19 @@ except: pass
                 # says nothing about the token. Keep it; the server retries live.
                 echo -e "  ${YELLOW}⚠${NC} Couldn't verify the saved token (no network) — keeping it"
                 needs_auth=false
-            else
-                echo -e "  ${YELLOW}⚠${NC} Saved token expired — re-authenticating..."
+            elif [[ "$check_status" == "401" ]]; then
+                # 401 is the ONLY status that means the credential itself is bad.
+                echo -e "  ${YELLOW}⚠${NC} Saved sign-in is no longer valid — re-authenticating..."
                 rm -f "$token_file"
+            else
+                # 403 (no Copilot entitlement yet), 429 (rate limit), 5xx (GitHub
+                # incident), 407 (corporate proxy) — none of these say the token is
+                # bad, and brainstem.py deliberately keeps it in every one of them
+                # ("Token exchange failed — NEVER delete the token file"). Deleting
+                # here stranded people who had a perfectly good sign-in: entitlement
+                # arrives later and the instance can no longer self-heal.
+                echo -e "  ${YELLOW}⚠${NC} Couldn't confirm the saved sign-in (HTTP $check_status) — keeping it"
+                needs_auth=false
             fi
         else
             rm -f "$token_file"
@@ -703,6 +835,9 @@ except: pass
         device_code=$(echo "$device_resp" | "$venv_python" -c "import sys,json; print(json.load(sys.stdin)['device_code'])" 2>/dev/null)
         interval=$(echo "$device_resp" | "$venv_python" -c "import sys,json; print(json.load(sys.stdin).get('interval',5))" 2>/dev/null)
         verify_uri=$(echo "$device_resp" | "$venv_python" -c "import sys,json; print(json.load(sys.stdin)['verification_uri'])" 2>/dev/null)
+        [[ "$interval" =~ ^[0-9]+$ ]] || interval=5
+        [ "$interval" -ge 1 ] || interval=1
+        [ "$interval" -le 30 ] || interval=30
 
         if [[ -z "$user_code" || -z "$device_code" ]]; then
             echo -e "  ${YELLOW}!${NC} Could not start auth — you can sign in at http://localhost:7071/login"
@@ -735,15 +870,27 @@ except: pass
                 if [[ -n "$access_token" ]]; then
                     # Save token file (same format brainstem.py expects), owner-only:
                     # a default umask would land it 0644, world-readable on shared machines.
-                    "$venv_python" -c "
-import sys, json, os
+                    if ! "$venv_python" -c "
+import sys, json, os, tempfile
 d = json.loads(sys.argv[1])
 out = {'access_token': d['access_token']}
 if d.get('refresh_token'): out['refresh_token'] = d['refresh_token']
-fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, 'w') as f: json.dump(out, f)
-os.chmod(sys.argv[2], 0o600)
+path = sys.argv[2]
+fd, temporary = tempfile.mkstemp(prefix='.copilot_token.', dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, 'w') as f:
+        json.dump(out, f)
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.remove(temporary)
 " "$poll_resp" "$token_file"
+                    then
+                        echo -e "  ${RED}✗${NC} GitHub authorized, but the sign-in could not be saved"
+                        echo -e "    Check permissions on ${state_dir} and retry from http://localhost:7071/login"
+                        break
+                    fi
 
                     # Validate Copilot access immediately
                     local copilot_check copilot_status
@@ -757,6 +904,9 @@ os.chmod(sys.argv[2], 0o600)
 
                     if [[ "$copilot_status" == "200" ]]; then
                         echo -e "  ${GREEN}✓${NC} Authenticated — Copilot access confirmed"
+                    elif [[ "$copilot_status" == "401" ]]; then
+                        echo -e "  ${YELLOW}!${NC} GitHub rejected the new sign-in — please retry"
+                        rm -f "$token_file"
                     elif [[ "$copilot_status" == "403" ]]; then
                         echo ""
                         echo -e "  ${RED}✗${NC} This GitHub account does NOT have Copilot access."
@@ -765,7 +915,11 @@ os.chmod(sys.argv[2], 0o600)
                         echo -e "    1. Sign up for Copilot: ${CYAN}https://github.com/github-copilot/signup${NC}"
                         echo -e "    2. Re-run this installer and sign in with a different GitHub account"
                         echo ""
-                        rm -f "$token_file"
+                        echo -e "  ${CYAN}Your sign-in is saved.${NC} The moment Copilot is added to this"
+                        echo -e "  account, the brainstem picks it up on its own — no re-install."
+                        # Deliberately NOT deleted. brainstem.py preserves the token on
+                        # this exact response so the instance can self-heal when
+                        # entitlement arrives; deleting it here made that impossible.
                     else
                         echo -e "  ${GREEN}✓${NC} Authenticated with GitHub"
                     fi
@@ -780,7 +934,15 @@ os.chmod(sys.argv[2], 0o600)
                 # GitHub's device-flow contract: on slow_down, add 5s to the poll
                 # interval — keeping the old cadence gets every later poll rejected.
                 if [[ "$error" == "slow_down" ]]; then
-                    interval=$(( ${interval:-5} + 5 ))
+                    local requested_interval
+                    requested_interval=$(echo "$poll_resp" | "$venv_python" -c \
+                        "import sys,json; print(json.load(sys.stdin).get('interval',''))" 2>/dev/null)
+                    if [[ "$requested_interval" =~ ^[0-9]+$ ]] && [ "$requested_interval" -gt 0 ]; then
+                        interval="$requested_interval"
+                    else
+                        interval=$((interval + 5))
+                    fi
+                    [ "$interval" -le 30 ] || interval=30
                 fi
 
                 if [[ "$error" != "authorization_pending" && "$error" != "slow_down" && -n "$error" ]]; then
@@ -790,6 +952,11 @@ os.chmod(sys.argv[2], 0o600)
             done
         fi
         set -e   # end best-effort auth block
+    fi
+
+    if ! prepare_legacy_runtime_state; then
+        echo -e "  ${RED}✗${NC} Could not prepare persistent state for this runtime"
+        return 1
     fi
 
     # Step 2: Launch brainstem

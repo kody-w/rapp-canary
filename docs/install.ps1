@@ -454,6 +454,117 @@ function Resolve-PinnedTag {
     return $null
 }
 
+function Move-StateFileIntoPlace {
+    param([string]$Temporary, [string]$Destination)
+    if (Test-Path -LiteralPath $Destination) {
+        [System.IO.File]::Replace($Temporary, $Destination, $null)
+    } else {
+        [System.IO.File]::Move($Temporary, $Destination)
+    }
+}
+
+function Copy-StateFileAtomically {
+    param([string]$Source, [string]$Destination)
+    $directory = Split-Path -Parent $Destination
+    $temporary = Join-Path $directory (".$([System.IO.Path]::GetFileName($Destination)).migrate-$([Guid]::NewGuid().ToString('N'))")
+    try {
+        Copy-Item -LiteralPath $Source -Destination $temporary -ErrorAction Stop
+        Move-StateFileIntoPlace -Temporary $temporary -Destination $Destination
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Write-StateMigrationMarker {
+    param([string]$StateDir)
+    $marker = Join-Path $StateDir ".legacy-state-migrated-v1"
+    $temporary = Join-Path $StateDir (".legacy-state-migrated-v1.$([Guid]::NewGuid().ToString('N'))")
+    try {
+        [System.IO.File]::WriteAllText($temporary, "1`n", (New-Object System.Text.UTF8Encoding($false)))
+        Move-StateFileIntoPlace -Temporary $temporary -Destination $marker
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Write-JsonFileAtomically {
+    param([object]$Value, [string]$Destination)
+    $directory = Split-Path -Parent $Destination
+    New-Item -ItemType Directory -Force -Path $directory -ErrorAction Stop | Out-Null
+    $temporary = Join-Path $directory (".$([System.IO.Path]::GetFileName($Destination)).write-$([Guid]::NewGuid().ToString('N'))")
+    try {
+        $json = $Value | ConvertTo-Json
+        [System.IO.File]::WriteAllText($temporary, $json, (New-Object System.Text.UTF8Encoding($false)))
+        Move-StateFileIntoPlace -Temporary $temporary -Destination $Destination
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-InstalledRuntimeUsesExternalState {
+    $brainstem = "$BRAINSTEM_HOME\src\rapp_brainstem\brainstem.py"
+    if (-not (Test-Path -LiteralPath $brainstem -PathType Leaf)) { return $false }
+    return [bool](Select-String -LiteralPath $brainstem -Pattern '^def _state_dir\(\):' -Quiet)
+}
+
+function Migrate-LegacyState {
+    $legacyDir = "$BRAINSTEM_HOME\src\rapp_brainstem"
+    $stateDir = "$BRAINSTEM_HOME\state"
+    $marker = "$stateDir\.legacy-state-migrated-v1"
+    $names = @(".copilot_token", ".copilot_session", ".brainstem_secret", ".brainstem_model", ".brainstem_book.json")
+    $migrated = 0
+
+    try {
+        New-Item -ItemType Directory -Force -Path $stateDir -ErrorAction Stop | Out-Null
+        $legacyAuthoritative = (
+            (Test-Path -LiteralPath "$legacyDir\brainstem.py" -PathType Leaf) -and
+            (-not (Test-InstalledRuntimeUsesExternalState))
+        )
+        if ((Test-Path -LiteralPath $marker) -and -not $legacyAuthoritative) { return }
+
+        foreach ($name in $names) {
+            $source = Join-Path $legacyDir $name
+            $destination = Join-Path $stateDir $name
+            if ($legacyAuthoritative) {
+                if (Test-Path -LiteralPath $source -PathType Leaf) {
+                    Copy-StateFileAtomically -Source $source -Destination $destination
+                    $migrated++
+                } elseif (Test-Path -LiteralPath $destination) {
+                    Remove-Item -LiteralPath $destination -Force -ErrorAction Stop
+                }
+            } elseif ((Test-Path -LiteralPath $source -PathType Leaf) -and -not (Test-Path -LiteralPath $destination)) {
+                Copy-StateFileAtomically -Source $source -Destination $destination
+                $migrated++
+            }
+        }
+        Write-StateMigrationMarker -StateDir $stateDir
+        if ($migrated -gt 0) {
+            Write-Host "  [OK] Migrated $migrated persistent state file(s)" -ForegroundColor Green
+        }
+    } catch {
+        throw "Could not preserve existing state outside the checkout: $($_.Exception.Message)"
+    }
+}
+
+function Prepare-LegacyRuntimeState {
+    $legacyDir = "$BRAINSTEM_HOME\src\rapp_brainstem"
+    $stateDir = "$BRAINSTEM_HOME\state"
+    $names = @(".copilot_token", ".copilot_session", ".brainstem_secret", ".brainstem_model", ".brainstem_book.json")
+
+    if (-not (Test-Path -LiteralPath "$legacyDir\brainstem.py" -PathType Leaf)) { return }
+    if (Test-InstalledRuntimeUsesExternalState) { return }
+
+    foreach ($name in $names) {
+        $source = Join-Path $stateDir $name
+        $destination = Join-Path $legacyDir $name
+        if (Test-Path -LiteralPath $source -PathType Leaf) {
+            Copy-StateFileAtomically -Source $source -Destination $destination
+        } elseif (Test-Path -LiteralPath $destination) {
+            Remove-Item -LiteralPath $destination -Force -ErrorAction Stop
+        }
+    }
+}
+
 function Install-Brainstem {
     Write-Host ""
     Write-Host "Installing RAPP Brainstem..."
@@ -461,6 +572,7 @@ function Install-Brainstem {
     if (-not (Test-Path $BRAINSTEM_HOME)) {
         New-Item -ItemType Directory -Force -Path $BRAINSTEM_HOME | Out-Null
     }
+    Migrate-LegacyState
 
     if (Test-Path "$BRAINSTEM_HOME\src\.git") {
         # Smart update — preserve soul, agents, config
@@ -655,6 +767,7 @@ function Install-Brainstem {
             Write-Host "  [OK] Preserved your soul, agents, memories, and config" -ForegroundColor Green
         }
     }
+    Prepare-LegacyRuntimeState
     Write-Host "  [OK] Source code ready" -ForegroundColor Green
 }
 
@@ -807,6 +920,12 @@ function Create-Env {
 }
 
 function Launch-Brainstem {
+    try {
+        Migrate-LegacyState
+    } catch {
+        Write-Host "  [!] Could not migrate legacy state; continuing with the existing checkout" -ForegroundColor Yellow
+    }
+
     # Refresh from this installer's repo before launching (no-op if already current).
     # Skip when a version is pinned — pulling main would move off the pinned tag.
     if ((-not $PIN_VERSION) -and (Test-Path "$BRAINSTEM_HOME\src\.git")) {
@@ -834,45 +953,71 @@ function Launch-Brainstem {
     }
     Pop-Location
 
-    $tokenFile = "$BRAINSTEM_HOME\src\rapp_brainstem\.copilot_token"
+    $stateDir = "$BRAINSTEM_HOME\state"
+    $tokenFile = "$stateDir\.copilot_token"
+    $legacyToken = "$BRAINSTEM_HOME\src\rapp_brainstem\.copilot_token"
+    if ((-not (Test-Path $tokenFile)) -and (Test-Path $legacyToken)) {
+        $tokenFile = $legacyToken
+    }
     $clientId = "Iv1.b507a08c87ecfe98"
 
     # Check if already authenticated
     $needsAuth = $true
     if (Test-Path $tokenFile) {
+        $savedToken = $null
         try {
-            $tokenData = Get-Content $tokenFile -Raw | ConvertFrom-Json
-            $savedToken = $tokenData.access_token
-            if ($savedToken) {
-                $authPrefix = if ($savedToken.StartsWith("ghu_")) { "token" } else { "Bearer" }
-                $headers = @{
-                    "Authorization" = "$authPrefix $savedToken"
-                    "Accept" = "application/json"
-                    "Editor-Version" = "vscode/1.95.0"
-                    "Editor-Plugin-Version" = "copilot/1.0.0"
-                }
+            $rawToken = (Get-Content -LiteralPath $tokenFile -Raw -ErrorAction Stop).Trim()
+            if ($rawToken.StartsWith("{")) {
                 try {
-                    $checkResp = Invoke-WebRequest -Uri "https://api.github.com/copilot_internal/v2/token" -Headers $headers -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
-                    if ($checkResp.StatusCode -eq 200) {
-                        Write-Host "  [OK] Already authenticated with GitHub Copilot" -ForegroundColor Green
-                        $needsAuth = $false
-                    }
+                    $tokenData = $rawToken | ConvertFrom-Json -ErrorAction Stop
+                    $savedToken = [string]$tokenData.access_token
                 } catch {
-                    if ($_.Exception.Response) {
-                        # GitHub answered with an error status — the token itself is bad.
-                        Write-Host "  [..] Saved token expired — re-authenticating..." -ForegroundColor Yellow
-                        Remove-Item $tokenFile -Force -ErrorAction SilentlyContinue
-                    } else {
-                        # Never reached GitHub (offline, captive portal, timeout) — that
-                        # says nothing about the token. Keep it; the server retries live.
-                        # Mirrors install.sh's unreachable-is-not-expired handling.
-                        Write-Host "  [..] Couldn't verify the saved token (no network) — keeping it" -ForegroundColor Yellow
-                        $needsAuth = $false
-                    }
+                    Write-Host "  [..] Saved sign-in file is malformed — re-authenticating..." -ForegroundColor Yellow
+                    Remove-Item -LiteralPath $tokenFile -Force -ErrorAction SilentlyContinue
                 }
+            } else {
+                # Legacy versions stored the token as plaintext; brainstem.py still
+                # supports that format, so the installer must not delete it.
+                $savedToken = $rawToken
             }
         } catch {
-            Remove-Item $tokenFile -Force -ErrorAction SilentlyContinue
+            Write-Host "  [..] Couldn't read the saved sign-in — keeping it" -ForegroundColor Yellow
+            $needsAuth = $false
+        }
+
+        if ($savedToken) {
+            $authPrefix = if ($savedToken.StartsWith("ghu_")) { "token" } else { "Bearer" }
+            $headers = @{
+                "Authorization" = "$authPrefix $savedToken"
+                "Accept" = "application/json"
+                "Editor-Version" = "vscode/1.95.0"
+                "Editor-Plugin-Version" = "copilot/1.0.0"
+            }
+            try {
+                $checkResp = Invoke-WebRequest -Uri "https://api.github.com/copilot_internal/v2/token" -Headers $headers -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+                if ($checkResp.StatusCode -eq 200) {
+                    Write-Host "  [OK] Already authenticated with GitHub Copilot" -ForegroundColor Green
+                    $needsAuth = $false
+                }
+            } catch {
+                $code = 0
+                if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+                if ($code -eq 401) {
+                    # 401 is the ONLY status that means the credential itself is bad.
+                    Write-Host "  [..] Saved sign-in is no longer valid — re-authenticating..." -ForegroundColor Yellow
+                    Remove-Item -LiteralPath $tokenFile -Force -ErrorAction SilentlyContinue
+                } elseif ($code -ne 0) {
+                    # 403 (no entitlement yet), 429, 5xx, 407 (proxy) — none of these
+                    # say the token is bad, and brainstem.py keeps it in every one.
+                    Write-Host "  [..] Couldn't confirm the saved sign-in (HTTP $code) — keeping it" -ForegroundColor Yellow
+                    $needsAuth = $false
+                } else {
+                    # Never reached GitHub (offline, captive portal, timeout) — that
+                    # says nothing about the token. Keep it; the server retries live.
+                    Write-Host "  [..] Couldn't verify the saved token (no network) — keeping it" -ForegroundColor Yellow
+                    $needsAuth = $false
+                }
+            }
         }
     }
 
@@ -910,7 +1055,12 @@ function Launch-Brainstem {
                         if ($pollResp.access_token) {
                             $tokenJson = @{ access_token = $pollResp.access_token }
                             if ($pollResp.refresh_token) { $tokenJson.refresh_token = $pollResp.refresh_token }
-                            $tokenJson | ConvertTo-Json | Set-Content $tokenFile
+                            try {
+                                Write-JsonFileAtomically -Value $tokenJson -Destination $tokenFile
+                            } catch {
+                                Write-Host "  [X] GitHub authorized, but the sign-in could not be saved: $($_.Exception.Message)" -ForegroundColor Red
+                                break
+                            }
 
                             # Validate Copilot access
                             $authPrefix = if ($pollResp.access_token.StartsWith("ghu_")) { "token" } else { "Bearer" }
@@ -921,13 +1071,17 @@ function Launch-Brainstem {
                                 "Editor-Plugin-Version" = "copilot/1.0.0"
                             }
                             try {
-                                $copilotCheck = Invoke-WebRequest -Uri "https://api.github.com/copilot_internal/v2/token" -Headers $headers -UseBasicParsing -TimeoutSec 10 -ErrorAction SilentlyContinue
+                                $copilotCheck = Invoke-WebRequest -Uri "https://api.github.com/copilot_internal/v2/token" -Headers $headers -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
                                 if ($copilotCheck.StatusCode -eq 200) {
                                     Write-Host "  [OK] Authenticated — Copilot access confirmed" -ForegroundColor Green
                                 }
                             } catch {
-                                $statusCode = $_.Exception.Response.StatusCode.value__
-                                if ($statusCode -eq 403) {
+                                $statusCode = 0
+                                if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
+                                if ($statusCode -eq 401) {
+                                    Write-Host "  [..] GitHub rejected the new sign-in — please retry" -ForegroundColor Yellow
+                                    Remove-Item -LiteralPath $tokenFile -Force -ErrorAction SilentlyContinue
+                                } elseif ($statusCode -eq 403) {
                                     Write-Host ""
                                     Write-Host "  [X] This GitHub account does NOT have Copilot access." -ForegroundColor Red
                                     Write-Host ""
@@ -935,9 +1089,11 @@ function Launch-Brainstem {
                                     Write-Host "    1. Sign up for Copilot: " -NoNewline; Write-Host "https://github.com/github-copilot/signup" -ForegroundColor Cyan
                                     Write-Host "    2. Re-run this installer and sign in with a different account"
                                     Write-Host ""
-                                    Remove-Item $tokenFile -Force -ErrorAction SilentlyContinue
+                                    Write-Host "  Your sign-in is saved. Copilot will be detected when entitlement arrives." -ForegroundColor Cyan
+                                } elseif ($statusCode -ne 0) {
+                                    Write-Host "  [..] Couldn't confirm Copilot access (HTTP $statusCode) — keeping the sign-in" -ForegroundColor Yellow
                                 } else {
-                                    Write-Host "  [OK] Authenticated with GitHub" -ForegroundColor Green
+                                    Write-Host "  [..] Couldn't confirm Copilot access (no network) — keeping the sign-in" -ForegroundColor Yellow
                                 }
                             }
                             break
@@ -947,6 +1103,18 @@ function Launch-Brainstem {
                         if ($error_code -eq "expired_token") {
                             Write-Host "  [!] Auth timed out — sign in at http://localhost:7071/login" -ForegroundColor Yellow
                             break
+                        }
+                        if ($error_code -eq "slow_down") {
+                            $requestedInterval = 0
+                            if ($pollResp.interval) {
+                                try { $requestedInterval = [int]$pollResp.interval } catch { $requestedInterval = 0 }
+                            }
+                            if ($requestedInterval -gt 0) {
+                                $interval = $requestedInterval
+                            } else {
+                                $interval = [int]$interval + 5
+                            }
+                            $interval = [Math]::Max(1, [Math]::Min(30, [int]$interval))
                         }
                         if ($error_code -ne "authorization_pending" -and $error_code -ne "slow_down" -and $error_code) {
                             Write-Host "  [!] Auth error: $error_code" -ForegroundColor Yellow
@@ -959,6 +1127,8 @@ function Launch-Brainstem {
             Write-Host "  [!] Could not start auth — sign in at http://localhost:7071/login" -ForegroundColor Yellow
         }
     }
+
+    Prepare-LegacyRuntimeState
 
     # Launch the server
     Write-Host ""
