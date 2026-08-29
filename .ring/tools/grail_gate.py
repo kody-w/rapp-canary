@@ -29,6 +29,7 @@ import ring_attestation as attestation  # noqa: E402
 
 HUB_REPOSITORY = "kody-w/rapp-canary"
 WORKFLOW_NAME = "Test Pre-Grail Rings"
+WORKFLOW_PATH = ".github/workflows/test-pre-grail-rings.yml"
 RING_ORDER = ("canary", "nightly", "alpha", "beta")
 
 
@@ -58,6 +59,14 @@ def _validate_run_record(run: dict) -> None:
     repository = (run.get("repository") or {}).get("full_name", "")
     if repository.lower() != HUB_REPOSITORY:
         raise GateError(f"run belongs to {repository}, not {HUB_REPOSITORY}")
+    if run.get("path") != WORKFLOW_PATH:
+        raise GateError(f"run path is '{run.get('path')}', not '{WORKFLOW_PATH}'")
+    if run.get("event") != "workflow_dispatch":
+        raise GateError("qualification must be manually dispatched")
+    if run.get("head_branch") != "main":
+        raise GateError("qualification must execute from Canary main")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(run.get("head_sha", ""))):
+        raise GateError("qualification run has an invalid head SHA")
 
 
 def _validate_chain(chain: dict[str, dict], rings: dict[str, dict]) -> str:
@@ -192,6 +201,10 @@ def main() -> int:
                 )
             chain = _load_chain(candidates[0].parent)
             digest = _validate_chain(chain, rings)
+            if run.get("head_sha") != chain["canary"]["payload"]["commit"]:
+                raise GateError(
+                    "qualification workflow code and attested Canary commit differ"
+                )
             _beta_still_current(chain["beta"])
             clone = _fresh_beta_clone(chain["beta"], workdir)
             _run(

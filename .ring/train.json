@@ -41,9 +41,17 @@
     }
   ],
   "gates_not_rings": [
+    "preprod",
+    "seaworthiness",
     "security-and-license",
     "cross-platform-installer",
     "manual-approval",
     "rollback-readiness"
-  ]
+  ],
+  "preprod": {
+    "environment": "preprod",
+    "policy": ".ring/preprod-policy.json",
+    "constitution": ".ring/SEAWORTHINESS-CONSTITUTION.md",
+    "workflow": ".github/workflows/stage-preprod.yml"
+  }
 }

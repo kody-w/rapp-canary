@@ -45,6 +45,10 @@ class TestValidateRunRecord(unittest.TestCase):
             "name": grail_gate.WORKFLOW_NAME,
             "conclusion": "success",
             "repository": {"full_name": grail_gate.HUB_REPOSITORY},
+            "path": grail_gate.WORKFLOW_PATH,
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "head_sha": "a" * 40,
         }
         run.update(overrides)
         return run
@@ -64,6 +68,16 @@ class TestValidateRunRecord(unittest.TestCase):
         with self.assertRaises(grail_gate.GateError):
             grail_gate._validate_run_record(
                 self._run(repository={"full_name": "someone/else"})
+            )
+
+    def test_feature_branch_qualification_rejected(self):
+        with self.assertRaises(grail_gate.GateError):
+            grail_gate._validate_run_record(self._run(head_branch="feature"))
+
+    def test_wrong_workflow_path_rejected(self):
+        with self.assertRaises(grail_gate.GateError):
+            grail_gate._validate_run_record(
+                self._run(path=".github/workflows/preflight.yml")
             )
 
 

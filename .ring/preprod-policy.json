@@ -1,0 +1,30 @@
+{
+  "schema": "rapp-preprod-policy/1",
+  "environment": "preprod",
+  "control_plane_only": true,
+  "max_candidate_age_hours": 168,
+  "max_artifact_bytes": 104857600,
+  "max_unpacked_bytes": 536870912,
+  "max_files": 10000,
+  "human_approval_required": true,
+  "same_artifact_to_grail": true,
+  "require_pinned_model": true,
+  "required_checks": [
+    "pre-grail-attestation-chain",
+    "beta-main-preflight",
+    "immutable-artifact",
+    "critical-brainstem-hash",
+    "pinned-model-policy",
+    "sealed-dependency-materials",
+    "cross-platform-artifact-verification",
+    "fresh-install",
+    "upgrade",
+    "destructive-repair",
+    "live-writer-quiescence",
+    "unrelated-process-survival",
+    "real-auth-soak",
+    "brainstem-rollback-frame",
+    "rollback-ready",
+    "protected-environment-approval"
+  ]
+}
