@@ -7,6 +7,11 @@ customer audience, and no branch that can drift away from the candidate.
 The governing document is
 [`SEAWORTHINESS-CONSTITUTION.md`](SEAWORTHINESS-CONSTITUTION.md).
 
+The reference repository's `preprod` environment requires an explicit owner
+approval and accepts deployments only from `main`. Enterprise organizations
+must replace that owner reviewer with an independent release team and enable
+prevent-self-review to enforce separation of duties.
+
 ## Invariants
 
 1. Preprod starts from a green whole-train qualification run.
@@ -80,6 +85,11 @@ python3 <canary-checkout>/.ring/tools/preprod_gate.py export \
   --material dependency-material-linux=/path/to/dependency-material-linux.tar.gz \
   --material dependency-material-macos=/path/to/dependency-material-macos.tar.gz \
   --material dependency-material-windows=/path/to/dependency-material-windows.tar.gz
+
+# Run Grail tests, then prove no test or operator changed the staged tree:
+python3 <canary-checkout>/.ring/tools/preprod_gate.py verify-staged-tree \
+  --manifest /path/to/seaworthy.json \
+  --target /tmp/grail-release
 ```
 
 Inspect the staged tree, run Grail preflight, commit without modifying the
@@ -103,7 +113,8 @@ python3 <canary-checkout>/.ring/tools/preprod_gate.py prepare-runtime \
 
 The command verifies provenance for the source, manifest, and every platform
 material; selects the current platform; extracts into a new release directory;
-and installs only from the sealed wheelhouse with `--no-index`.
+checks the Python minor version and CPU architecture; and installs only from the
+sealed wheelhouse with `--no-index`.
 
 ## Unknown-unknown strategy
 

@@ -350,19 +350,54 @@ jobs:
           python -m pip download --quiet --only-binary=:all: \
             --dest "$MATERIAL/wheelhouse" \
             -r "$MATERIAL/requirements.lock"
+          python -m pip install --quiet pip-audit==2.10.1
+          python -m pip_audit \
+            -r "$MATERIAL/requirements.lock" \
+            --no-deps \
+            --format json \
+            --output "$MATERIAL/vulnerability-report.json"
           python - "$MATERIAL" "$KEY" <<'PY'
+          import email
           import hashlib
           import json
           import pathlib
+          import platform
           import sys
+          import zipfile
 
           root = pathlib.Path(sys.argv[1])
           files = {}
+          licenses = {}
+          blocked = []
           for path in sorted((root / "wheelhouse").iterdir()):
               files[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+              if path.suffix != ".whl":
+                  blocked.append({"file": path.name, "reason": "non-wheel dependency"})
+                  continue
+              with zipfile.ZipFile(path) as wheel:
+                  metadata_name = next(
+                      (name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")),
+                      None,
+                  )
+                  if not metadata_name:
+                      blocked.append({"file": path.name, "reason": "missing metadata"})
+                      continue
+                  metadata = email.message_from_bytes(wheel.read(metadata_name))
+              declared = (
+                  metadata.get("License-Expression")
+                  or metadata.get("License")
+                  or "; ".join(metadata.get_all("Classifier", []))
+              ).strip()
+              if not declared or declared.upper() in {"UNKNOWN", "NONE"}:
+                  blocked.append({"file": path.name, "reason": "unknown license"})
+              if "AGPL" in declared.upper():
+                  blocked.append({"file": path.name, "reason": declared})
+              licenses[path.name] = declared
           value = {
               "schema": "rapp-dependency-materials/1",
               "platform": sys.argv[2],
+              "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+              "architecture": platform.machine().lower(),
               "requirements": root.joinpath("requirements.lock").read_text().splitlines(),
               "files": files,
           }
@@ -370,6 +405,18 @@ jobs:
               json.dumps(value, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
           )
+          license_report = {
+              "schema": "rapp-license-report/1",
+              "platform": sys.argv[2],
+              "licenses": licenses,
+              "blocked": blocked,
+          }
+          root.joinpath("licenses.json").write_text(
+              json.dumps(license_report, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          if blocked:
+              raise SystemExit(f"blocked dependency licenses: {blocked}")
           PY
           ARCHIVE="$RUNNER_TEMP/dependency-material-$KEY.tar.gz"
           python .ring/tools/preprod_gate.py bundle \

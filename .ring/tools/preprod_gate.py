@@ -8,6 +8,7 @@ import gzip
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import stat
@@ -114,11 +115,14 @@ def _material_manifest(materials: dict[str, Path]) -> dict:
     for name, path in sorted(materials.items()):
         if not path.is_file():
             raise PreprodError(f"deployment material is missing: {path}")
-        _validate_dependency_material(name, path)
+        sbom = _validate_dependency_material(name, path)
         result[name] = {
             "file": path.name,
             "sha256": _sha256(path),
             "size_bytes": path.stat().st_size,
+            "platform": sbom["platform"],
+            "python_version": sbom["python_version"],
+            "architecture": sbom["architecture"],
         }
     return result
 
@@ -496,12 +500,18 @@ def _validate_archive(artifact: Path) -> list[tarfile.TarInfo]:
         raise PreprodError(f"cannot inspect artifact: {error}") from error
 
 
-def _validate_dependency_material(name: str, artifact: Path) -> None:
+def _validate_dependency_material(name: str, artifact: Path) -> dict:
     expected_platform = name.removeprefix("dependency-material-")
     members = _validate_archive(artifact)
     by_name = {member.name: member for member in members}
-    if "requirements.lock" not in by_name or "sbom.json" not in by_name:
-        raise PreprodError(f"{name} lacks requirements.lock or sbom.json")
+    required_metadata = {
+        "requirements.lock",
+        "sbom.json",
+        "vulnerability-report.json",
+        "licenses.json",
+    }
+    if not required_metadata.issubset(by_name):
+        raise PreprodError(f"{name} lacks required lock, SBOM, or scan evidence")
     wheel_members = {
         member.name: member
         for member in members
@@ -512,23 +522,66 @@ def _validate_dependency_material(name: str, artifact: Path) -> None:
     with tarfile.open(artifact, "r:gz") as archive:
         lock_handle = archive.extractfile(by_name["requirements.lock"])
         sbom_handle = archive.extractfile(by_name["sbom.json"])
-        if lock_handle is None or sbom_handle is None:
+        vulnerability_handle = archive.extractfile(by_name["vulnerability-report.json"])
+        license_handle = archive.extractfile(by_name["licenses.json"])
+        if any(
+            handle is None
+            for handle in (
+                lock_handle,
+                sbom_handle,
+                vulnerability_handle,
+                license_handle,
+            )
+        ):
             raise PreprodError(f"{name} metadata cannot be read")
         lock = lock_handle.read().decode("utf-8").splitlines()
         try:
             sbom = json.loads(sbom_handle.read().decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise PreprodError(f"{name} has an invalid SBOM") from error
+        try:
+            vulnerability_report = json.loads(
+                vulnerability_handle.read().decode("utf-8")
+            )
+            license_report = json.loads(license_handle.read().decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise PreprodError(f"{name} has invalid scan evidence") from error
+        dependencies = (
+            vulnerability_report.get("dependencies")
+            if isinstance(vulnerability_report, dict)
+            else None
+        )
+        if not isinstance(dependencies, list):
+            raise PreprodError(f"{name} vulnerability report is invalid")
+        vulnerable = [
+            item.get("name", "unknown")
+            for item in dependencies
+            if isinstance(item, dict) and item.get("vulns")
+        ]
+        if vulnerable:
+            raise PreprodError(
+                f"{name} contains vulnerable dependencies: {', '.join(vulnerable)}"
+            )
+        expected_files = {
+            path.removeprefix("wheelhouse/") for path in wheel_members
+        }
+        if (
+            not isinstance(license_report, dict)
+            or license_report.get("schema") != "rapp-license-report/1"
+            or license_report.get("blocked")
+            or set(license_report.get("licenses", {})) != expected_files
+        ):
+            raise PreprodError(f"{name} license report is not approved")
         if (
             sbom.get("schema") != "rapp-dependency-materials/1"
             or sbom.get("platform") != expected_platform
+            or not re.fullmatch(r"[0-9]+\.[0-9]+", str(sbom.get("python_version", "")))
+            or not isinstance(sbom.get("architecture"), str)
+            or not sbom["architecture"]
             or sbom.get("requirements") != lock
             or not isinstance(sbom.get("files"), dict)
         ):
             raise PreprodError(f"{name} SBOM does not match its lock")
-        expected_files = {
-            path.removeprefix("wheelhouse/") for path in wheel_members
-        }
         if set(sbom["files"]) != expected_files:
             raise PreprodError(f"{name} SBOM does not enumerate its wheelhouse")
         for path, member in wheel_members.items():
@@ -538,6 +591,7 @@ def _validate_dependency_material(name: str, artifact: Path) -> None:
             filename = path.removeprefix("wheelhouse/")
             if hashlib.sha256(handle.read()).hexdigest() != sbom["files"][filename]:
                 raise PreprodError(f"{name} wheel hash mismatch: {filename}")
+    return sbom
 
 
 def verify_candidate(
@@ -912,6 +966,41 @@ def export_candidate(
     return changed
 
 
+def verify_staged_tree(manifest_path: Path, target: Path) -> str:
+    manifest = _read_json(manifest_path)
+    if manifest.get("status") != "seaworthy":
+        raise PreprodError("only a seaworthy manifest can authorize a Grail tree")
+    target = target.resolve()
+    top = Path(_git(target, "rev-parse", "--show-toplevel").strip()).resolve()
+    if top != target:
+        raise PreprodError("Grail target must be its repository root")
+    if _repo_slug(_git(target, "remote", "get-url", "origin").strip()) != "kody-w/rapp-installer":
+        raise PreprodError("target is not the Grail repository")
+    if _git(target, "rev-parse", "--abbrev-ref", "HEAD").strip() in {"main", "HEAD"}:
+        raise PreprodError("Grail verification requires a release branch")
+    if _git(target, "rev-parse", "HEAD^{commit}").strip() != manifest["subject"]["grail_base_commit"]:
+        raise PreprodError("Grail base moved since Preprod")
+    unstaged = subprocess.run(
+        ["git", "-C", str(target), "diff", "--quiet"],
+        check=False,
+    )
+    if unstaged.returncode != 0:
+        raise PreprodError("Grail worktree has unstaged changes after export")
+    untracked = _git(
+        target,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+    )
+    if untracked:
+        raise PreprodError("Grail worktree has untracked files after export")
+    tree = _git(target, "write-tree").strip()
+    if tree != manifest["subject"]["expected_grail_tree"]:
+        raise PreprodError("staged Grail tree no longer matches sealed Preprod")
+    return tree
+
+
 def _extract_archive(artifact: Path, destination: Path) -> None:
     members = _validate_archive(artifact)
     destination.mkdir(parents=True, exist_ok=True)
@@ -985,6 +1074,19 @@ def prepare_runtime(
         wheelhouse = dependencies / "wheelhouse"
         if not lock.is_file() or not wheelhouse.is_dir():
             raise PreprodError("sealed dependency material is incomplete")
+        sbom = json.loads((dependencies / "sbom.json").read_text(encoding="utf-8"))
+        current_python = f"{sys.version_info.major}.{sys.version_info.minor}"
+        current_arch = platform.machine().lower()
+        if sbom.get("python_version") != current_python:
+            raise PreprodError(
+                f"dependency material requires Python {sbom.get('python_version')}, "
+                f"current runtime is {current_python}"
+            )
+        if str(sbom.get("architecture", "")).lower() != current_arch:
+            raise PreprodError(
+                f"dependency material requires {sbom.get('architecture')}, "
+                f"current architecture is {current_arch}"
+            )
 
         if install_dependencies:
             venv = temporary / "venv"
@@ -1102,6 +1204,10 @@ def _parse_args() -> argparse.Namespace:
     export.add_argument("--target", type=Path, required=True)
     export.add_argument("--material", action="append", default=[])
 
+    verify_tree = subparsers.add_parser("verify-staged-tree")
+    verify_tree.add_argument("--manifest", type=Path, required=True)
+    verify_tree.add_argument("--target", type=Path, required=True)
+
     bundle = subparsers.add_parser("bundle")
     bundle.add_argument("--source", type=Path, required=True)
     bundle.add_argument("--artifact", type=Path, required=True)
@@ -1184,6 +1290,12 @@ def main() -> int:
                 materials=_parse_material_specs(args.material),
             )
             print(f"GRAIL HANDOFF — {changed} paths staged from exact preprod artifact")
+        elif args.command == "verify-staged-tree":
+            tree = verify_staged_tree(
+                args.manifest.resolve(),
+                args.target.resolve(),
+            )
+            print(f"GRAIL TREE VERIFIED — {tree}")
         elif args.command == "bundle":
             digest = build_artifact(args.source.resolve(), args.artifact.resolve())
             print(f"DEPLOYMENT MATERIAL — {digest} ({args.artifact.name})")

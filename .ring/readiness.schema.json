@@ -157,11 +157,14 @@
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["file", "sha256", "size_bytes"],
+        "required": ["file", "sha256", "size_bytes", "platform", "python_version", "architecture"],
         "properties": {
           "file": {"type": "string", "minLength": 1},
           "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-          "size_bytes": {"type": "integer", "minimum": 1}
+          "size_bytes": {"type": "integer", "minimum": 1},
+          "platform": {"enum": ["linux", "macos", "windows"]},
+          "python_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+          "architecture": {"type": "string", "minLength": 1}
         }
       }
     },

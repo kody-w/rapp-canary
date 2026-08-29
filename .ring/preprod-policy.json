@@ -16,6 +16,8 @@
     "critical-brainstem-hash",
     "pinned-model-policy",
     "sealed-dependency-materials",
+    "vulnerability-scan",
+    "license-scan",
     "cross-platform-artifact-verification",
     "fresh-install",
     "upgrade",

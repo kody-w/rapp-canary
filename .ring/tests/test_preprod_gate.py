@@ -2,7 +2,9 @@ import gzip
 import importlib.util
 import io
 import json
+import platform
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -71,11 +73,11 @@ class PreprodGateTests(unittest.TestCase):
         self.artifact = self.root / "rapp-preprod.tar.gz"
         self.manifest = self.root / "readiness.json"
         self.materials = {}
-        for platform in ("linux", "macos", "windows"):
-            material = self.root / f"material-{platform}"
+        for platform_name in ("linux", "macos", "windows"):
+            material = self.root / f"material-{platform_name}"
             (material / "wheelhouse").mkdir(parents=True)
-            wheel = material / "wheelhouse" / f"example-1.0-{platform}.whl"
-            wheel.write_bytes(f"wheel-{platform}".encode("utf-8"))
+            wheel = material / "wheelhouse" / f"example-1.0-{platform_name}.whl"
+            wheel.write_bytes(f"wheel-{platform_name}".encode("utf-8"))
             requirements = ["example==1.0"]
             (material / "requirements.lock").write_text(
                 "\n".join(requirements) + "\n",
@@ -84,7 +86,9 @@ class PreprodGateTests(unittest.TestCase):
             (material / "sbom.json").write_text(
                 json.dumps({
                     "schema": "rapp-dependency-materials/1",
-                    "platform": platform,
+                    "platform": platform_name,
+                    "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+                    "architecture": platform.machine().lower(),
                     "requirements": requirements,
                     "files": {
                         wheel.name: GATE._sha256(wheel),
@@ -92,9 +96,22 @@ class PreprodGateTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
-            path = self.root / f"dependency-material-{platform}.tar.gz"
+            (material / "vulnerability-report.json").write_text(
+                json.dumps({"dependencies": [], "fixes": []}),
+                encoding="utf-8",
+            )
+            (material / "licenses.json").write_text(
+                json.dumps({
+                    "schema": "rapp-license-report/1",
+                    "platform": platform_name,
+                    "licenses": {wheel.name: "MIT"},
+                    "blocked": [],
+                }),
+                encoding="utf-8",
+            )
+            path = self.root / f"dependency-material-{platform_name}.tar.gz"
             GATE.build_artifact(material, path)
-            self.materials[f"dependency-material-{platform}"] = path
+            self.materials[f"dependency-material-{platform_name}"] = path
         self.issued = datetime(2026, 8, 29, tzinfo=timezone.utc)
 
     def tearDown(self):
@@ -356,6 +373,13 @@ class PreprodGateTests(unittest.TestCase):
             "1.2.3\n",
         )
         self.assertTrue(GATE._git(target, "status", "--porcelain").strip())
+        self.assertEqual(
+            GATE.verify_staged_tree(sealed_path, target),
+            json.loads(sealed_path.read_text(encoding="utf-8"))["subject"]["expected_grail_tree"],
+        )
+        (target / "install.sh").write_text("changed after Preprod\n", encoding="utf-8")
+        with self.assertRaisesRegex(GATE.PreprodError, "unstaged"):
+            GATE.verify_staged_tree(sealed_path, target)
 
     def test_export_rejects_a_moved_grail_base(self):
         self.package()
@@ -380,6 +404,8 @@ class PreprodGateTests(unittest.TestCase):
         )
         if result.returncode:
             raise AssertionError(result.stderr)
+        GATE._git(target, "config", "user.name", "Preprod Test")
+        GATE._git(target, "config", "user.email", "preprod@example.invalid")
         GATE._git(
             target,
             "remote",

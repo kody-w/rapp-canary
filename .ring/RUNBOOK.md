@@ -172,6 +172,10 @@ python3 .ring/tools/preprod_gate.py export \
   --material dependency-material-linux=/path/to/dependency-material-linux.tar.gz \
   --material dependency-material-macos=/path/to/dependency-material-macos.tar.gz \
   --material dependency-material-windows=/path/to/dependency-material-windows.tar.gz
+# After testing the staged release branch:
+python3 .ring/tools/preprod_gate.py verify-staged-tree \
+  --manifest /path/to/seaworthy.json \
+  --target /tmp/grail-release
 
 # 2. inspect, test, and commit. VERSION and brainstem.py are already sealed:
 cd /tmp/grail-release && bash tests/test_installer.sh
