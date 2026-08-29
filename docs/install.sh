@@ -13,6 +13,7 @@ VENV_DIR="$BRAINSTEM_HOME/venv"
 REPO_URL="https://github.com/kody-w/rapp-installer.git"
 REMOTE_VERSION_URL="https://raw.githubusercontent.com/kody-w/rapp-installer/main/rapp_brainstem/VERSION"
 PIN_VERSION="${BRAINSTEM_VERSION:-}"
+LEGACY_RUNTIME_WAS_ACTIVE=false
 
 # Colors
 RED='\033[0;31m'
@@ -330,6 +331,13 @@ installed_runtime_uses_external_state() {
     [ -f "$brainstem" ] && grep -q '^def _state_dir():' "$brainstem"
 }
 
+capture_legacy_runtime_state_owner() {
+    local brainstem="$BRAINSTEM_HOME/src/rapp_brainstem/brainstem.py"
+    if [ -f "$brainstem" ] && ! installed_runtime_uses_external_state; then
+        LEGACY_RUNTIME_WAS_ACTIVE=true
+    fi
+}
+
 migrate_legacy_state() {
     local legacy_dir="$BRAINSTEM_HOME/src/rapp_brainstem"
     local state_dir="$BRAINSTEM_HOME/state"
@@ -347,7 +355,8 @@ migrate_legacy_state() {
     # If the currently installed runtime predates external state, its in-tree
     # files are authoritative. This is what makes a rollback and later upgrade
     # preserve account switches and intentional deletions made by the old runtime.
-    if [ -f "$legacy_dir/brainstem.py" ] && ! installed_runtime_uses_external_state; then
+    capture_legacy_runtime_state_owner
+    if [ "$LEGACY_RUNTIME_WAS_ACTIVE" = true ] && ! installed_runtime_uses_external_state; then
         legacy_authoritative=true
     elif [ -f "$marker" ]; then
         return 0
@@ -385,6 +394,27 @@ migrate_legacy_state() {
     [ "$migrated" -eq 0 ] || echo -e "  ${GREEN}✓${NC} Migrated $migrated persistent state file(s)"
 }
 
+sync_live_legacy_state() {
+    [ "$LEGACY_RUNTIME_WAS_ACTIVE" = true ] || return 0
+    local legacy_dir="$BRAINSTEM_HOME/src/rapp_brainstem"
+    local state_dir="$BRAINSTEM_HOME/state"
+    local names=".copilot_token .copilot_session .brainstem_secret .brainstem_model .brainstem_book.json"
+    local name source destination migrated=0
+
+    mkdir -p "$state_dir" || return 1
+    for name in $names; do
+        source="$legacy_dir/$name"
+        destination="$state_dir/$name"
+        if [ -f "$source" ]; then
+            copy_state_file_atomically "$source" "$destination" || return 1
+            migrated=$((migrated + 1))
+        fi
+    done
+    write_state_migration_marker "$state_dir" || return 1
+    LEGACY_RUNTIME_WAS_ACTIVE=false
+    [ "$migrated" -eq 0 ] || echo -e "  ${GREEN}✓${NC} Captured final state from the stopped legacy server"
+}
+
 prepare_legacy_runtime_state() {
     local legacy_dir="$BRAINSTEM_HOME/src/rapp_brainstem"
     local state_dir="$BRAINSTEM_HOME/state"
@@ -406,6 +436,17 @@ prepare_legacy_runtime_state() {
             rm -f "$destination" || return 1
         fi
     done
+}
+
+stop_existing_brainstem() {
+    local port="${PORT:-7071}"
+    local existing_pid
+    existing_pid=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null | head -1)
+    if [ -n "$existing_pid" ]; then
+        echo -e "  ${YELLOW}⚠${NC} Stopping existing server (PID $existing_pid)..."
+        kill "$existing_pid" 2>/dev/null || true
+        sleep 1
+    fi
 }
 
 install_brainstem() {
@@ -715,7 +756,16 @@ create_env() {
 launch_brainstem() {
     export PATH="$BRAINSTEM_BIN:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
+    capture_legacy_runtime_state_owner
+    stop_existing_brainstem
+    if ! sync_live_legacy_state; then
+        echo -e "  ${RED}✗${NC} Could not capture final state from the stopped server"
+        return 1
+    fi
+
+    local migration_ok=true
     if ! migrate_legacy_state; then
+        migration_ok=false
         echo -e "  ${YELLOW}⚠${NC} Could not migrate legacy state; continuing with the existing checkout"
     fi
 
@@ -753,7 +803,8 @@ launch_brainstem() {
     local state_dir="$BRAINSTEM_HOME/state"
     local token_file="$state_dir/.copilot_token"
     local legacy_token="$BRAINSTEM_HOME/src/rapp_brainstem/.copilot_token"
-    if [ ! -f "$token_file" ] && [ -f "$legacy_token" ]; then
+    if [ ! -f "$token_file" ] && [ -f "$legacy_token" ] \
+            && { [ "$migration_ok" = false ] || ! installed_runtime_uses_external_state; }; then
         token_file="$legacy_token"
     fi
     local client_id="Iv1.b507a08c87ecfe98"
@@ -965,17 +1016,6 @@ finally:
     echo ""
 
     cd "$BRAINSTEM_HOME/src/rapp_brainstem"
-
-    # Kill any existing brainstem on port 7071 before starting. Match the LISTENER
-    # only — a bare port match can hit a client connection (a browser tab, curl)
-    # and leave the old server running. install.ps1 already does listener-only.
-    local existing_pid
-    existing_pid=$(lsof -ti tcp:7071 -sTCP:LISTEN 2>/dev/null | head -1)
-    if [ -n "$existing_pid" ]; then
-        echo -e "  ${YELLOW}⚠${NC} Stopping existing server (PID $existing_pid)..."
-        kill "$existing_pid" 2>/dev/null
-        sleep 1
-    fi
 
     # Open the browser once the server actually answers (#14) — a fixed delay
     # races cold startups (token exchange, dep installs) and lands the user on

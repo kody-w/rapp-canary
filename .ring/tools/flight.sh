@@ -73,6 +73,17 @@ case "$cmd" in
                 fi
             done
         done
+        # Older flight branches predate BRAINSTEM_STATE_DIR. Keep their auth
+        # isolated too by mirroring the flight-local copy into that flight's own
+        # checkout, never the daily driver's checkout.
+        if ! grep -q '^def _state_dir():' "$src/rapp_brainstem/brainstem.py"; then
+            for name_in_state in .copilot_token .copilot_session; do
+                if [ -f "$state/$name_in_state" ]; then
+                    cp "$state/$name_in_state" "$src/rapp_brainstem/$name_in_state"
+                    chmod 600 "$src/rapp_brainstem/$name_in_state"
+                fi
+            done
+        fi
 
         # FLIGHT.json env block → exported for the server process only.
         envfile="$base/flight.env"

@@ -188,8 +188,38 @@ class InstallerMigratesBeforeReplacingTheCheckout(unittest.TestCase):
         powershell = self._source("install.ps1")
         self.assertIn("prepare_legacy_runtime_state", shell)
         self.assertIn("Prepare-LegacyRuntimeState", powershell)
+        self.assertIn("sync_live_legacy_state", shell)
+        self.assertIn("Sync-LiveLegacyState", powershell)
         self.assertIn(".legacy-state-migrated-v1", shell)
         self.assertIn(".legacy-state-migrated-v1", powershell)
+
+    def test_installers_stop_the_old_writer_before_the_final_state_snapshot(self):
+        shell = self._source("install.sh")
+        shell_launch = shell[shell.index("launch_brainstem() {"):shell.index("\nmain() {")]
+        self.assertLess(
+            shell_launch.index("stop_existing_brainstem"),
+            shell_launch.index("sync_live_legacy_state"),
+        )
+        self.assertLess(
+            shell_launch.index("sync_live_legacy_state"),
+            shell_launch.index("local token_file="),
+        )
+        self.assertIn("! installed_runtime_uses_external_state", shell_launch)
+
+        powershell = self._source("install.ps1")
+        ps_launch = powershell[
+            powershell.index("function Launch-Brainstem {"):
+            powershell.index("\nfunction Main {")
+        ]
+        self.assertLess(
+            ps_launch.index("Stop-ExistingBrainstem"),
+            ps_launch.index("Sync-LiveLegacyState"),
+        )
+        self.assertLess(
+            ps_launch.index("Sync-LiveLegacyState"),
+            ps_launch.index("$tokenFile ="),
+        )
+        self.assertIn("Test-InstalledRuntimeUsesExternalState", ps_launch)
 
     def test_both_installers_cap_device_flow_slow_down(self):
         shell = self._source("install.sh")

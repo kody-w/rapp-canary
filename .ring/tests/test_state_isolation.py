@@ -16,6 +16,8 @@ class RingProcessesKeepIndependentState(unittest.TestCase):
         self.assertIn('state="$base/state"', script)
         self.assertIn('BRAINSTEM_STATE_DIR="$state"', script)
         self.assertIn('"$HOME/.brainstem/state/$name_in_state"', script)
+        self.assertIn("if ! grep -q '^def _state_dir():'", script)
+        self.assertIn('"$src/rapp_brainstem/$name_in_state"', script)
 
     def test_soak_uses_its_own_state_directory(self):
         script = source(".ring/tools/soak.sh")

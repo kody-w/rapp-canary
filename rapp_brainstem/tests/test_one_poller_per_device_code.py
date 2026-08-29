@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import shutil
+import threading
 import time
 import unittest
 from unittest import mock
@@ -123,9 +124,12 @@ class ADeferredBrainstemTakesOver(unittest.TestCase):
             }
             brainstem._login_result = {}
             brainstem._poll_lock_fh = None
+            brainstem._poll_lock_owner = None
             self.addCleanup(setattr, brainstem, "_pending_login", {})
             self.addCleanup(setattr, brainstem, "_login_result", {})
             self.addCleanup(setattr, brainstem, "_poll_lock_fh", None)
+            self.addCleanup(setattr, brainstem, "_poll_lock_owner", None)
+            self.addCleanup(setattr, brainstem, "_login_bg_thread", None)
 
     def test_a_deferred_sibling_retries_and_takes_over_after_holder_dies(self):
             with mock.patch.object(brainstem, "_claim_the_poller", side_effect=[False, True]), \
@@ -146,6 +150,28 @@ class ADeferredBrainstemTakesOver(unittest.TestCase):
 
             self.assertEqual(brainstem._login_result.get("status"), "ok")
             sleep.assert_not_called()
+
+    def test_concurrent_login_requests_start_only_one_thread(self):
+            entered = threading.Event()
+            release = threading.Event()
+            starts = []
+
+            def hold_poller():
+                starts.append(threading.get_ident())
+                entered.set()
+                release.wait(timeout=10)
+
+            brainstem._login_bg_thread = None
+            with mock.patch.object(brainstem, "_bg_poll_loop", side_effect=hold_poller):
+                callers = [threading.Thread(target=brainstem._start_bg_poll) for _ in range(12)]
+                for caller in callers:
+                    caller.start()
+                for caller in callers:
+                    caller.join(timeout=10)
+                self.assertTrue(entered.wait(timeout=10), "poller thread never started")
+                self.assertEqual(len(starts), 1, "concurrent /login requests started duplicate pollers")
+                release.set()
+                brainstem._login_bg_thread.join(timeout=10)
 
 
 if __name__ == "__main__":

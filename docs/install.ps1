@@ -19,6 +19,7 @@ $BRAINSTEM_BIN = "$env:USERPROFILE\.local\bin"
 $REPO_URL = "https://github.com/kody-w/rapp-installer.git"
 $REMOTE_VERSION_URL = "https://raw.githubusercontent.com/kody-w/rapp-installer/main/rapp_brainstem/VERSION"
 $VENV_DIR = "$env:USERPROFILE\.brainstem\venv"
+$script:LegacyRuntimeWasActive = $false
 
 # Optional version pin: `--version vX.Y.Z` (also accepts a bare 0.6.14 or the release
 # tag form brainstem-v0.6.14). Parsed from the script arguments so a user can pin or
@@ -507,6 +508,14 @@ function Test-InstalledRuntimeUsesExternalState {
     return [bool](Select-String -LiteralPath $brainstem -Pattern '^def _state_dir\(\):' -Quiet)
 }
 
+function Capture-LegacyRuntimeStateOwner {
+    $brainstem = "$BRAINSTEM_HOME\src\rapp_brainstem\brainstem.py"
+    if ((Test-Path -LiteralPath $brainstem -PathType Leaf) -and
+        (-not (Test-InstalledRuntimeUsesExternalState))) {
+        $script:LegacyRuntimeWasActive = $true
+    }
+}
+
 function Migrate-LegacyState {
     $legacyDir = "$BRAINSTEM_HOME\src\rapp_brainstem"
     $stateDir = "$BRAINSTEM_HOME\state"
@@ -516,8 +525,9 @@ function Migrate-LegacyState {
 
     try {
         New-Item -ItemType Directory -Force -Path $stateDir -ErrorAction Stop | Out-Null
+        Capture-LegacyRuntimeStateOwner
         $legacyAuthoritative = (
-            (Test-Path -LiteralPath "$legacyDir\brainstem.py" -PathType Leaf) -and
+            $script:LegacyRuntimeWasActive -and
             (-not (Test-InstalledRuntimeUsesExternalState))
         )
         if ((Test-Path -LiteralPath $marker) -and -not $legacyAuthoritative) { return }
@@ -546,6 +556,28 @@ function Migrate-LegacyState {
     }
 }
 
+function Sync-LiveLegacyState {
+    if (-not $script:LegacyRuntimeWasActive) { return }
+    $legacyDir = "$BRAINSTEM_HOME\src\rapp_brainstem"
+    $stateDir = "$BRAINSTEM_HOME\state"
+    $names = @(".copilot_token", ".copilot_session", ".brainstem_secret", ".brainstem_model", ".brainstem_book.json")
+    $migrated = 0
+
+    New-Item -ItemType Directory -Force -Path $stateDir -ErrorAction Stop | Out-Null
+    foreach ($name in $names) {
+        $source = Join-Path $legacyDir $name
+        if (Test-Path -LiteralPath $source -PathType Leaf) {
+            Copy-StateFileAtomically -Source $source -Destination (Join-Path $stateDir $name)
+            $migrated++
+        }
+    }
+    Write-StateMigrationMarker -StateDir $stateDir
+    $script:LegacyRuntimeWasActive = $false
+    if ($migrated -gt 0) {
+        Write-Host "  [OK] Captured final state from the stopped legacy server" -ForegroundColor Green
+    }
+}
+
 function Prepare-LegacyRuntimeState {
     $legacyDir = "$BRAINSTEM_HOME\src\rapp_brainstem"
     $stateDir = "$BRAINSTEM_HOME\state"
@@ -563,6 +595,24 @@ function Prepare-LegacyRuntimeState {
             Remove-Item -LiteralPath $destination -Force -ErrorAction Stop
         }
     }
+}
+
+function Stop-ExistingBrainstem {
+    # Stop the old writer before the final legacy-state snapshot. Otherwise a token
+    # refresh or account switch can land after migration and vanish with the checkout.
+    try {
+        $listeners = Get-NetTCPConnection -LocalPort 7071 -State Listen -ErrorAction SilentlyContinue
+        if ($listeners) {
+            $ownerPids = @($listeners | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique)
+            foreach ($ownerPid in $ownerPids) {
+                if ($ownerPid -and $ownerPid -ne 0) {
+                    Write-Host "  [!] Stopping existing server (PID $ownerPid)..." -ForegroundColor Yellow
+                    Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+                }
+            }
+            Start-Sleep -Seconds 1
+        }
+    } catch {}
 }
 
 function Install-Brainstem {
@@ -920,9 +970,18 @@ function Create-Env {
 }
 
 function Launch-Brainstem {
+    Capture-LegacyRuntimeStateOwner
+    Stop-ExistingBrainstem
+    try {
+        Sync-LiveLegacyState
+    } catch {
+        throw "Could not capture final state from the stopped server: $($_.Exception.Message)"
+    }
+    $migrationOk = $true
     try {
         Migrate-LegacyState
     } catch {
+        $migrationOk = $false
         Write-Host "  [!] Could not migrate legacy state; continuing with the existing checkout" -ForegroundColor Yellow
     }
 
@@ -956,7 +1015,8 @@ function Launch-Brainstem {
     $stateDir = "$BRAINSTEM_HOME\state"
     $tokenFile = "$stateDir\.copilot_token"
     $legacyToken = "$BRAINSTEM_HOME\src\rapp_brainstem\.copilot_token"
-    if ((-not (Test-Path $tokenFile)) -and (Test-Path $legacyToken)) {
+    if ((-not (Test-Path $tokenFile)) -and (Test-Path $legacyToken) -and
+        ((-not $migrationOk) -or (-not (Test-InstalledRuntimeUsesExternalState)))) {
         $tokenFile = $legacyToken
     }
     $clientId = "Iv1.b507a08c87ecfe98"
@@ -1136,24 +1196,6 @@ function Launch-Brainstem {
     Write-Host ""
 
     Push-Location "$BRAINSTEM_HOME\src\rapp_brainstem"
-
-    # Free port 7071 before launching — an upgrade must not leave the OLD server
-    # running, or the health poll below would pass against it and report a false
-    # success while the new code never actually binds the port. Guarded for the
-    # absence of Get-NetTCPConnection (older/Server SKUs).
-    try {
-        $listeners = Get-NetTCPConnection -LocalPort 7071 -State Listen -ErrorAction SilentlyContinue
-        if ($listeners) {
-            $ownerPids = @($listeners | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique)
-            foreach ($ownerPid in $ownerPids) {
-                if ($ownerPid -and $ownerPid -ne 0) {
-                    Write-Host "  [!] Stopping existing server (PID $ownerPid)..." -ForegroundColor Yellow
-                    Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
-                }
-            }
-            Start-Sleep -Seconds 1
-        }
-    } catch {}
 
     # Open the browser once the server actually answers (#14) — a fixed delay
     # races cold startups and lands the user on a dead-port error page. Poll

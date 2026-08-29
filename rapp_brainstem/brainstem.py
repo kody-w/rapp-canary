@@ -1452,6 +1452,7 @@ def _get_copilot_token_locked():
 
 _pending_login = {}
 _login_bg_thread = None
+_login_bg_lock = threading.Lock()
 _login_result = {}  # Written by bg poll thread, read by /login/poll endpoint
 _pending_login_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".copilot_pending")
 
@@ -1540,6 +1541,7 @@ def start_device_code_login(force_new=False):
     }
 
 _poll_lock_fh = None
+_poll_lock_owner = None
 
 
 def _claim_the_poller():
@@ -1556,9 +1558,9 @@ def _claim_the_poller():
     the live one. Losing the race is NOT an error - that process simply lets
     its sibling do the polling and picks up the saved token from disk.
     """
-    global _poll_lock_fh
+    global _poll_lock_fh, _poll_lock_owner
     if _poll_lock_fh is not None:
-        return True
+        return _poll_lock_owner == threading.get_ident()
     if fcntl is None:  # Windows: single-poller is best-effort in-process only
         return True
     # Opening and locking are split deliberately. Folding them into one try meant
@@ -1589,12 +1591,16 @@ def _claim_the_poller():
         _tlog("login.poll_lock_unavailable", {"error": str(e)[:120]}, level="warn")
         return True
     _poll_lock_fh = fh
+    _poll_lock_owner = threading.get_ident()
     return True
 
 
 def _release_the_poller():
-    global _poll_lock_fh
+    global _poll_lock_fh, _poll_lock_owner
+    if _poll_lock_fh is not None and _poll_lock_owner != threading.get_ident():
+        return
     fh, _poll_lock_fh = _poll_lock_fh, None
+    _poll_lock_owner = None
     if fh is not None:
         try:
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
@@ -1609,10 +1615,11 @@ def _release_the_poller():
 def _start_bg_poll():
     """Start a background thread that polls GitHub for device code completion."""
     global _login_bg_thread
-    if _login_bg_thread and _login_bg_thread.is_alive():
-        return  # Already running
-    _login_bg_thread = threading.Thread(target=_bg_poll_loop, daemon=True)
-    _login_bg_thread.start()
+    with _login_bg_lock:
+        if _login_bg_thread and _login_bg_thread.is_alive():
+            return  # Already running
+        _login_bg_thread = threading.Thread(target=_bg_poll_loop, daemon=True)
+        _login_bg_thread.start()
 
 def _bg_poll_loop():
     """Background loop: polls GitHub for the device code token.

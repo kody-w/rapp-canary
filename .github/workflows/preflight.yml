@@ -247,6 +247,12 @@ jobs:
             if curl -sf "http://localhost:7071/health" -o "$RUNNER_TEMP/health.json"; then break; fi
             if [ "$i" = 120 ]; then echo "server never came up"; cat "$RUNNER_TEMP/install.log" 2>/dev/null | tail -60; exit 1; fi
           done
+          INSTALLED_COMMIT="$(git -C "$HOME/.brainstem/src" rev-parse 'HEAD^{commit}')"
+          [[ "$INSTALLED_COMMIT" == "$GITHUB_SHA" ]] || {
+            echo "installed $INSTALLED_COMMIT, expected candidate $GITHUB_SHA" >&2
+            exit 1
+          }
+          echo "installed exact candidate: $INSTALLED_COMMIT"
           cat "$RUNNER_TEMP/health.json"
           python3 - "$RUNNER_TEMP/health.json" "$BRANCH_VERSION" <<'EOF'
           import json, os, sys
