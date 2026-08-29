@@ -450,12 +450,6 @@ legacy_writer_pids() {
             *) continue ;;
         esac
 
-        if [[ "$command_line" == *"$legacy_dir/brainstem.py"* ]] \
-                || [[ "$command_line" == *"$canonical_dir/brainstem.py"* ]]; then
-            echo "$pid"
-            continue
-        fi
-
         local cwd=""
         if [ -L "/proc/$pid/cwd" ]; then
             cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
@@ -466,14 +460,64 @@ legacy_writer_pids() {
         elif command -v lsof >/dev/null 2>&1; then
             cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
         fi
-        if [ -n "$cwd" ]; then
-            local canonical_cwd
-            canonical_cwd=$(cd "$cwd" 2>/dev/null && pwd -P) || canonical_cwd="$cwd"
-            [ "$canonical_cwd" = "$canonical_dir" ] && echo "$pid"
-        else
-            # A relative `python brainstem.py` with an unknowable cwd might be the
-            # writer we are about to delete. Refuse instead of guessing.
+
+        local script_path
+        script_path=$("${PYTHON_CMD:-python3}" - "$pid" "$cwd" "$command_line" <<'PY'
+import os
+import shlex
+import sys
+
+pid, cwd, command_line = sys.argv[1:]
+args = []
+proc_cmdline = f"/proc/{pid}/cmdline"
+if os.path.exists(proc_cmdline):
+    try:
+        args = [part.decode("utf-8", "replace")
+                for part in open(proc_cmdline, "rb").read().split(b"\0") if part]
+    except OSError:
+        args = []
+if not args:
+    try:
+        args = shlex.split(command_line)
+    except ValueError:
+        args = []
+
+i = 1
+script = ""
+while i < len(args):
+    arg = args[i]
+    if arg in ("-c", "-m"):
+        break
+    if arg in ("-W", "-X"):
+        i += 2
+        continue
+    if arg == "--":
+        i += 1
+        if i < len(args):
+            script = args[i]
+        break
+    if arg.startswith("-"):
+        i += 1
+        continue
+    script = arg
+    break
+
+if script:
+    if not os.path.isabs(script):
+        if not cwd:
+            sys.exit(0)
+        script = os.path.join(cwd, script)
+    print(os.path.realpath(script))
+PY
+)
+        if [ "$script_path" = "$canonical_dir/brainstem.py" ]; then
+            echo "$pid"
+        elif [ -z "$script_path" ]; then
+            # The command mentions brainstem.py but its executable script cannot be
+            # established. Refuse instead of killing a debugger or maintenance tool.
             echo "?$pid"
+        else
+            continue
         fi
     done
 }

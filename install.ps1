@@ -620,6 +620,26 @@ function Get-ConfiguredBrainstemPorts {
     return @($ports)
 }
 
+function Get-PythonScriptArgument {
+    param([string]$CommandLine)
+    $tokens = @(
+        [regex]::Matches($CommandLine, '"[^"]*"|\S+') |
+            ForEach-Object { $_.Value.Trim('"') }
+    )
+    for ($i = 1; $i -lt $tokens.Count; $i++) {
+        $arg = $tokens[$i]
+        if ($arg -in @("-c", "-m")) { return $null }
+        if ($arg -in @("-W", "-X")) { $i++; continue }
+        if ($arg -eq "--") {
+            if (($i + 1) -lt $tokens.Count) { return $tokens[$i + 1] }
+            return $null
+        }
+        if ($arg.StartsWith("-")) { continue }
+        return $arg
+    }
+    return $null
+}
+
 function Quiesce-LegacyStateWriters {
     $legacyScript = "$BRAINSTEM_HOME\src\rapp_brainstem\brainstem.py"
     if (-not (Test-Path -LiteralPath $legacyScript -PathType Leaf)) { return }
@@ -637,14 +657,18 @@ function Quiesce-LegacyStateWriters {
     $ambiguous = @()
     foreach ($process in Get-CimInstance Win32_Process -ErrorAction Stop) {
         $commandLine = [string]$process.CommandLine
-        if (-not $commandLine -or $commandLine -notmatch '(?i)python.*brainstem\.py') { continue }
-        $normalized = $commandLine.Replace('/', '\').ToLowerInvariant()
+        if (-not $commandLine -or $commandLine -notmatch '(?i)python') { continue }
+        $scriptArgument = Get-PythonScriptArgument -CommandLine $commandLine
+        if (-not $scriptArgument -or [System.IO.Path]::GetFileName($scriptArgument) -ne "brainstem.py") { continue }
         $pidValue = [int]$process.ProcessId
-        if ($normalized.Contains($legacyNormalized)) {
-            $targets[$pidValue] = $true
+        if ([System.IO.Path]::IsPathRooted($scriptArgument)) {
+            $scriptNormalized = [System.IO.Path]::GetFullPath($scriptArgument).Replace('/', '\').ToLowerInvariant()
+            if ($scriptNormalized -eq $legacyNormalized) {
+                $targets[$pidValue] = $true
+            }
         } elseif ($listenerOwners.ContainsKey($pidValue)) {
             $targets[$pidValue] = $true
-        } elseif ($normalized -notmatch '(?i)[a-z]:\\[^"]*\\brainstem\.py') {
+        } else {
             $ambiguous += $pidValue
         }
     }

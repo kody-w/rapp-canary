@@ -202,6 +202,8 @@ class InstallerMigratesBeforeReplacingTheCheckout(unittest.TestCase):
         self.assertIn("Sync-LiveLegacyState", powershell)
         self.assertIn("legacy_writer_pids", shell)
         self.assertIn("Quiesce-LegacyStateWriters", powershell)
+        self.assertIn("script_path", shell)
+        self.assertIn("Get-PythonScriptArgument", powershell)
         self.assertIn("ps -axo pid=,command=", shell)
         self.assertIn("Get-CimInstance Win32_Process", powershell)
         self.assertIn("did not exit", shell)

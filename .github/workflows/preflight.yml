@@ -193,13 +193,13 @@ jobs:
           printf '{"model":"gpt-4o"}\n' > "$LEGACY_STATE/.brainstem_model"
           printf '[{"type":"preflight-state-marker","level":"info"}]\n' > "$LEGACY_STATE/.brainstem_book.json"
           if [ "${{ matrix.scenario }}" = "repair" ]; then
-            cat > "$RUNNER_TEMP/legacy_writer.py" <<'PY'
+            cat > "$LEGACY_STATE/brainstem.py" <<'PY'
           import json
           import os
           import sys
           import time
 
-          destination = sys.argv[2]
+          destination = sys.argv[1]
           payload = {"model": "gpt-4o", "legacy_writer_pid": os.getpid()}
           while True:
               temporary = destination + ".writer"
@@ -208,10 +208,16 @@ jobs:
               os.replace(temporary, destination)
               time.sleep(0.05)
           PY
-            nohup python "$RUNNER_TEMP/legacy_writer.py" \
-              "$LEGACY_STATE/brainstem.py" "$LEGACY_STATE/.brainstem_model" \
+            nohup python "$LEGACY_STATE/brainstem.py" "$LEGACY_STATE/.brainstem_model" \
               > "$RUNNER_TEMP/legacy-writer.log" 2>&1 &
             echo "LEGACY_WRITER_PID=$!" >> "$GITHUB_ENV"
+            cat > "$RUNNER_TEMP/legacy_decoy.py" <<'PY'
+          import time
+          time.sleep(600)
+          PY
+            nohup python "$RUNNER_TEMP/legacy_decoy.py" "$LEGACY_STATE/brainstem.py" \
+              > "$RUNNER_TEMP/legacy-decoy.log" 2>&1 &
+            echo "LEGACY_DECOY_PID=$!" >> "$GITHUB_ENV"
             sleep 1
             rm -rf "$HOME/.brainstem/src/.git"
             echo "started live legacy writer and removed .git to force repair"
@@ -313,6 +319,11 @@ jobs:
               echo "legacy state writer is still running" >&2
               exit 1
             fi
+            if ! kill -0 "$LEGACY_DECOY_PID" 2>/dev/null; then
+              echo "unrelated process mentioning brainstem.py was terminated" >&2
+              exit 1
+            fi
+            kill "$LEGACY_DECOY_PID" 2>/dev/null || true
           fi
           curl -sf http://localhost:7071/health | python3 -c "
           import json,sys; d=json.load(sys.stdin)

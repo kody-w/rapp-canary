@@ -54,6 +54,7 @@ SHIMS="$SANDBOX/shims"
 LOG="$SANDBOX/install.log"
 SERVER_PID=""
 LEGACY_WRITER_PID=""
+LEGACY_DECOY_PID=""
 
 mkdir -p "$FAKE_HOME" "$SHIMS"
 
@@ -65,6 +66,9 @@ export GIT_CONFIG_GLOBAL="$FAKE_HOME/.gitconfig"
 cleanup() {
     if [ -n "$LEGACY_WRITER_PID" ] && kill -0 "$LEGACY_WRITER_PID" 2>/dev/null; then
         kill "$LEGACY_WRITER_PID" 2>/dev/null || true
+    fi
+    if [ -n "$LEGACY_DECOY_PID" ] && kill -0 "$LEGACY_DECOY_PID" 2>/dev/null; then
+        kill "$LEGACY_DECOY_PID" 2>/dev/null || true
     fi
     if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
         kill "$SERVER_PID" 2>/dev/null || true
@@ -151,13 +155,13 @@ EOF
         "$LEGACY_STATE"/.brainstem_book.json
     SEEDED_COMMIT="$(git -C "$FAKE_HOME/.brainstem/src" rev-parse --short HEAD)"
     if [ "$SCENARIO" = "repair" ]; then
-        cat > "$SANDBOX/legacy_writer.py" <<'PY'
+        cat > "$LEGACY_STATE/brainstem.py" <<'PY'
 import json
 import os
 import sys
 import time
 
-destination = sys.argv[2]
+destination = sys.argv[1]
 payload = {"model": "gpt-4o", "legacy_writer_pid": os.getpid()}
 while True:
     temporary = destination + ".writer"
@@ -166,10 +170,16 @@ while True:
     os.replace(temporary, destination)
     time.sleep(0.05)
 PY
-        nohup python3 "$SANDBOX/legacy_writer.py" \
-            "$LEGACY_STATE/brainstem.py" "$LEGACY_STATE/.brainstem_model" \
+        nohup python3 "$LEGACY_STATE/brainstem.py" "$LEGACY_STATE/.brainstem_model" \
             > "$SANDBOX/legacy-writer.log" 2>&1 &
         LEGACY_WRITER_PID=$!
+        cat > "$SANDBOX/legacy_decoy.py" <<'PY'
+import time
+time.sleep(600)
+PY
+        nohup python3 "$SANDBOX/legacy_decoy.py" "$LEGACY_STATE/brainstem.py" \
+            > "$SANDBOX/legacy-decoy.log" 2>&1 &
+        LEGACY_DECOY_PID=$!
         sleep 0.2
         rm -rf "$FAKE_HOME/.brainstem/src/.git"
         echo "  ✓ seeded production baseline ($SEEDED_COMMIT) + live legacy writer, then removed .git"
@@ -301,6 +311,11 @@ if [ "$SCENARIO" = "upgrade" ] || [ "$SCENARIO" = "repair" ]; then
             bad "legacy state writer was not stopped"
         else
             ok "legacy state writer was stopped before replacement"
+        fi
+        if kill -0 "$LEGACY_DECOY_PID" 2>/dev/null; then
+            ok "unrelated process mentioning brainstem.py was left alone"
+        else
+            bad "unrelated process mentioning brainstem.py was terminated"
         fi
     fi
 fi
