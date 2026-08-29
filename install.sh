@@ -459,6 +459,10 @@ legacy_writer_pids() {
         local cwd=""
         if [ -L "/proc/$pid/cwd" ]; then
             cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+        elif [ -x "/usr/sbin/lsof" ]; then
+            cwd=$(/usr/sbin/lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+        elif [ -x "/usr/bin/lsof" ]; then
+            cwd=$(/usr/bin/lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
         elif command -v lsof >/dev/null 2>&1; then
             cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
         fi
