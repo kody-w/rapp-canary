@@ -556,6 +556,15 @@ jobs:
             "$RUNNER_TEMP/rollback-source"
           EXPECTED_VERSION=$(tr -d '[:space:]' \
             < "$RUNNER_TEMP/rollback-source/rapp_brainstem/VERSION")
+          mkdir -p "$ROLLBACK_HOME/.brainstem/state"
+          printf '{"access_token":"ghu_PREPROD_ROLLBACK","saved_at":1}\n' \
+            > "$ROLLBACK_HOME/.brainstem/state/.copilot_token"
+          printf 'preprod-rollback-secret\n' \
+            > "$ROLLBACK_HOME/.brainstem/state/.brainstem_secret"
+          printf '{"model":"gpt-4o"}\n' \
+            > "$ROLLBACK_HOME/.brainstem/state/.brainstem_model"
+          printf '[{"type":"preprod-rollback-marker"}]\n' \
+            > "$ROLLBACK_HOME/.brainstem/state/.brainstem_book.json"
 
           (
             export HOME="$ROLLBACK_HOME"
@@ -587,6 +596,11 @@ jobs:
           assert value["version"] == sys.argv[2], value
           print("rollback booted:", value["version"])
           PY
+          LEGACY="$ROLLBACK_HOME/.brainstem/src/rapp_brainstem"
+          grep -q "ghu_PREPROD_ROLLBACK" "$LEGACY/.copilot_token"
+          grep -q "preprod-rollback-secret" "$LEGACY/.brainstem_secret"
+          grep -q "gpt-4o" "$LEGACY/.brainstem_model"
+          grep -q "preprod-rollback-marker" "$LEGACY/.brainstem_book.json"
 
           LISTENER=$(lsof -ti tcp:17404 -sTCP:LISTEN 2>/dev/null | head -1 || true)
           [ -z "$LISTENER" ] || kill "$LISTENER"
