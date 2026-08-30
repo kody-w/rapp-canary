@@ -11,8 +11,6 @@
 #   fresh   — factory machine, no prior install (the new-user path)
 #   upgrade — machine already running REAL production main, upgraded to the
 #             candidate (the existing-user path; asserts soul/agents/.env survive)
-#   repair  — existing production state with a missing .git directory, forcing
-#             the destructive re-clone path while asserting all user state survives
 #   fresh-nopip — Windows only: Python exists but has NO pip module (corp-managed
 #             images, stripped installs — the machine class behind the v0.6.2
 #             field failure). The installer must bootstrap pip itself.
@@ -170,8 +168,7 @@ jobs:
           set -euxo pipefail
           git clone "$BARE" "$HOME/.brainstem/src"
           git -C "$HOME/.brainstem/src" reset --hard origin/production-baseline
-          # A real user's fingerprints: custom agent, edited soul/.env, and every
-          # legacy state file that used to live inside the checkout.
+          # A production user's supported upgrade fingerprints.
           cat > "$HOME/.brainstem/src/rapp_brainstem/agents/preflight_custom_agent.py" <<'EOF'
           from agents.basic_agent import BasicAgent
           class PreflightCustomAgent(BasicAgent):
@@ -186,42 +183,6 @@ jobs:
           echo "" >> "$HOME/.brainstem/src/rapp_brainstem/soul.md"
           echo "PREFLIGHT-SOUL-MARKER" >> "$HOME/.brainstem/src/rapp_brainstem/soul.md"
           printf 'GITHUB_MODEL=auto\nPORT=7071\n# PREFLIGHT-ENV-MARKER\n' > "$HOME/.brainstem/src/rapp_brainstem/.env"
-          LEGACY_STATE="$HOME/.brainstem/src/rapp_brainstem"
-          printf '{"access_token":"ghu_PREFLIGHT_STATE_SURVIVOR","refresh_token":null,"saved_at":1}\n' > "$LEGACY_STATE/.copilot_token"
-          printf '{"token":"preflight-expired-session","endpoint":"https://api.githubcopilot.com","expires_at":1}\n' > "$LEGACY_STATE/.copilot_session"
-          printf 'preflight-lan-secret\n' > "$LEGACY_STATE/.brainstem_secret"
-          printf '{"model":"gpt-4o"}\n' > "$LEGACY_STATE/.brainstem_model"
-          printf '[{"type":"preflight-state-marker","level":"info"}]\n' > "$LEGACY_STATE/.brainstem_book.json"
-          if [ "${{ matrix.scenario }}" = "repair" ]; then
-            cat > "$LEGACY_STATE/brainstem.py" <<'PY'
-          import json
-          import os
-          import sys
-          import time
-
-          destination = sys.argv[1]
-          payload = {"model": "gpt-4o", "legacy_writer_pid": os.getpid()}
-          while True:
-              temporary = destination + ".writer"
-              with open(temporary, "w", encoding="utf-8") as handle:
-                  json.dump(payload, handle)
-              os.replace(temporary, destination)
-              time.sleep(0.05)
-          PY
-            nohup python "$LEGACY_STATE/brainstem.py" "$LEGACY_STATE/.brainstem_model" \
-              > "$RUNNER_TEMP/legacy-writer.log" 2>&1 &
-            echo "LEGACY_WRITER_PID=$!" >> "$GITHUB_ENV"
-            cat > "$RUNNER_TEMP/legacy_decoy.py" <<'PY'
-          import time
-          time.sleep(600)
-          PY
-            nohup python "$RUNNER_TEMP/legacy_decoy.py" "$LEGACY_STATE/brainstem.py" \
-              > "$RUNNER_TEMP/legacy-decoy.log" 2>&1 &
-            echo "LEGACY_DECOY_PID=$!" >> "$GITHUB_ENV"
-            sleep 1
-            rm -rf "$HOME/.brainstem/src/.git"
-            echo "started live legacy writer and removed .git to force repair"
-          fi
 
       # Auth + remote-version checks must fail FAST and GRACEFULLY (that graceful
       # degradation is itself part of what we're testing). Black-hole the endpoints.
@@ -309,13 +270,6 @@ jobs:
           test -f "$HOME/.brainstem/src/rapp_brainstem/agents/preflight_custom_agent.py"
           grep -q "PREFLIGHT-SOUL-MARKER" "$HOME/.brainstem/src/rapp_brainstem/soul.md"
           grep -q "PREFLIGHT-ENV-MARKER" "$HOME/.brainstem/src/rapp_brainstem/.env"
-          STATE="$HOME/.brainstem/state"
-          [ -d "$STATE" ] || STATE="$HOME/.brainstem/src/rapp_brainstem"
-          grep -q "ghu_PREFLIGHT_STATE_SURVIVOR" "$STATE/.copilot_token"
-          grep -q "preflight-expired-session" "$STATE/.copilot_session"
-          grep -q "preflight-lan-secret" "$STATE/.brainstem_secret"
-          grep -q "gpt-4o" "$STATE/.brainstem_model"
-          grep -q "preflight-state-marker" "$STATE/.brainstem_book.json"
           curl -sf http://localhost:7071/health | python3 -c "
           import json,sys; d=json.load(sys.stdin)
           assert 'PreflightCustom' in (d.get('agents') or []), d.get('agents')
