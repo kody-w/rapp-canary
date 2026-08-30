@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kody-w.github.io/rapp-canary/schemas/rapp-1-brainstem.json",
+  "title": "RAPP/1 Grail Brainstem Frame",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "repository",
+    "release_ref",
+    "version",
+    "commit",
+    "tree",
+    "brainstem",
+    "parent",
+    "result"
+  ],
+  "properties": {
+    "schema": {"const": "rapp/1:brainstem"},
+    "repository": {"const": "kody-w/rapp-installer"},
+    "release_ref": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "brainstem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "blob", "sha256", "size_bytes"],
+      "properties": {
+        "path": {"const": "rapp_brainstem/brainstem.py"},
+        "blob": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "parent": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["release_ref", "sha256"],
+          "properties": {
+            "release_ref": {"type": "string", "minLength": 1},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        }
+      ]
+    },
+    "result": {"const": "known-good"}
+  }
+}

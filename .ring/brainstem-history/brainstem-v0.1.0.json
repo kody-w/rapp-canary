@@ -1,0 +1,16 @@
+{
+  "brainstem": {
+    "blob": "8f561148e49e1fd96f28aa011a3485da2928b7fc",
+    "path": "rapp_brainstem/brainstem.py",
+    "sha256": "1a5ad66a320afe6b579a043d96d5affbdfe830ab88308605804ea18a7b3888a5",
+    "size_bytes": 26042
+  },
+  "commit": "822093207218e779056fb3ad3e493f5e44d443ee",
+  "parent": null,
+  "release_ref": "brainstem-v0.1.0",
+  "repository": "kody-w/rapp-installer",
+  "result": "known-good",
+  "schema": "rapp/1:brainstem",
+  "tree": "899c5ffa48b13745d1b82dee5101f6df103c073c",
+  "version": "0.1.0"
+}

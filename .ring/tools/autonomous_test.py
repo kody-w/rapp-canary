@@ -7,12 +7,17 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+
+TOOLS = Path(__file__).resolve().parent
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
 
 import promote_ring
 import render_ring
@@ -193,15 +198,15 @@ def _config_feature(repo: Path) -> None:
 def _storage_feature(repo: Path) -> None:
     path = repo / "rapp_brainstem" / "local_storage.py"
     text = path.read_text(encoding="utf-8")
-    marker = "    def file_exists(self, file_path):"
+    marker = re.search(r"^    def file_exists\(", text, re.MULTILINE)
     addition = (
         '    def pipeline_probe(self):\n'
         '        return "storage-probe-ok"\n\n'
     )
-    if marker not in text:
+    if marker is None:
         raise ScenarioError("storage insertion point not found")
     path.write_text(
-        text.replace(marker, addition + marker, 1),
+        text[:marker.start()] + addition + text[marker.start():],
         encoding="utf-8",
         newline="\n",
     )

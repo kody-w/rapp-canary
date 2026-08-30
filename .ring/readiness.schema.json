@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kody-w.github.io/rapp-canary/schemas/rapp-1-readiness.json",
+  "title": "RAPP/1 Readiness Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "owner",
+    "subject",
+    "runtime",
+    "evidence",
+    "policy",
+    "rollback",
+    "issued_at",
+    "expires_at"
+  ],
+  "properties": {
+    "schema": {
+      "const": "rapp/1:readiness"
+    },
+    "status": {
+      "enum": ["preprod-candidate", "seaworthy", "degraded", "revoked"]
+    },
+    "owner": {"type": "string", "minLength": 1},
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "artifact_sha256",
+        "size_bytes",
+        "format",
+        "version",
+        "brainstem_sha256",
+        "grail_id",
+        "release_scope",
+        "grail_kernel_ref",
+        "grail_kernel_commit",
+        "grail_base_commit",
+        "expected_grail_tree",
+        "beta_repository",
+        "beta_commit"
+      ],
+      "properties": {
+        "artifact": {"type": "string", "minLength": 1},
+        "artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "format": {"const": "tar+gzip"},
+        "version": {"type": "string", "minLength": 1},
+        "brainstem_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "grail_id": {"type": "string", "pattern": "^grail:[0-9a-f]{64}$"},
+        "release_scope": {"const": "https://github.com/kody-w/rapp-canary"},
+        "grail_kernel_ref": {
+          "type": "string",
+          "pattern": "^refs/tags/brainstem-v[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "grail_kernel_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "grail_base_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "expected_grail_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "beta_repository": {"const": "kody-w/rapp-beta"},
+        "beta_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_id",
+        "model_policy",
+        "data_classification",
+        "kernel_entrypoint",
+        "grail_id",
+        "release_scope"
+      ],
+      "properties": {
+        "model_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "not": {"const": "auto"}
+        },
+        "model_policy": {"const": "observed-at-qualification"},
+        "data_classification": {"const": "synthetic"},
+        "kernel_entrypoint": {"const": "rapp_brainstem/brainstem.py"},
+        "grail_id": {"type": "string", "pattern": "^grail:[0-9a-f]{64}$"},
+        "release_scope": {"const": "https://github.com/kody-w/rapp-canary"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "qualification",
+        "beta_preflight",
+        "soak",
+        "control_plane",
+        "rapp1_authority",
+        "required_checks",
+        "controls"
+      ],
+      "properties": {
+        "qualification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "workflow", "run_id", "url", "commit"],
+          "properties": {
+            "repository": {"const": "kody-w/rapp-canary"},
+            "workflow": {"const": "Test Pre-Grail Rings"},
+            "run_id": {"type": "string", "pattern": "^[0-9]+$"},
+            "url": {
+              "type": "string",
+              "pattern": "^https://github\\.com/kody-w/rapp-canary/actions/runs/[0-9]+$"
+            },
+            "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+          }
+        },
+        "beta_preflight": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "workflow", "run_id", "url"],
+          "properties": {
+            "repository": {"const": "kody-w/rapp-beta"},
+            "workflow": {"const": "preflight"},
+            "run_id": {"type": "string", "pattern": "^[0-9]+$"},
+            "url": {
+              "type": "string",
+              "pattern": "^https://github\\.com/kody-w/rapp-beta/actions/runs/[0-9]+$"
+            }
+          }
+        },
+        "soak": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "url",
+            "sha256",
+            "schema",
+            "result",
+            "started_at",
+            "completed_at",
+            "canary_commit",
+            "beta_commit",
+            "qualification_run_id",
+            "model_id",
+            "probe_interval_seconds",
+            "health_probe_count",
+            "authenticated_chat_count",
+            "authenticated_chat_times",
+            "probes",
+            "checks"
+          ],
+          "properties": {
+            "schema": {"const": "rapp/1:soak"},
+            "result": {"const": "passed"},
+            "url": {
+              "type": "string",
+              "pattern": "^https://raw\\.githubusercontent\\.com/kody-w/rapp-canary/[0-9a-f]{40}/\\.ring/soak/[A-Za-z0-9._-]+\\.json$"
+            },
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "started_at": {"type": "string", "format": "date-time"},
+            "completed_at": {"type": "string", "format": "date-time"},
+            "canary_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "beta_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "qualification_run_id": {"type": "string", "pattern": "^[0-9]+$"},
+            "probe_interval_seconds": {
+              "type": "integer",
+              "minimum": 15,
+              "maximum": 300
+            },
+            "health_probe_count": {"type": "integer", "minimum": 2},
+            "authenticated_chat_count": {"const": 2},
+            "authenticated_chat_times": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {"type": "string", "format": "date-time"}
+            },
+            "probes": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["at", "status", "model_id"],
+                "properties": {
+                  "at": {"type": "string", "format": "date-time"},
+                  "status": {"const": "ok"},
+                  "model_id": {"type": "string", "minLength": 1}
+                }
+              }
+            },
+            "model_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+              "not": {"const": "auto"}
+            },
+            "checks": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "authenticated_chat",
+                "state_isolated",
+                "health_stable",
+                "no_critical_events"
+              ],
+              "properties": {
+                "authenticated_chat": {"const": true},
+                "state_isolated": {"const": true},
+                "health_stable": {"const": true},
+                "no_critical_events": {"const": true}
+              }
+            }
+          }
+        },
+        "control_plane": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "commit", "workflow"],
+          "properties": {
+            "repository": {"const": "kody-w/rapp-canary"},
+            "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "workflow": {"const": ".github/workflows/stage-preprod.yml"}
+          }
+        },
+        "rapp1_authority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "revision",
+            "commit",
+            "spec_path",
+            "spec_sha256",
+            "constitution_path",
+            "constitution_sha256",
+            "immutable_grail_section",
+            "constitutional_article"
+          ],
+          "properties": {
+            "repository": {"const": "kody-w/rapp-1"},
+            "revision": {"const": "rev-10"},
+            "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "spec_path": {"const": "SPEC.md"},
+            "spec_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "constitution_path": {"const": "CONSTITUTION.md"},
+            "constitution_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "immutable_grail_section": {"const": "11.1"},
+            "constitutional_article": {"const": "15"}
+          }
+        },
+        "preprod": {
+          "type": "object",
+          "required": ["environment", "run_id", "url", "approval_authority"],
+          "properties": {
+            "environment": {"const": "preprod"},
+            "run_id": {"type": "string", "pattern": "^[0-9]+$"},
+            "url": {"type": "string", "minLength": 1},
+            "approval_authority": {"const": "github-environment:preprod"}
+          }
+        },
+        "required_checks": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "controls": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status", "evidence"],
+            "properties": {
+              "status": {
+                "enum": ["passed", "pending", "failed", "unknown"]
+              },
+              "evidence": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["same_artifact_to_grail", "human_approval_required"],
+      "properties": {
+        "same_artifact_to_grail": {"const": true},
+        "human_approval_required": {"const": true}
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "commit",
+        "brainstem_sha256",
+        "frame_sha256",
+        "history_sha256",
+        "history_count",
+        "history_tip"
+      ],
+      "properties": {
+        "ref": {"type": "string", "minLength": 1},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "brainstem_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "frame_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "history_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "history_count": {"type": "integer", "minimum": 1},
+        "history_tip": {
+          "type": "string",
+          "pattern": "^brainstem-v[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "deployment_materials": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "sha256", "size_bytes", "platform", "python_version", "architecture"],
+        "properties": {
+          "file": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "size_bytes": {"type": "integer", "minimum": 1},
+          "platform": {"enum": ["linux", "macos", "windows"]},
+          "python_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+          "architecture": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "issued_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "sealed_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "seaworthy"}}
+      },
+      "then": {
+        "required": ["sealed_at", "deployment_materials"],
+        "properties": {
+          "evidence": {"required": ["preprod"]}
+        }
+      }
+    }
+  ]
+}

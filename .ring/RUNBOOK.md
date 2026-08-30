@@ -55,6 +55,12 @@ git -C $DST commit -m "promote: ${SRC#rapp-} -> ${DST#rapp-}" && git -C $DST pus
 Each ring's preflight runs on the main push — a broken promotion is a red X
 within minutes.
 
+`promote_ring.py` also enforces the constitutional Grail pin before and after
+every edge. A source ring with changed `rapp_brainstem/brainstem.py` is
+`kernel-drift` and cannot move right. Move the behavior into an external agent,
+adapter, configuration, frame, or control-plane component; then restore and
+retest the pinned kernel bytes.
+
 ## 3. QUALIFY (whole-train, read-only credentials)
 
 ```bash
@@ -78,6 +84,20 @@ gh run watch -R kody-w/rapp-canary                # all four rings + attestation
 
 Soak = days of the maintainer's own usage on ring bytes. A release earns the
 Grail gate by surviving here, not by a green dashboard alone.
+
+After qualification identifies the exact Canary and Beta commits, record a
+credential-free evidence frame from the still-running authenticated soak:
+
+```bash
+SOAK_REF=<qualification-canary-commit> GITHUB_MODEL=<explicit-qualified-model> \
+  .ring/tools/soak.sh start
+.ring/tools/soak.sh evidence \
+  --beta-commit <qualified-beta-commit> \
+  --qualification-run <run-id> \
+  --model-id <explicit-qualified-model> \
+  --output ".ring/soak/<beta-commit>-<model>.json"
+git add .ring/soak && git commit -m "evidence: record qualified soak" && git push
+```
 
 ### The Flight Deck (any machine on Earth, no LAN, no signup)
 
@@ -126,22 +146,92 @@ are installable everywhere via the Flight Deck one-liners, so devices pull
 tests; nothing needs to be enrolled. Windows devices use the Flight Deck's
 `irm | iex` one-liners; a PowerShell probe twin is future work.)
 
-## 5. RELEASE TO GRAIL (the only human-gated step)
+## 5. PREPROD (the seaworthiness gate)
+
+Preprod is a protected GitHub Environment, not another ring. It packages the
+exact qualified Beta payload once, verifies that artifact cross-platform, binds
+it to a `rapp/1:readiness` manifest and rollback `rapp/1:brainstem` frame, then
+requires human approval before sealing it.
+
+The immutable Grail kernel is `rapp_brainstem/brainstem.py` from
+`brainstem-v0.6.16`, SHA-256
+`bd55a7f0bcf5efd3f7966ca39bb146da3c25fda9a0b1ce5ba587919d3c3775f4`.
+If any qualified ring carries different bytes, Preprod reports
+`kernel-drift` and stops. It does not replace the file after tests.
+This implements RAPP/1 rev-10 §11.1 and Protocol Constitution Article 15;
+`preprod-policy.json` pins those authority bytes and the release scope.
+
+See `.ring/PREPROD.md` and `.ring/SEAWORTHINESS-CONSTITUTION.md`.
 
 ```bash
-# 1. verify the qualification run AND stage the exact qualified bytes:
+gh workflow run stage-preprod.yml -R kody-w/rapp-canary --ref main \
+  -f qualification_run_id=<run-id> \
+  -f beta_preflight_run_id=<beta-run-id> \
+  -f rollback_ref=brainstem-vX.Y.Z \
+  -f soak_evidence_url=https://raw.githubusercontent.com/kody-w/rapp-canary/<commit>/.ring/soak/<frame>.json \
+  -f soak_evidence_sha256=<sha256-of-frame> \
+  -f owner=<accountable-team> \
+  -f model_id=<explicit-qualified-model>
+gh run watch -R kody-w/rapp-canary
+.ring/tools/archive_preprod.sh <preprod-run-id>
+```
+
+The workflow and tooling are Canary-owned. Promotion and Grail export exclude
+`.ring/` and `.github/workflows/`, so this control plane cannot alter
+`rapp_brainstem/brainstem.py` or leak into the production payload.
+
+## 6. RELEASE TO GRAIL (the only human-gated step)
+
+```bash
+# 1. download the approved seaworthy-preprod artifact, then verify and stage
+#    those EXACT bytes (never rebuild them):
 git clone https://github.com/kody-w/rapp-installer.git /tmp/grail-release
 git -C /tmp/grail-release checkout -b release/vX.Y.Z
-python3 .ring/tools/grail_gate.py verify --run-id <run-id> --export-to /tmp/grail-release
+python3 -I .ring/tools/preprod_gate.py verify \
+  --artifact /path/to/rapp-preprod-<sha>.tar.gz \
+  --manifest /path/to/seaworthy.json \
+  --material dependency-material-linux=/path/to/dependency-material-linux.tar.gz \
+  --material dependency-material-macos=/path/to/dependency-material-macos.tar.gz \
+  --material dependency-material-windows=/path/to/dependency-material-windows.tar.gz
+python3 -I .ring/tools/preprod_gate.py export \
+  --artifact /path/to/rapp-preprod-<sha>.tar.gz \
+  --manifest /path/to/seaworthy.json \
+  --rollback-frame /path/to/brainstem-history/brainstem-vX.Y.Z.json \
+  --target /tmp/grail-release \
+  --material dependency-material-linux=/path/to/dependency-material-linux.tar.gz \
+  --material dependency-material-macos=/path/to/dependency-material-macos.tar.gz \
+  --material dependency-material-windows=/path/to/dependency-material-windows.tar.gz
+# After testing the staged release branch:
+python3 -I .ring/tools/preprod_gate.py verify-staged-tree \
+  --artifact /path/to/rapp-preprod-<sha>.tar.gz \
+  --manifest /path/to/seaworthy.json \
+  --target /tmp/grail-release \
+  --material dependency-material-linux=/path/to/dependency-material-linux.tar.gz \
+  --material dependency-material-macos=/path/to/dependency-material-macos.tar.gz \
+  --material dependency-material-windows=/path/to/dependency-material-windows.tar.gz
 
-# 2. inspect, test, version, commit (embed the qualification run URL):
+# 2. inspect, test, and commit. VERSION and brainstem.py are already sealed:
 cd /tmp/grail-release && bash tests/test_installer.sh
-echo "X.Y.Z" > rapp_brainstem/VERSION
-for m in install.sh install.ps1 install.cmd install.command; do cp $m docs/$m; done
-git commit -am "release: vX.Y.Z (ring-qualified: <run-url>)"
+git commit -am "release: vX.Y.Z (seaworthy artifact <sha>)"
+RELEASE_COMMIT=$(git rev-parse HEAD)
+python3 -I /path/to/canary/.ring/tools/preprod_gate.py verify-release-commit \
+  --artifact /path/to/rapp-preprod-<sha>.tar.gz \
+  --manifest /path/to/seaworthy.json \
+  --target /tmp/grail-release \
+  --material dependency-material-linux=/path/to/dependency-material-linux.tar.gz \
+  --material dependency-material-macos=/path/to/dependency-material-macos.tar.gz \
+  --material dependency-material-windows=/path/to/dependency-material-windows.tar.gz
 git push -u origin release/vX.Y.Z            # grail preflight: full 7-VM matrix
 # 3. after ALL checks green — the merge itself, per grail RELEASING.md §6:
-git checkout main && git pull && git merge --no-ff release/vX.Y.Z -m "release: vX.Y.Z"
+git checkout main && git pull --ff-only && git merge --no-ff release/vX.Y.Z -m "release: vX.Y.Z"
+python3 -I /path/to/canary/.ring/tools/preprod_gate.py verify-final-merge \
+  --artifact /path/to/rapp-preprod-<sha>.tar.gz \
+  --manifest /path/to/seaworthy.json \
+  --target /tmp/grail-release \
+  --release-commit "$RELEASE_COMMIT" \
+  --material dependency-material-linux=/path/to/dependency-material-linux.tar.gz \
+  --material dependency-material-macos=/path/to/dependency-material-macos.tar.gz \
+  --material dependency-material-windows=/path/to/dependency-material-windows.tar.gz
 git tag -a "brainstem-vX.Y.Z" -m "ring-qualified: <run-url>"
 git push origin main --tags
 # 4. post-release: RELEASING.md §7 smoke + bump kody-w/RAPP KERNEL_PIN or record a skip.
@@ -158,6 +248,8 @@ git remote set-url --push origin DISABLED-push-to-grail-is-a-conscious-release-a
 ```
 
 **Rollback**: grail RELEASING.md §8 — `git revert` on main (protection blocks
-force-pushes; revert needs none), and users pin back with
-`BRAINSTEM_VERSION=X.Y.Z curl ... | bash`. Rehearse the downgrade once per
-release in the preflight sandbox.
+force-pushes; revert needs none), and users pin back with the exact `commit`
+recorded in the selected `rapp/1:brainstem` frame. The human-readable tag is
+verified against that commit, but the incident command does not depend on
+future tag resolution. Rehearse the downgrade once per release in the Preprod
+sandbox.
