@@ -11,7 +11,7 @@
   "max_files": 10000,
   "human_approval_required": true,
   "same_artifact_to_grail": true,
-  "require_pinned_model": true,
+  "require_explicit_model_evidence": true,
   "rapp1_authority": {
     "repository": "kody-w/rapp-1",
     "revision": "rev-10",
@@ -44,7 +44,7 @@
     "immutable-artifact",
     "immutable-grail-kernel",
     "critical-brainstem-hash",
-    "pinned-model-policy",
+    "explicit-model-evidence",
     "sealed-dependency-materials",
     "vulnerability-scan",
     "license-scan",

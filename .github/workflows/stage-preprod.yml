@@ -29,7 +29,7 @@ on:
         required: true
         type: string
       model_id:
-        description: Explicit production model id (auto is forbidden)
+        description: Explicit model qualified by the soak (auto is forbidden)
         required: true
         type: string
       expires_hours:

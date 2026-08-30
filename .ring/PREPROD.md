@@ -59,19 +59,19 @@ gh workflow run stage-preprod.yml -R kody-w/rapp-canary --ref main \
   -f soak_evidence_url=https://raw.githubusercontent.com/kody-w/rapp-canary/<commit>/.ring/soak/<frame>.json \
   -f soak_evidence_sha256=<sha256-of-frame> \
   -f owner=<accountable-team> \
-  -f model_id=<explicit-production-model>
+  -f model_id=<explicit-qualified-model>
 ```
 
 Create the soak frame only after the qualified payload has completed its real
 authenticated soak:
 
 ```bash
-SOAK_REF=<qualification-canary-commit> GITHUB_MODEL=<explicit-production-model> \
+SOAK_REF=<qualification-canary-commit> GITHUB_MODEL=<explicit-qualified-model> \
   .ring/tools/soak.sh start
 .ring/tools/soak.sh evidence \
   --beta-commit <qualified-beta-commit> \
   --qualification-run <green-pre-grail-run> \
-  --model-id <explicit-production-model> \
+  --model-id <explicit-qualified-model> \
   --output ".ring/soak/<beta-commit>-<model>.json"
 git add .ring/soak && git commit -m "evidence: record qualified soak" && git push
 shasum -a 256 ".ring/soak/<beta-commit>-<model>.json"
@@ -80,6 +80,8 @@ shasum -a 256 ".ring/soak/<beta-commit>-<model>.json"
 The URL must name that file at its full 40-character Canary commit. The frame
 binds authenticated start/end chats plus periodic health/model probes across
 the complete interval and contains no credential or model response content.
+The model is an explicit, attested qualification observation—not a claim that
+the frozen Grail prevents a later authorized `/models/set` operation.
 
 The workflow:
 

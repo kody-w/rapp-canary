@@ -80,7 +80,7 @@ REQUIRED_CONTROL_CHECKS = (
     "immutable-artifact",
     "immutable-grail-kernel",
     "critical-brainstem-hash",
-    "pinned-model-policy",
+    "explicit-model-evidence",
     "sealed-dependency-materials",
     "vulnerability-scan",
     "license-scan",
@@ -546,8 +546,8 @@ def _validate_policy(policy: dict) -> None:
         raise PreprodError("policy must require the same artifact to reach Grail")
     if policy.get("human_approval_required") is not True:
         raise PreprodError("policy must require human approval")
-    if policy.get("require_pinned_model") is not True:
-        raise PreprodError("policy must require a pinned model")
+    if policy.get("require_explicit_model_evidence") is not True:
+        raise PreprodError("policy must require explicit model evidence")
     authority = policy.get("rapp1_authority")
     if authority != RAPP1_AUTHORITY_PIN:
         raise PreprodError("invalid RAPP/1 immutable Grail authority")
@@ -795,7 +795,7 @@ def package_candidate(
         "immutable-grail-kernel": [
             f"{grail_kernel['immutable_ref']}:{grail_kernel['sha256']}"
         ],
-        "pinned-model-policy": [f"model:{model_id}"],
+        "explicit-model-evidence": [f"model:{model_id}"],
         "real-auth-soak": [f"sha256:{soak_evidence_sha256}", soak_evidence_url],
         "brainstem-rollback-frame": [
             f"sha256:{brainstem_history.frame_sha256(rollback_frame)}"
@@ -830,6 +830,7 @@ def package_candidate(
         },
         "runtime": {
             "model_id": model_id,
+            "model_policy": "observed-at-qualification",
             "data_classification": "synthetic",
             "kernel_entrypoint": grail_kernel["path"],
             "grail_id": grail_kernel["grail_id"],
@@ -1141,6 +1142,7 @@ def verify_candidate(
             runtime["model_id"],
         )
         or runtime["model_id"].lower() == "auto"
+        or runtime.get("model_policy") != "observed-at-qualification"
         or runtime.get("data_classification") != "synthetic"
         or runtime.get("kernel_entrypoint") != kernel["path"]
         or runtime.get("grail_id") != kernel["grail_id"]

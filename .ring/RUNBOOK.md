@@ -89,12 +89,12 @@ After qualification identifies the exact Canary and Beta commits, record a
 credential-free evidence frame from the still-running authenticated soak:
 
 ```bash
-SOAK_REF=<qualification-canary-commit> GITHUB_MODEL=<explicit-production-model> \
+SOAK_REF=<qualification-canary-commit> GITHUB_MODEL=<explicit-qualified-model> \
   .ring/tools/soak.sh start
 .ring/tools/soak.sh evidence \
   --beta-commit <qualified-beta-commit> \
   --qualification-run <run-id> \
-  --model-id <explicit-production-model> \
+  --model-id <explicit-qualified-model> \
   --output ".ring/soak/<beta-commit>-<model>.json"
 git add .ring/soak && git commit -m "evidence: record qualified soak" && git push
 ```
@@ -171,7 +171,7 @@ gh workflow run stage-preprod.yml -R kody-w/rapp-canary --ref main \
   -f soak_evidence_url=https://raw.githubusercontent.com/kody-w/rapp-canary/<commit>/.ring/soak/<frame>.json \
   -f soak_evidence_sha256=<sha256-of-frame> \
   -f owner=<accountable-team> \
-  -f model_id=<explicit-production-model>
+  -f model_id=<explicit-qualified-model>
 gh run watch -R kody-w/rapp-canary
 .ring/tools/archive_preprod.sh <preprod-run-id>
 ```

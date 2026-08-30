@@ -68,6 +68,7 @@
       "additionalProperties": false,
       "required": [
         "model_id",
+        "model_policy",
         "data_classification",
         "kernel_entrypoint",
         "grail_id",
@@ -80,6 +81,7 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
           "not": {"const": "auto"}
         },
+        "model_policy": {"const": "observed-at-qualification"},
         "data_classification": {"const": "synthetic"},
         "kernel_entrypoint": {"const": "rapp_brainstem/brainstem.py"},
         "grail_id": {"type": "string", "pattern": "^grail:[0-9a-f]{64}$"},
