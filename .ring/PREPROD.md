@@ -179,16 +179,24 @@ python3 -I <canary-checkout>/.ring/tools/preprod_gate.py prepare-runtime \
 
 PORT=7071 python3 -I <canary-checkout>/.ring/tools/preprod_gate.py \
   launch-runtime \
-  --runtime /opt/rapp/releases/<sha> \
-  --evidence /var/log/rapp/kernel-launch.json
+  --artifact /path/to/rapp-preprod-<sha>.tar.gz \
+  --manifest /path/to/seaworthy.json \
+  --state-dir /var/lib/rapp \
+  --evidence /var/log/rapp/kernel-launch.json \
+  --material dependency-material-linux=/path/to/dependency-material-linux.tar.gz \
+  --material dependency-material-macos=/path/to/dependency-material-macos.tar.gz \
+  --material dependency-material-windows=/path/to/dependency-material-windows.tar.gz
 ```
 
 The command verifies provenance for the source, manifest, and every platform
 material; selects the current platform; extracts into a new release directory;
 checks the Python minor version and CPU architecture; and installs only from the
 sealed wheelhouse with `--no-index`. `launch-runtime` reads and verifies the
-kernel once, then streams those exact in-memory bytes to the isolated runtime
-interpreter; it never performs a vulnerable hash-then-path reopen.
+sealed source, manifest, and dependency materials again; rejects conflicting
+persisted model state; reconstructs a fresh ephemeral runtime; reads and
+verifies the kernel once; then streams those exact in-memory bytes to the
+isolated runtime interpreter. It never trusts a previously prepared mutable
+tree or performs a vulnerable hash-then-path reopen.
 
 ## Unknown-unknown strategy
 

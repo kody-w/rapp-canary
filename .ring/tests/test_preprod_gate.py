@@ -282,13 +282,38 @@ class PreprodGateTests(unittest.TestCase):
         os.symlink(sys.executable, python)
         unwritable = self.root / "evidence-directory"
         unwritable.mkdir()
-        with mock.patch.object(GATE.subprocess, "Popen") as popen:
+        prepared = {
+            "source": destination / "src",
+            "venv": destination / "venv",
+            "deployment": destination / "deployment.json",
+            "manifest": json.loads(self.manifest.read_text(encoding="utf-8")),
+            "material_name": "dependency-material-linux",
+            "material_sha256": GATE._sha256(
+                self.materials["dependency-material-linux"]
+            ),
+        }
+        with (
+            mock.patch.object(GATE, "prepare_runtime", return_value=prepared),
+            mock.patch.object(GATE, "verify_grail_kernel_bytes"),
+            mock.patch.object(GATE.subprocess, "Popen") as popen,
+        ):
             process = popen.return_value
             process.stdin = mock.Mock()
             process.pid = 123
             process.poll.return_value = None
             with self.assertRaises(OSError):
-                GATE.launch_runtime(destination, self.policy, unwritable)
+                GATE.launch_runtime(
+                    self.artifact,
+                    self.manifest,
+                    self.root / "failed-launch-state",
+                    self.policy,
+                    {"dependency-material-linux": self.materials["dependency-material-linux"]},
+                    unwritable,
+                    platform_name="linux",
+                    allow_candidate=True,
+                    verify_provenance=False,
+                    now=self.issued + timedelta(hours=1),
+                )
             process.terminate.assert_called_once()
             process.wait.assert_called_once()
 
@@ -303,6 +328,21 @@ class PreprodGateTests(unittest.TestCase):
         policy = json.loads(self.policy.read_text(encoding="utf-8"))
         policy["rapp1_authority"]["revision"] = "rev-999"
         with self.assertRaisesRegex(GATE.PreprodError, "RAPP/1"):
+            GATE._validate_policy(policy)
+
+    def test_policy_cannot_weaken_release_controls(self):
+        for key, value in (
+            ("minimum_soak_minutes", 1),
+            ("max_candidate_age_hours", 720),
+        ):
+            with self.subTest(key=key):
+                policy = json.loads(self.policy.read_text(encoding="utf-8"))
+                policy[key] = value
+                with self.assertRaises(GATE.PreprodError):
+                    GATE._validate_policy(policy)
+        policy = json.loads(self.policy.read_text(encoding="utf-8"))
+        policy["required_checks"] = ["immutable-grail-kernel"]
+        with self.assertRaisesRegex(GATE.PreprodError, "required_checks"):
             GATE._validate_policy(policy)
 
     def test_preprod_control_plane_cannot_enter_the_shared_grail_payload(self):
@@ -370,6 +410,8 @@ class PreprodGateTests(unittest.TestCase):
             source,
         )
         self.assertIn("soak probe history contains an unhealthy interval", source)
+        self.assertIn("belongs to another process; refusing to kill it", source)
+        self.assertIn("stop_owned_process", source)
         self.assertIn('"qualification_run_id": sys.argv[9]', source)
         self.assertNotIn(".copilot_token\"", source.split('value = {', 1)[-1])
 
@@ -865,14 +907,26 @@ class PreprodGateTests(unittest.TestCase):
             {"RAPP_TEST_LAUNCH_MARKER": str(marker)},
         ):
             launch_evidence = self.root / "kernel-launch.json"
-            self.assertEqual(
-                GATE.launch_runtime(
-                    destination,
-                    self.policy,
-                    launch_evidence,
-                ),
-                0,
-            )
+            with mock.patch.object(
+                GATE,
+                "prepare_runtime",
+                return_value=result,
+            ):
+                self.assertEqual(
+                    GATE.launch_runtime(
+                        self.artifact,
+                        self.manifest,
+                        self.root / "candidate-state",
+                        self.policy,
+                        {"dependency-material-linux": self.materials["dependency-material-linux"]},
+                        launch_evidence,
+                        platform_name="linux",
+                        allow_candidate=True,
+                        verify_provenance=False,
+                        now=self.issued + timedelta(hours=1),
+                    ),
+                    0,
+                )
         self.assertEqual(marker.read_text(encoding="utf-8"), "launched")
         evidence = json.loads(launch_evidence.read_text(encoding="utf-8"))
         self.assertEqual(evidence["execution_mode"], "verified-memory-snapshot")
@@ -880,6 +934,27 @@ class PreprodGateTests(unittest.TestCase):
             evidence["grail_id"],
             json.loads(self.policy.read_text(encoding="utf-8"))["grail_kernel"]["grail_id"],
         )
+
+    def test_launch_rejects_persisted_model_drift(self):
+        self.package()
+        state_dir = self.root / "model-drift-state"
+        state_dir.mkdir()
+        (state_dir / ".brainstem_model").write_text(
+            '{"model":"different-model"}\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(GATE.PreprodError, "persisted model"):
+            GATE.launch_runtime(
+                self.artifact,
+                self.manifest,
+                state_dir,
+                self.policy,
+                {"dependency-material-linux": self.materials["dependency-material-linux"]},
+                self.root / "model-drift-launch.json",
+                allow_candidate=True,
+                verify_provenance=False,
+                now=self.issued + timedelta(hours=1),
+            )
 
 
 if __name__ == "__main__":

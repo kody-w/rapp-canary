@@ -421,8 +421,12 @@ jobs:
             export HOME="$RUNNER_TEMP/runtime-home"
             export PORT=17405
             exec python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" \
-              launch-runtime \
-              --runtime "$RUNTIME" \
+              launch-candidate-runtime \
+              --artifact "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" \
+              --manifest "$RUNNER_TEMP/preprod/readiness.json" \
+              --state-dir "$RUNNER_TEMP/launch-state" \
+              --platform "$KEY" \
+              --material "dependency-material-$KEY=$ARCHIVE" \
               --evidence "$RUNNER_TEMP/kernel-launch.json"
           ) > "$RUNNER_TEMP/production-smoke.log" 2>&1 &
           PROD_PID=$!

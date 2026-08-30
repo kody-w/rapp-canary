@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -70,6 +71,30 @@ REQUIRED_MATERIALS = {
 MAX_ARCHIVE_BYTES = 104857600
 MAX_ARCHIVE_FILES = 10000
 MAX_ARCHIVE_UNPACKED_BYTES = 536870912
+MAX_CANDIDATE_AGE_HOURS = 168
+MINIMUM_SOAK_MINUTES = 15
+REQUIRED_CONTROL_CHECKS = (
+    "pre-grail-attestation-chain",
+    "rapp1-immutable-grail-law",
+    "beta-main-preflight",
+    "immutable-artifact",
+    "immutable-grail-kernel",
+    "critical-brainstem-hash",
+    "pinned-model-policy",
+    "sealed-dependency-materials",
+    "vulnerability-scan",
+    "license-scan",
+    "cross-platform-artifact-verification",
+    "fresh-install",
+    "upgrade",
+    "destructive-repair",
+    "live-writer-quiescence",
+    "unrelated-process-survival",
+    "real-auth-soak",
+    "brainstem-rollback-frame",
+    "rollback-ready",
+    "protected-environment-approval",
+)
 SOAK_URL_PATTERN = re.compile(
     r"https://raw\.githubusercontent\.com/kody-w/rapp-canary/"
     r"(?P<commit>[0-9a-f]{40})/\.ring/soak/[A-Za-z0-9._-]+\.json"
@@ -515,7 +540,7 @@ def _validate_policy(policy: dict) -> None:
     if not isinstance(reviewers, int) or reviewers < 1:
         raise PreprodError("preprod must require at least one reviewer")
     soak_minutes = policy.get("minimum_soak_minutes")
-    if not isinstance(soak_minutes, int) or soak_minutes < 1:
+    if not isinstance(soak_minutes, int) or soak_minutes < MINIMUM_SOAK_MINUTES:
         raise PreprodError("invalid minimum_soak_minutes")
     if policy.get("same_artifact_to_grail") is not True:
         raise PreprodError("policy must require the same artifact to reach Grail")
@@ -530,7 +555,7 @@ def _validate_policy(policy: dict) -> None:
     if kernel != GRAIL_KERNEL_PIN:
         raise PreprodError("invalid immutable Grail kernel policy")
     age = policy.get("max_candidate_age_hours")
-    if not isinstance(age, int) or not 1 <= age <= 720:
+    if not isinstance(age, int) or not 1 <= age <= MAX_CANDIDATE_AGE_HOURS:
         raise PreprodError("invalid max_candidate_age_hours")
     if soak_minutes > age * 60:
         raise PreprodError("minimum soak duration exceeds candidate lifetime")
@@ -544,13 +569,7 @@ def _validate_policy(policy: dict) -> None:
         if not isinstance(value, int) or not 1 <= value <= hard_limit:
             raise PreprodError(f"invalid {key}")
     checks = policy.get("required_checks")
-    if (
-        not isinstance(checks, list)
-        or not checks
-        or len(set(checks)) != len(checks)
-        or not all(isinstance(item, str) and item for item in checks)
-        or "immutable-grail-kernel" not in checks
-    ):
+    if checks != list(REQUIRED_CONTROL_CHECKS):
         raise PreprodError("invalid required_checks")
 
 
@@ -1693,7 +1712,86 @@ def _extract_archive(artifact: Path, destination: Path) -> None:
                     pass
 
 
+def _snapshot_regular_file(
+    source: Path,
+    destination: Path,
+    *,
+    max_bytes: int,
+) -> Path:
+    source = source.expanduser().absolute()
+    if source.is_symlink():
+        raise PreprodError(f"release input must not be a symlink: {source}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(source, flags)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > max_bytes:
+            raise PreprodError(f"release input is invalid or too large: {source}")
+        with (
+            os.fdopen(descriptor, "rb", closefd=False) as reader,
+            destination.open("xb") as writer,
+        ):
+            shutil.copyfileobj(reader, writer, length=1024 * 1024)
+            writer.flush()
+            os.fsync(writer.fileno())
+        if destination.stat().st_size != metadata.st_size:
+            raise PreprodError(f"release input changed while snapshotting: {source}")
+        os.chmod(destination, 0o444)
+    finally:
+        os.close(descriptor)
+    return destination
+
+
 def prepare_runtime(
+    artifact: Path,
+    manifest_path: Path,
+    destination: Path,
+    state_dir: Path,
+    policy_path: Path,
+    materials: dict[str, Path],
+    platform_name: str | None = None,
+    verify_provenance: bool = True,
+    install_dependencies: bool = True,
+    allow_candidate: bool = False,
+    now: datetime | None = None,
+) -> dict:
+    with tempfile.TemporaryDirectory(prefix="rapp-release-inputs-") as raw_inputs:
+        inputs = Path(raw_inputs)
+        artifact_snapshot = _snapshot_regular_file(
+            artifact,
+            inputs / "artifact" / artifact.name,
+            max_bytes=MAX_ARCHIVE_BYTES,
+        )
+        manifest_snapshot = _snapshot_regular_file(
+            manifest_path,
+            inputs / "manifest" / manifest_path.name,
+            max_bytes=4 * 1024 * 1024,
+        )
+        material_snapshots = {
+            name: _snapshot_regular_file(
+                path,
+                inputs / "materials" / name / path.name,
+                max_bytes=MAX_ARCHIVE_BYTES,
+            )
+            for name, path in materials.items()
+        }
+        return _prepare_runtime_from_snapshots(
+            artifact_snapshot,
+            manifest_snapshot,
+            destination,
+            state_dir,
+            policy_path,
+            material_snapshots,
+            platform_name=platform_name,
+            verify_provenance=verify_provenance,
+            install_dependencies=install_dependencies,
+            allow_candidate=allow_candidate,
+            now=now,
+        )
+
+
+def _prepare_runtime_from_snapshots(
     artifact: Path,
     manifest_path: Path,
     destination: Path,
@@ -1859,119 +1957,157 @@ def prepare_runtime(
         "source": destination / "src",
         "venv": destination / "venv",
         "deployment": destination / "deployment.json",
+        "manifest": manifest,
+        "material_name": material_name,
+        "material_sha256": _sha256(selected_material),
     }
 
 
 def launch_runtime(
-    runtime: Path,
+    artifact: Path,
+    manifest_path: Path,
+    state_dir: Path,
     policy_path: Path,
+    materials: dict[str, Path],
     evidence_path: Path,
+    *,
+    platform_name: str | None = None,
+    allow_candidate: bool = False,
+    verify_provenance: bool = True,
+    now: datetime | None = None,
 ) -> int:
     policy = _read_json(policy_path)
     _validate_policy(policy)
     kernel = policy["grail_kernel"]
-    runtime = runtime.resolve()
-    deployment = _read_json(runtime / "deployment.json")
-    if (
-        deployment.get("schema")
-        not in {"rapp-seaworthy-deployment/1", "rapp-preprod-deployment/1"}
-        or deployment.get("grail_id") != kernel["grail_id"]
-        or deployment.get("brainstem_sha256") != kernel["sha256"]
-        or deployment.get("kernel_entrypoint") != kernel["path"]
-        or deployment.get("release_scope") != kernel["release_scope"]
-    ):
-        raise PreprodError("runtime deployment record does not match the Grail pin")
-    source_root = (runtime / "src").resolve(strict=True)
-    declared_path = source_root.joinpath(*PurePosixPath(kernel["path"]).parts)
-    current = declared_path
-    while current != source_root:
-        if current.is_symlink():
-            raise PreprodError("kernel entrypoint path contains a symlink")
-        current = current.parent
-    kernel_path = declared_path.resolve(strict=True)
-    try:
-        kernel_path.relative_to(source_root)
-    except ValueError as error:
-        raise PreprodError("kernel entrypoint resolves outside the release root") from error
-    if kernel_path != declared_path:
-        raise PreprodError("kernel entrypoint resolves outside its declared path")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(kernel_path, flags)
-    try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise PreprodError("kernel entrypoint is not a regular file")
-        with os.fdopen(descriptor, "rb", closefd=False) as handle:
-            payload = handle.read()
-    finally:
-        os.close(descriptor)
-    if (
-        len(payload) != kernel["size_bytes"]
-        or hashlib.sha256(payload).hexdigest() != kernel["sha256"]
-        or _grail_id(payload) != kernel["grail_id"]
-    ):
-        raise PreprodError("kernel-drift: runtime entrypoint differs from Grail")
-
-    python = (
-        runtime / "venv" / "Scripts" / "python.exe"
-        if os.name == "nt"
-        else runtime / "venv" / "bin" / "python"
+    raw_state_dir = state_dir.expanduser()
+    if raw_state_dir.is_symlink():
+        raise PreprodError("runtime state directory is invalid")
+    state_dir = raw_state_dir.resolve()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    preliminary_manifest = verify_candidate(
+        artifact,
+        manifest_path,
+        policy_path,
+        now=now,
+        materials=None if allow_candidate else materials,
     )
-    if not python.is_file():
-        raise PreprodError("runtime Python interpreter is missing")
-    environment = os.environ.copy()
-    environment["BRAINSTEM_STATE_DIR"] = str(deployment["state_dir"])
-    environment["GITHUB_MODEL"] = str(deployment["model_id"])
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    process = subprocess.Popen(
-        [
-            str(python),
-            "-I",
-            "-c",
-            KERNEL_BOOTSTRAP,
-            str(kernel_path),
-        ],
-        stdin=subprocess.PIPE,
-        env=environment,
-    )
-    if process.stdin is None:
-        process.kill()
-        raise PreprodError("cannot stream verified kernel bytes to the runtime")
-    previous_handlers = {}
+    model_state = state_dir / ".brainstem_model"
+    if model_state.exists():
+        persisted_model = _read_json(model_state).get("model")
+        if persisted_model != preliminary_manifest["runtime"]["model_id"]:
+            raise PreprodError(
+                "persisted model conflicts with the sealed production model"
+            )
 
-    def forward_signal(signum, _frame):
-        process.send_signal(signum)
-
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        previous_handlers[signum] = signal.signal(signum, forward_signal)
-    try:
-        process.stdin.write(payload)
-        process.stdin.close()
-        _write_json(
-            evidence_path,
-            {
-                "schema": "rapp-kernel-launch/1",
-                "release_scope": kernel["release_scope"],
-                "grail_id": kernel["grail_id"],
-                "artifact_sha256": deployment["artifact_sha256"],
-                "kernel_sha256": kernel["sha256"],
-                "kernel_size_bytes": len(payload),
-                "resolved_kernel_path": str(kernel_path),
-                "execution_mode": "verified-memory-snapshot",
-                "runtime_python": str(python.resolve()),
-                "process_id": process.pid,
-                "verified_at": _format_time(datetime.now(timezone.utc)),
-            },
+    with tempfile.TemporaryDirectory(prefix="rapp-verified-launch-") as raw_snapshot:
+        snapshot = Path(raw_snapshot) / "runtime"
+        prepared = prepare_runtime(
+            artifact,
+            manifest_path,
+            snapshot,
+            state_dir,
+            policy_path,
+            materials,
+            platform_name=platform_name,
+            verify_provenance=verify_provenance,
+            allow_candidate=allow_candidate,
+            now=now,
         )
-        return process.wait()
-    except BaseException:
-        if process.poll() is None:
-            process.terminate()
-            process.wait()
-        raise
-    finally:
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
+        manifest = prepared["manifest"]
+        if model_state.exists():
+            persisted_model = _read_json(model_state).get("model")
+            if persisted_model != manifest["runtime"]["model_id"]:
+                raise PreprodError(
+                    "persisted model conflicts with the sealed production model"
+                )
+        platform_key = platform_name or {
+            "linux": "linux",
+            "darwin": "macos",
+            "win32": "windows",
+        }.get(sys.platform)
+        material_name = prepared["material_name"]
+        kernel_path = (
+            prepared["source"] / PurePosixPath(kernel["path"])
+        ).resolve(strict=True)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(kernel_path, flags)
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise PreprodError("kernel entrypoint is not a regular file")
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                payload = handle.read()
+        finally:
+            os.close(descriptor)
+        if (
+            len(payload) != kernel["size_bytes"]
+            or hashlib.sha256(payload).hexdigest() != kernel["sha256"]
+            or _grail_id(payload) != kernel["grail_id"]
+        ):
+            raise PreprodError("kernel-drift: runtime entrypoint differs from Grail")
+
+        python = (
+            prepared["venv"] / "Scripts" / "python.exe"
+            if os.name == "nt"
+            else prepared["venv"] / "bin" / "python"
+        )
+        if not python.is_file():
+            raise PreprodError("runtime Python interpreter is missing")
+        environment = os.environ.copy()
+        environment["BRAINSTEM_STATE_DIR"] = str(state_dir)
+        environment["GITHUB_MODEL"] = manifest["runtime"]["model_id"]
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        process = subprocess.Popen(
+            [
+                str(python),
+                "-I",
+                "-c",
+                KERNEL_BOOTSTRAP,
+                str(kernel_path),
+            ],
+            stdin=subprocess.PIPE,
+            env=environment,
+        )
+        if process.stdin is None:
+            process.kill()
+            raise PreprodError("cannot stream verified kernel bytes to the runtime")
+        previous_handlers = {}
+
+        def forward_signal(signum, _frame):
+            process.send_signal(signum)
+
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.signal(signum, forward_signal)
+        try:
+            process.stdin.write(payload)
+            process.stdin.close()
+            _write_json(
+                evidence_path,
+                {
+                    "schema": "rapp-kernel-launch/1",
+                    "release_scope": kernel["release_scope"],
+                    "grail_id": kernel["grail_id"],
+                    "artifact_sha256": manifest["subject"]["artifact_sha256"],
+                    "kernel_sha256": kernel["sha256"],
+                    "kernel_size_bytes": len(payload),
+                    "resolved_kernel_path": str(kernel_path),
+                    "execution_mode": "verified-memory-snapshot",
+                    "material": material_name,
+                    "material_sha256": prepared["material_sha256"],
+                    "runtime_python": str(python.resolve()),
+                    "process_id": process.pid,
+                    "verified_at": _format_time(datetime.now(timezone.utc)),
+                },
+            )
+            return process.wait()
+        except BaseException:
+            if process.poll() is None:
+                process.terminate()
+                process.wait()
+            raise
+        finally:
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -2061,9 +2197,18 @@ def _parse_args() -> argparse.Namespace:
 
     subparsers.add_parser("verify-policy")
 
+    def add_launch_arguments(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--artifact", type=Path, required=True)
+        command.add_argument("--manifest", type=Path, required=True)
+        command.add_argument("--state-dir", type=Path, required=True)
+        command.add_argument("--platform", choices=("linux", "macos", "windows"))
+        command.add_argument("--evidence", type=Path, required=True)
+        command.add_argument("--material", action="append", default=[])
+
     launch = subparsers.add_parser("launch-runtime")
-    launch.add_argument("--runtime", type=Path, required=True)
-    launch.add_argument("--evidence", type=Path, required=True)
+    add_launch_arguments(launch)
+    launch_candidate = subparsers.add_parser("launch-candidate-runtime")
+    add_launch_arguments(launch_candidate)
 
     def add_runtime_arguments(command: argparse.ArgumentParser) -> None:
         command.add_argument("--artifact", type=Path, required=True)
@@ -2219,11 +2364,17 @@ def main() -> int:
         elif args.command == "verify-policy":
             _validate_policy(_read_json(args.policy.resolve()))
             print("PREPROD POLICY VERIFIED — immutable RAPP/1 and Grail pins")
-        elif args.command == "launch-runtime":
+        elif args.command in {"launch-runtime", "launch-candidate-runtime"}:
             return launch_runtime(
-                args.runtime.resolve(),
+                args.artifact.resolve(),
+                args.manifest.resolve(),
+                args.state_dir,
                 args.policy.resolve(),
+                _parse_material_specs(args.material),
                 args.evidence.resolve(),
+                platform_name=args.platform,
+                allow_candidate=args.command == "launch-candidate-runtime",
+                verify_provenance=args.command == "launch-runtime",
             )
         elif args.command in {"prepare-runtime", "prepare-candidate-runtime"}:
             result = prepare_runtime(

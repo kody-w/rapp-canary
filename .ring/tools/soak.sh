@@ -24,30 +24,83 @@ RING_DIR="$(dirname "$HERE")"
 say() { echo "[soak] $1"; }
 die() { echo "[soak] ✗ $1" >&2; exit 1; }
 
+pid_matches() {
+    local pid="$1" needle="$2" command
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    command=$(ps -p "$pid" -o command= 2>/dev/null) || return 1
+    case "$command" in
+        *"$needle"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 pid_alive() {
     [ -f "$SOAK_HOME/soak.pid" ] || return 1
-    kill -0 "$(cat "$SOAK_HOME/soak.pid")" 2>/dev/null
+    pid_matches \
+        "$(cat "$SOAK_HOME/soak.pid")" \
+        "$SOAK_HOME/render/rapp_brainstem/brainstem.py"
+}
+
+stop_owned_process() {
+    local pid_file="$1" needle="$2" label="$3" pid
+    [ -f "$pid_file" ] || return 0
+    pid=$(cat "$pid_file")
+    [[ "$pid" =~ ^[0-9]+$ ]] || {
+        echo "[soak] ✗ invalid $label pid file; refusing cleanup" >&2
+        return 1
+    }
+    if ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$pid_file"
+        return 0
+    fi
+    pid_matches "$pid" "$needle" || {
+        echo "[soak] ✗ $label pid $pid belongs to another process; refusing to kill it" >&2
+        return 1
+    }
+    kill "$pid"
+    for _ in $(seq 1 50); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            wait "$pid" 2>/dev/null || true
+            rm -f "$pid_file"
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "[soak] ✗ $label pid $pid did not exit; pid file retained" >&2
+    return 1
 }
 
 do_stop() {
-    if [ -f "$SOAK_HOME/monitor.pid" ]; then
-        kill "$(cat "$SOAK_HOME/monitor.pid")" 2>/dev/null || true
-        wait "$(cat "$SOAK_HOME/monitor.pid")" 2>/dev/null || true
-        rm -f "$SOAK_HOME/monitor.pid"
-    fi
-    if pid_alive; then
-        kill "$(cat "$SOAK_HOME/soak.pid")" 2>/dev/null || true
-        sleep 1
-        say "stopped pid $(cat "$SOAK_HOME/soak.pid")"
+    local server_pid=""
+    [ ! -f "$SOAK_HOME/soak.pid" ] \
+        || server_pid=$(cat "$SOAK_HOME/soak.pid")
+    stop_owned_process \
+        "$SOAK_HOME/monitor.pid" \
+        "rapp-soak-monitor:$SOAK_HOME" \
+        "monitor" || return 1
+    if [ -n "$server_pid" ]; then
+        stop_owned_process \
+            "$SOAK_HOME/soak.pid" \
+            "$SOAK_HOME/render/rapp_brainstem/brainstem.py" \
+            "server" || return 1
+        say "stopped pid $server_pid"
     else
         say "not running"
     fi
-    rm -f "$SOAK_HOME/soak.pid"
 }
 
 do_start() {
     local auth="${1:-auth}"
-    pid_alive && die "already running (pid $(cat "$SOAK_HOME/soak.pid")) — use refresh"
+    if [ -f "$SOAK_HOME/soak.pid" ]; then
+        if pid_alive; then
+            die "already running (pid $(cat "$SOAK_HOME/soak.pid")) — use refresh"
+        fi
+        if kill -0 "$(cat "$SOAK_HOME/soak.pid")" 2>/dev/null; then
+            die "stale soak pid belongs to another process; refusing to overwrite it"
+        fi
+        rm -f "$SOAK_HOME/soak.pid"
+    fi
     [[ "$SOAK_PROBE_INTERVAL" =~ ^[0-9]+$ ]] \
         && [ "$SOAK_PROBE_INTERVAL" -ge 15 ] \
         && [ "$SOAK_PROBE_INTERVAL" -le 300 ] \
@@ -114,6 +167,12 @@ do_start() {
             > "$SOAK_HOME/soak.log" 2>&1 &
         echo $! > "$SOAK_HOME/soak.pid"
     )
+    trap 'status=$?; if [ "$status" -ne 0 ]; then
+        stop_owned_process "$SOAK_HOME/monitor.pid" "rapp-soak-monitor:$SOAK_HOME" "monitor" || true
+        stop_owned_process "$SOAK_HOME/soak.pid" "$SOAK_HOME/render/rapp_brainstem/brainstem.py" "server" || true
+    fi' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     echo "$sha $started_at" > "$SOAK_HOME/soaking-since"
 
     for _ in $(seq 1 20); do
@@ -183,38 +242,46 @@ pathlib.Path(sys.argv[9]).write_text(
 )
 PY
             rm -f "$SOAK_HOME/start-chat.json"
-            (
-                while kill -0 "$(cat "$SOAK_HOME/soak.pid")" 2>/dev/null; do
-                    sleep "$SOAK_PROBE_INTERVAL"
-                    probe_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-                    if curl -fsS "http://localhost:$SOAK_PORT/health" \
-                        -o "$SOAK_HOME/monitor-health.json" 2>/dev/null; then
-                        python3 -I - \
-                            "$SOAK_HOME/monitor-health.json" "$probe_at" \
-                            "$SOAK_HOME/probes.jsonl" <<'PY'
+            python3 -I -c '
 import json
+import os
 import pathlib
 import sys
+import time
+import urllib.request
+from datetime import datetime, timezone
 
-with open(sys.argv[1], encoding="utf-8") as handle:
-    health = json.load(handle)
-with pathlib.Path(sys.argv[3]).open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(
-        {
-            "at": sys.argv[2],
-            "status": health.get("status"),
-            "model_id": health.get("model"),
-        },
-        sort_keys=True,
-    ) + "\n")
-PY
-                    else
-                        printf '{"at":"%s","model_id":null,"status":"unavailable"}\n' \
-                            "$probe_at" >> "$SOAK_HOME/probes.jsonl"
-                    fi
-                done
-            ) >/dev/null 2>&1 &
+server_pid = int(sys.argv[2])
+url = sys.argv[3]
+interval = int(sys.argv[4])
+output = pathlib.Path(sys.argv[5])
+while True:
+    try:
+        os.kill(server_pid, 0)
+    except OSError:
+        break
+    time.sleep(interval)
+    record = {
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "status": "unavailable",
+        "model_id": None,
+    }
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            health = json.load(response)
+        record["status"] = health.get("status")
+        record["model_id"] = health.get("model")
+    except Exception:
+        pass
+    with output.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+' "rapp-soak-monitor:$SOAK_HOME" \
+                "$(cat "$SOAK_HOME/soak.pid")" \
+                "http://localhost:$SOAK_PORT/health" \
+                "$SOAK_PROBE_INTERVAL" \
+                "$SOAK_HOME/probes.jsonl" >/dev/null 2>&1 &
             echo $! > "$SOAK_HOME/monitor.pid"
+            trap - EXIT INT TERM
             say "✓ serving canary@${sha:0:12} on http://localhost:$SOAK_PORT"
             return 0
         fi
@@ -293,9 +360,10 @@ PY
     local health="$SOAK_HOME/evidence-health.json"
     local chat="$SOAK_HOME/evidence-chat.json"
     if [ -f "$SOAK_HOME/monitor.pid" ]; then
-        kill "$(cat "$SOAK_HOME/monitor.pid")" 2>/dev/null || true
-        wait "$(cat "$SOAK_HOME/monitor.pid")" 2>/dev/null || true
-        rm -f "$SOAK_HOME/monitor.pid"
+        stop_owned_process \
+            "$SOAK_HOME/monitor.pid" \
+            "rapp-soak-monitor:$SOAK_HOME" \
+            "monitor" || die "could not stop the verified soak monitor"
     fi
     curl -fsS "http://localhost:$SOAK_PORT/health" -o "$health" \
         || die "cannot record evidence: /health failed"

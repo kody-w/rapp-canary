@@ -39,6 +39,7 @@
   },
   "required_checks": [
     "pre-grail-attestation-chain",
+    "rapp1-immutable-grail-law",
     "beta-main-preflight",
     "immutable-artifact",
     "immutable-grail-kernel",
