@@ -397,6 +397,10 @@ class PreprodGateTests(unittest.TestCase):
             ROOT / ".github" / "workflows" / "test-pre-grail-rings.yml"
         ).read_text(encoding="utf-8").replace("\r\n", "\n")
         self.assertIn("verify-kernel --repo", qualification)
+        autonomous = (
+            ROOT / ".github" / "workflows" / "autonomous-pre-grail.yml"
+        ).read_text(encoding="utf-8").replace("\r\n", "\n")
+        self.assertIn("Enforce immutable Grail kernel", autonomous)
 
     def test_soak_tool_records_live_candidate_bound_evidence(self):
         source = (
