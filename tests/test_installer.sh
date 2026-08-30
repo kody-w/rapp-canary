@@ -236,6 +236,15 @@ else
     fail "requirements.txt missing"
 fi
 
+GRAIL_BRAINSTEM_SHA256=$(python3 -c \
+    'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+    "$REPO_ROOT/rapp_brainstem/brainstem.py")
+if [ "$GRAIL_BRAINSTEM_SHA256" = "bd55a7f0bcf5efd3f7966ca39bb146da3c25fda9a0b1ce5ba587919d3c3775f4" ]; then
+    pass "brainstem.py matches immutable Grail v0.6.16"
+else
+    fail "brainstem.py drifted from immutable Grail v0.6.16"
+fi
+
 for endpoint in "/chat" "/health" "/login" "/models" "/agents" "/version"; do
     if grep -q "\"$endpoint\"" "$REPO_ROOT/rapp_brainstem/brainstem.py"; then
         pass "brainstem.py has $endpoint endpoint"
