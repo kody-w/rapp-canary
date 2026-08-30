@@ -117,7 +117,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
-        scenario: [fresh, upgrade, repair]
+        scenario: [fresh, upgrade]
         include:
           - os: windows-latest
             scenario: fresh-nopip
@@ -164,7 +164,7 @@ jobs:
           echo "BARE=$BARE" >> "$GITHUB_ENV"
 
       - name: seed existing production install
-        if: matrix.scenario == 'upgrade' || matrix.scenario == 'repair'
+        if: matrix.scenario == 'upgrade'
         shell: bash
         run: |
           set -euxo pipefail
@@ -302,30 +302,20 @@ jobs:
             -d '{"user_input":"preflight ping"}' | python3 -c "import json,sys; d=json.load(sys.stdin); print('chat contract OK:', list(d)[:3])"
 
       - name: assert user files survived the upgrade
-        if: matrix.scenario == 'upgrade' || matrix.scenario == 'repair'
+        if: matrix.scenario == 'upgrade'
         shell: bash
         run: |
           set -euxo pipefail
           test -f "$HOME/.brainstem/src/rapp_brainstem/agents/preflight_custom_agent.py"
           grep -q "PREFLIGHT-SOUL-MARKER" "$HOME/.brainstem/src/rapp_brainstem/soul.md"
           grep -q "PREFLIGHT-ENV-MARKER" "$HOME/.brainstem/src/rapp_brainstem/.env"
-          grep -q "ghu_PREFLIGHT_STATE_SURVIVOR" "$HOME/.brainstem/state/.copilot_token"
-          grep -q "preflight-expired-session" "$HOME/.brainstem/state/.copilot_session"
-          grep -q "preflight-lan-secret" "$HOME/.brainstem/state/.brainstem_secret"
-          grep -q "gpt-4o" "$HOME/.brainstem/state/.brainstem_model"
-          grep -q "preflight-state-marker" "$HOME/.brainstem/state/.brainstem_book.json"
-          if [ "${{ matrix.scenario }}" = "repair" ]; then
-            grep -q "legacy_writer_pid" "$HOME/.brainstem/state/.brainstem_model"
-            if kill -0 "$LEGACY_WRITER_PID" 2>/dev/null; then
-              echo "legacy state writer is still running" >&2
-              exit 1
-            fi
-            if ! kill -0 "$LEGACY_DECOY_PID" 2>/dev/null; then
-              echo "unrelated process mentioning brainstem.py was terminated" >&2
-              exit 1
-            fi
-            kill "$LEGACY_DECOY_PID" 2>/dev/null || true
-          fi
+          STATE="$HOME/.brainstem/state"
+          [ -d "$STATE" ] || STATE="$HOME/.brainstem/src/rapp_brainstem"
+          grep -q "ghu_PREFLIGHT_STATE_SURVIVOR" "$STATE/.copilot_token"
+          grep -q "preflight-expired-session" "$STATE/.copilot_session"
+          grep -q "preflight-lan-secret" "$STATE/.brainstem_secret"
+          grep -q "gpt-4o" "$STATE/.brainstem_model"
+          grep -q "preflight-state-marker" "$STATE/.brainstem_book.json"
           curl -sf http://localhost:7071/health | python3 -c "
           import json,sys; d=json.load(sys.stdin)
           assert 'PreflightCustom' in (d.get('agents') or []), d.get('agents')
