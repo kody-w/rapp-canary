@@ -22,6 +22,45 @@ brainstem       # start the server → localhost:7071
 
 ---
 
+## Install Brainstem + RAR from Scout or Copilot CLI
+
+RAPP Installer follows the same plugin-marketplace pattern used by Microsoft
+Power CAT Skills:
+
+| Plugin identity | Purpose |
+|---|---|
+| `rapp@brainstem` | Install and verify Brainstem, then install RAR |
+| `rapp@rar` | Operate RAR, skills, exports, and callback bootstrap |
+
+```bash
+copilot plugin marketplace add kody-w/rapp-installer
+copilot plugin install rapp@brainstem
+```
+
+Claude Code uses the same marketplace:
+
+```bash
+claude plugin marketplace add kody-w/rapp-installer
+claude plugin install rapp@brainstem
+```
+
+Or ask Scout:
+
+```text
+Add the kody-w/rapp-installer marketplace and install
+rapp@brainstem. Then install my local Brainstem and RAR.
+```
+
+The `rapp-bootstrap` skill installs and verifies Brainstem, then registers the
+`kody-w/RAR` marketplace and installs `rapp@rar`. Start a new conversation
+afterward so Scout or Copilot CLI discovers the RAR skill manager.
+
+The `rapp@x` identity is governed by
+[MARKETPLACE_CHARTER.md](MARKETPLACE_CHARTER.md) and RAR Constitution Article
+XXV. The same manifests are also loadable by Claude Code.
+
+---
+
 ## Or: Start with the Cloud Backend (Hippocampus)
 
 Want persistent memory, Azure Functions, and a path to Copilot Studio? Skip the brainstem and go straight to Tier 2:
@@ -51,7 +90,7 @@ The brainstem is a Flask server that connects to GitHub Copilot's API for LLM in
 ├── brainstem.py       # the server
 ├── soul.md            # personality (system prompt)
 ├── agents/            # auto-discovered tools
-│   └── hacker_news_agent.py
+│   └── hello_agent.py
 ├── local_storage.py   # local-first storage shim
 └── .env               # config (model, paths, port)
 ```
@@ -83,9 +122,9 @@ class WeatherAgent(BasicAgent):
         return f"It's sunny in {city}!"
 ```
 
-### Install Community Agents
+### Connect Remote Agent Repos
 
-The chat UI has a **community agent browser** (RAR — the RAPP Agent Registry): browse the pinned registry and install agents with one click. Every install is SHA-256-verified against the pinned registry revision before any code lands in `agents/`. Missing pip dependencies are auto-installed.
+The chat UI has a **Sources** panel — paste any GitHub repo URL with an `agents/` folder and the brainstem hot-loads them. Missing pip dependencies are auto-installed.
 
 ---
 
@@ -131,7 +170,7 @@ All config via `.env` (see `.env.example`):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GITHUB_TOKEN` | auto-detected via `gh` | GitHub PAT or Copilot token |
-| `GITHUB_MODEL` | `auto` | `auto` picks the best model your account offers (highest Claude Haiku, else Sonnet, else `gpt-4o`); or pin a specific id |
+| `GITHUB_MODEL` | `gpt-4o` | Model ([GitHub Models](https://github.com/marketplace/models)) |
 | `SOUL_PATH` | `./soul.md` | Path to your soul file |
 | `AGENTS_PATH` | `./agents` | Path to your agents directory |
 | `PORT` | `7071` | Server port |
@@ -144,6 +183,7 @@ All config via `.env` (see `.env.example`):
 | `/health` | GET | Status, model, loaded agents, token state |
 | `/login` | POST | Start GitHub device code OAuth flow |
 | `/models` | GET | List available models |
+| `/repos` | GET | List connected agent repos |
 
 ## Requirements
 

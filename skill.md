@@ -147,8 +147,8 @@ Tell the user:
 >
 > **Try these next:**
 > - Edit `~/.brainstem/src/rapp_brainstem/soul.md` to change the personality
-> - Look at `agents/hacker_news_agent.py` as a template for your own agents
-> - Open the community agent browser (RAR) in the chat UI to install more agents
+> - Look at `agents/hello_agent.py` as a template for your own agents
+> - Open the Sources panel in the chat UI to connect remote agent repos
 >
 > **When you're ready to give this a cloud body, say "deploy to Azure" and I'll walk you through Tier 2.**
 
@@ -279,13 +279,8 @@ az role assignment create --assignee $FUNC_IDENTITY \
 
 ### Step 10: Deploy the Function
 
-The cloud function code is CommunityRAPP (an Azure Functions project) — NOT
-`rapp_brainstem`, which is the local Flask server and has no `host.json`;
-publishing it would fail here, after the Azure resources are already billing.
-
 ```bash
-git clone --depth 1 https://github.com/kody-w/CommunityRAPP.git /tmp/community-rapp
-cd /tmp/community-rapp
+cd ~/.brainstem/src/rapp_brainstem
 func azure functionapp publish $FUNC_NAME --build remote
 ```
 

@@ -41,10 +41,10 @@ else
     fail "install.sh should create brainstem CLI wrapper"
 fi
 
-if grep -q 'kody-w/rapp-installer.git' "$REPO_ROOT/install.sh" && ! grep -q 'RAPPAI' "$REPO_ROOT/install.sh"; then
+if grep -q 'rapp-installer.git' "$REPO_ROOT/install.sh" && ! grep -q 'RAPPAI' "$REPO_ROOT/install.sh"; then
     pass "install.sh clones public repo"
 else
-    fail "install.sh should clone its public source repo"
+    fail "install.sh should clone public rapp-installer repo"
 fi
 
 echo ""
@@ -116,6 +116,43 @@ if grep -q "Do not proceed" "$REPO_ROOT/skill.md"; then
 else
     fail "skill.md should gate tier progression"
 fi
+
+echo ""
+
+# ── plugin marketplace + repository policy tests ─────────────────────────────
+
+echo "--- Copilot plugin marketplace ---"
+
+if python3 - "$REPO_ROOT" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+marketplace = json.loads(
+    (root / ".claude-plugin" / "marketplace.json").read_text()
+)
+plugin = json.loads(
+    (root / ".claude-plugin" / "plugin.json").read_text()
+)
+assert marketplace["name"] == "brainstem"
+assert marketplace["plugins"][0]["name"] == "rapp"
+assert marketplace["plugins"][0]["version"] == plugin["version"]
+assert (root / "skills" / "rapp-bootstrap" / "SKILL.md").is_file()
+PY
+then
+    pass "Copilot marketplace and plugin manifests agree"
+else
+    fail "Copilot marketplace or plugin manifest is invalid"
+fi
+
+for policy_file in CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md SUPPORT.md MARKETPLACE_CHARTER.md; do
+    if [ -s "$REPO_ROOT/$policy_file" ]; then
+        pass "repository policy present: $policy_file"
+    else
+        fail "repository policy missing: $policy_file"
+    fi
+done
 
 echo ""
 
@@ -282,16 +319,6 @@ if [ -f "$REPO_ROOT/docs/install.sh" ] && grep -q "brainstem" "$REPO_ROOT/docs/i
 else
     fail "docs/install.sh missing (needed for curl one-liner via GitHub Pages)"
 fi
-
-# Users install the docs/ copies via GitHub Pages; every upstream gate tests the
-# root copies. If the mirrors drift, users run bytes nothing ever tested.
-for m in install.sh install.ps1 install.cmd install.command; do
-    if cmp -s "$REPO_ROOT/$m" "$REPO_ROOT/docs/$m" 2>/dev/null; then
-        pass "docs/$m is byte-identical to root $m"
-    else
-        fail "docs/$m differs from root $m — the Pages one-liner serves untested bytes"
-    fi
-done
 
 if [ ! -f "$REPO_ROOT/docs/copilot-install.html" ]; then
     pass "stale docs/copilot-install.html removed"

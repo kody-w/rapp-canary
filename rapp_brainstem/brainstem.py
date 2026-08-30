@@ -14,8 +14,6 @@ GET  /health  Status, model, loaded agents, token state
 """
 
 import os
-import errno
-import shutil
 import sys
 import json
 import re
@@ -31,10 +29,6 @@ import hmac
 import functools
 import tempfile
 import ipaddress
-try:
-    import fcntl
-except ImportError:  # Windows
-    fcntl = None
 import hashlib
 import platform
 from datetime import datetime, timezone
@@ -84,9 +78,9 @@ _ALLOWED_HOSTS.update(
 # the network at /<dirname>/<file>. index.html is served explicitly by the / route.
 app = Flask(__name__, static_folder=None)
 
-# CORS: allow only localhost origins (any port), not "*". Capability-bearing
-# routes still require exact-origin or the LAN secret; CORS alone never grants
-# authority. The bundled UI uses same-origin fetches.
+# CORS: allow only localhost origins (any port), not "*". The bundled local UI is
+# same-origin with its own fetches; this stops other websites from scripting the
+# brainstem inside a victim's browser.
 _LOCALHOST_ORIGIN_RE = re.compile(
     r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$", re.IGNORECASE
 )
@@ -352,21 +346,11 @@ def _is_foreign_browser_request():
     CORS controls whether browser JavaScript can read a response; it does not stop
     form posts or other simple requests from reaching loopback. Origin and
     Sec-Fetch-Site let us reject those side effects before a route runs.
-
-    When Origin is present it must match this exact server origin. Different
-    loopback hosts are not interchangeable: another process can own [::1]:7071
-    while this server owns 127.0.0.1:7071. The bundled UI avoids that ambiguity by
-    using relative, same-origin requests.
-
-    A bare `Sec-Fetch-Site: cross-site` with NO Origin is still refused, for every
-    method. It is tempting to argue a cross-site GET is harmless because the reply
-    is unreadable without CORS - it is not: some GETs here are sensitive (/agents
-    lists them, the voice and login routes act), and test_security_hardening.py
-    pins exactly that. Unreadable is not the same as harmless.
     """
     origin = (request.headers.get("Origin") or "").rstrip("/")
-    if origin:
-        return origin != request.host_url.rstrip("/")
+    expected_origin = request.host_url.rstrip("/")
+    if origin and origin != expected_origin:
+        return True
     return (request.headers.get("Sec-Fetch-Site") or "").lower() == "cross-site"
 
 
@@ -416,17 +400,8 @@ def _require_secret(fn):
     def _wrapped(*args, **kwargs):
         if _is_foreign_browser_request() or not _is_loopback(request.remote_addr):
             if not _has_valid_secret():
-                # Record WHICH branch refused. Without the origin and the
-                # fetch-site the log cannot say why a denial happened, so 300+
-                # of them could be diagnosed only by re-probing a live server.
-                _tlog("auth.secret_denied", {
-                    "route": request.path,
-                    "remote": request.remote_addr,
-                    "origin": request.headers.get("Origin"),
-                    "sfs": request.headers.get("Sec-Fetch-Site"),
-                    "host": request.host,
-                    "method": request.method,
-                }, level="warn")
+                _tlog("auth.secret_denied",
+                      {"route": request.path, "remote": request.remote_addr}, level="warn")
                 return jsonify({
                     "error": "Forbidden: this endpoint requires a valid X-Brainstem-Secret "
                              "header when called from another machine.",
@@ -568,119 +543,7 @@ _default_model_selected = False  # one-shot guard for _auto_select_default_model
 # ── Sticky model persistence ──────────────────────────────────────────────────
 # A model picked in the web UI is remembered here so it stays the default across
 # browser refreshes, server restarts, and for non-browser clients hitting /chat.
-# ── STATE THAT MUST SURVIVE AN UPGRADE ────────────────────────────────────────
-# The installer's repair path replaces a checkout whose .git directory is missing:
-# `rm -rf "$BRAINSTEM_HOME/src"` followed by a fresh clone. It carefully preserves
-# soul.md, .env, custom agents and .brainstem_data across that — but everything else
-# written next to brainstem.py went with the old tree. That included the SIGN-IN.
-#
-# So a person whose install needed repair could be signed out, have their LAN secret
-# regenerated (locking out every client that had the old one), and lose the model
-# they had picked — with no message explaining any of it.
-#
-# State now lives beside the checkout rather than inside it, where no install step
-# reaches. An existing file in the old in-tree location is COPIED forward on first
-# use — copied, not moved, so an older brainstem still running against the same
-# install keeps working — which means nobody has to sign in again to receive the fix.
-_STATE_NAMES = (
-    ".copilot_token",
-    ".copilot_session",
-    ".brainstem_secret",
-    ".brainstem_model",
-    ".brainstem_book.json",
-)
-_STATE_MIGRATION_MARKER = ".legacy-state-migrated-v1"
-
-
-def _state_dir():
-    d = os.environ.get("BRAINSTEM_STATE_DIR")
-    if not d:
-        d = os.path.join(os.path.expanduser("~"), ".brainstem", "state")
-    try:
-        os.makedirs(d, exist_ok=True)
-    except Exception:
-        # An unwritable home is not a reason to lose the process: fall back to the old
-        # in-tree location, which at least works until the next upgrade.
-        return os.path.dirname(os.path.abspath(__file__))
-    return d
-
-
-def _copy_state_file_atomically(source, destination):
-    """Copy one legacy state file without exposing a partial destination."""
-    fd, temporary = tempfile.mkstemp(
-        prefix=f".{os.path.basename(destination)}.migrate-",
-        dir=os.path.dirname(destination),
-    )
-    os.close(fd)
-    try:
-        shutil.copy2(source, temporary)
-        try:
-            os.chmod(temporary, 0o600)
-        except OSError:
-            pass
-        os.replace(temporary, destination)
-    finally:
-        try:
-            if os.path.exists(temporary):
-                os.remove(temporary)
-        except OSError:
-            pass
-
-
-def _mark_legacy_state_migrated(state_dir):
-    marker = os.path.join(state_dir, _STATE_MIGRATION_MARKER)
-    fd, temporary = tempfile.mkstemp(
-        prefix=f".{_STATE_MIGRATION_MARKER}.",
-        dir=state_dir,
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write("1\n")
-        try:
-            os.chmod(temporary, 0o600)
-        except OSError:
-            pass
-        os.replace(temporary, marker)
-    finally:
-        try:
-            if os.path.exists(temporary):
-                os.remove(temporary)
-        except OSError:
-            pass
-
-
-def _migrate_legacy_state(state_dir):
-    """Copy the complete legacy state set once, then make absence authoritative."""
-    legacy_dir = os.path.dirname(os.path.abspath(__file__))
-    if os.path.abspath(state_dir) == legacy_dir:
-        return False
-    marker = os.path.join(state_dir, _STATE_MIGRATION_MARKER)
-    if os.path.exists(marker):
-        return True
-    try:
-        for name in _STATE_NAMES:
-            source = os.path.join(legacy_dir, name)
-            destination = os.path.join(state_dir, name)
-            if os.path.isfile(source) and not os.path.lexists(destination):
-                _copy_state_file_atomically(source, destination)
-        _mark_legacy_state_migrated(state_dir)
-        return True
-    except Exception as exc:
-        print(f"[brainstem] Could not migrate legacy state: {exc}")
-        return False
-
-
-def _state_path(name):
-    state_dir = _state_dir()
-    migrated = _migrate_legacy_state(state_dir)
-    destination = os.path.join(state_dir, name)
-    legacy = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
-    if not migrated and not os.path.exists(destination) and os.path.exists(legacy):
-        return legacy
-    return destination
-
-
-_model_file = _state_path(".brainstem_model")
+_model_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".brainstem_model")
 
 def _load_sticky_model():
     """Return the user's last manually-selected model id (persisted), or None."""
@@ -955,7 +818,7 @@ def _fetch_copilot_models():
 _flight_log = []
 _flight_log_lock = threading.Lock()
 _FLIGHT_LOG_MAX = 2000
-_flight_log_file = _state_path(".brainstem_book.json")
+_flight_log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".brainstem_book.json")
 
 def _tlog(event_type, data=None, level="info"):
     """Append an event to the flight recorder."""
@@ -1018,12 +881,12 @@ def _start_tlog_autosave():
 # GitHub Copilot GitHub App client ID — produces ghu_ tokens that work with Copilot exchange API
 # Note: Ov23ctDVkRmgkPke0Mmm is an OAuth App that produces gho_ tokens — those get 404 from Copilot
 COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
-_token_file = _state_path(".copilot_token")
-_copilot_cache_file = _state_path(".copilot_session")
+_token_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".copilot_token")
+_copilot_cache_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".copilot_session")
 # Per-install secret guarding LAN (non-loopback) access to code-loading / state-
 # changing routes. Stored 0600 NEXT TO the token files (same dir logic), generated on
 # first need, printed to the console once so the operator can hand it to LAN clients.
-_secret_file = _state_path(".brainstem_secret")
+_secret_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".brainstem_secret")
 BRAINSTEM_SECRET = None
 
 
@@ -1233,9 +1096,6 @@ _copilot_token_lock = threading.Lock()
 # moment the account gains access the next attempt self-heals. Re-populated at startup
 # by _fetch_copilot_models(), so it survives restarts without a disk file.
 _no_copilot_access = {"username": None, "at": 0}
-# How long a rejected credential stays marked bad before we re-test it. Long
-# enough to stop a retry storm, short enough that a transient 403 self-heals.
-_INVALID_CREDENTIAL_TTL = 300
 _invalid_github_credential = {"fingerprint": None, "status": None, "at": 0}
 
 def _set_no_copilot(username):
@@ -1267,18 +1127,10 @@ def _clear_invalid_github_credential():
 
 def _github_credential_is_invalid(token):
     fingerprint = _invalid_github_credential.get("fingerprint")
-    if not (token and fingerprint):
-        return False
-    # The `at` timestamp was recorded from the start and never read, so this flag
-    # was sticky for the life of the process. It is set on any 401/403/404 - and a
-    # 403 is routinely transient (rate limit, proxy, entitlement still landing).
-    # A good credential could therefore be marked dead until restart, which is one
-    # of the ways "I am signed in but it says I am not" happened. Honour it now:
-    # the flag's job is to stop us hammering GitHub, not to be permanent.
-    if time.time() - float(_invalid_github_credential.get("at") or 0) > _INVALID_CREDENTIAL_TTL:
-        _clear_invalid_github_credential()
-        return False
-    return hmac.compare_digest(fingerprint, _github_token_fingerprint(token))
+    return bool(
+        token and fingerprint
+        and hmac.compare_digest(fingerprint, _github_token_fingerprint(token))
+    )
 
 def _invalidate_copilot_token():
     """Drop the cached Copilot API token (memory + disk) so the next
@@ -1371,17 +1223,7 @@ def _get_copilot_token_locked():
     
     # 4. If error, the GitHub token may have expired — try refreshing it
     if resp.status_code in (401, 403, 404):
-        # Say what actually happens, not what we wish happened. This line used to
-        # claim trying_refresh=True unconditionally, so 53 consecutive failures in
-        # the live log all reported a refresh attempt that never occurred - which
-        # is precisely why the real cause stayed invisible during support.
-        can_refresh = bool((_read_token_file() or {}).get("refresh_token"))
-        _tlog("auth.copilot_exchange_failed",
-              {"status": resp.status_code, "trying_refresh": can_refresh},
-              level="warn")
-        if not can_refresh:
-            _tlog("auth.refresh_unavailable",
-                  {"reason": "device-flow credential carries no refresh_token"}, level="warn")
+        _tlog("auth.copilot_exchange_failed", {"status": resp.status_code, "trying_refresh": True}, level="warn")
         refreshed = refresh_github_token()
         if refreshed:
             exchange_github_token = refreshed
@@ -1452,7 +1294,6 @@ def _get_copilot_token_locked():
 
 _pending_login = {}
 _login_bg_thread = None
-_login_bg_lock = threading.Lock()
 _login_result = {}  # Written by bg poll thread, read by /login/poll endpoint
 _pending_login_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".copilot_pending")
 
@@ -1485,10 +1326,6 @@ def _load_pending_login():
     except Exception:
         pass
 
-# A device code lives ~900s; a poll interval past this eats the code itself.
-_LOGIN_MAX_INTERVAL = 30
-
-
 def start_device_code_login(force_new=False):
     """Start GitHub device code OAuth flow. Returns user_code and verification_uri.
     
@@ -1501,7 +1338,6 @@ def start_device_code_login(force_new=False):
     if not force_new and _pending_login and time.time() < _pending_login.get("expires_at", 0):
         _tlog("login.reuse_code", {"user_code": _pending_login["user_code"], "expires_in": int(_pending_login["expires_at"] - time.time())})
         print(f"[brainstem] Reusing existing device code (expires in {int(_pending_login['expires_at'] - time.time())}s)")
-        _start_bg_poll()
         return {
             "user_code": _pending_login["user_code"],
             "verification_uri": _pending_login["verification_uri"],
@@ -1526,7 +1362,6 @@ def start_device_code_login(force_new=False):
         "verification_uri": data["verification_uri"],
         "interval": data.get("interval", 5),
         "expires_at": time.time() + data.get("expires_in", 900),
-        "started_at": time.time(),
     }
     _save_pending_login()
     _tlog("login.device_code_started", {"user_code": data["user_code"]})
@@ -1540,86 +1375,13 @@ def start_device_code_login(force_new=False):
         "verification_uri": data["verification_uri"],
     }
 
-_poll_lock_fh = None
-_poll_lock_owner = None
-
-
-def _claim_the_poller():
-    """Become the one process polling this device code, or decline.
-
-    Several brainstems can share one install directory - on this machine two
-    LaunchAgents did exactly that. They then share .copilot_pending, so each
-    polls the SAME device code, GitHub answers slow_down to all of them, and
-    each ratchets its own interval until the code expires unredeemed. The user
-    experiences that as "signing in doesn't work".
-
-    An advisory flock is the right tool: it is released automatically if the
-    holder crashes or is killed, so a dead brainstem cannot wedge sign-in for
-    the live one. Losing the race is NOT an error - that process simply lets
-    its sibling do the polling and picks up the saved token from disk.
-    """
-    global _poll_lock_fh, _poll_lock_owner
-    if _poll_lock_fh is not None:
-        return _poll_lock_owner == threading.get_ident()
-    if fcntl is None:  # Windows: single-poller is best-effort in-process only
-        return True
-    # Opening and locking are split deliberately. Folding them into one try meant
-    # a PermissionError or EMFILE from open() - OSError, caught first - was
-    # reported as "another brainstem is polling", so no poll thread ever started
-    # and the sign-in silently expired. Only a refused flock means contention.
-    try:
-        fh = open(_state_path(".copilot_pending.lock"), "a+")
-    except Exception as e:
-        _tlog("login.poll_lock_unavailable", {"error": str(e)[:120]}, level="warn")
-        return True  # cannot lock -> poll anyway; never block a sign-in
-    try:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError as e:
-        try:
-            fh.close()
-        except Exception:
-            pass
-        if e.errno in (errno.EACCES, errno.EAGAIN):
-            return False  # genuinely held by a sibling
-        _tlog("login.poll_lock_unavailable", {"error": str(e)[:120]}, level="warn")
-        return True  # unsupported/broken flock must not silently block sign-in
-    except Exception as e:
-        try:
-            fh.close()
-        except Exception:
-            pass
-        _tlog("login.poll_lock_unavailable", {"error": str(e)[:120]}, level="warn")
-        return True
-    _poll_lock_fh = fh
-    _poll_lock_owner = threading.get_ident()
-    return True
-
-
-def _release_the_poller():
-    global _poll_lock_fh, _poll_lock_owner
-    if _poll_lock_fh is not None and _poll_lock_owner != threading.get_ident():
-        return
-    fh, _poll_lock_fh = _poll_lock_fh, None
-    _poll_lock_owner = None
-    if fh is not None:
-        try:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
-        try:
-            fh.close()
-        except Exception:
-            pass
-
-
 def _start_bg_poll():
     """Start a background thread that polls GitHub for device code completion."""
     global _login_bg_thread
-    with _login_bg_lock:
-        if _login_bg_thread and _login_bg_thread.is_alive():
-            return  # Already running
-        _login_bg_thread = threading.Thread(target=_bg_poll_loop, daemon=True)
-        _login_bg_thread.start()
+    if _login_bg_thread and _login_bg_thread.is_alive():
+        return  # Already running
+    _login_bg_thread = threading.Thread(target=_bg_poll_loop, daemon=True)
+    _login_bg_thread.start()
 
 def _bg_poll_loop():
     """Background loop: polls GitHub for the device code token.
@@ -1628,32 +1390,6 @@ def _bg_poll_loop():
     reads _login_result instead of calling poll_device_code() directly,
     which eliminates the race condition between bg thread and client poll.
     """
-    global _login_result
-    deferred_logged = False
-    while _pending_login:
-        if _claim_the_poller():
-            try:
-                _bg_poll_forever()
-            finally:
-                _release_the_poller()
-            return
-
-        if not deferred_logged:
-            _tlog("login.poll_deferred", {"reason": "another brainstem is polling this code"})
-            deferred_logged = True
-
-        if _sibling_completed_the_login():
-            _login_result = {"status": "ok", "message": "Authenticated with GitHub Copilot!"}
-            return
-
-        remaining = float((_pending_login or {}).get("expires_at") or 0) - time.time()
-        if remaining <= 0:
-            _login_result = {"status": "expired", "error": "Login code expired. Please try again."}
-            return
-        time.sleep(min(2.0, remaining))
-
-
-def _bg_poll_forever():
     global _login_result
     while _pending_login:
         interval = _pending_login.get("interval", 5)
@@ -1723,18 +1459,8 @@ def poll_device_code():
 
     error = data.get("error", "")
     if error == "slow_down":
-        # Honour the interval GitHub hands back; only guess when it sends none.
-        # The ratchet is CAPPED: it used to grow by 5s forever and was persisted
-        # across restarts, so the sleeps ate the device code's 900s lifetime and
-        # the sign-in expired before it could ever be redeemed (observed climbing
-        # 35 -> 70s, twice, each ending in login.code_expired).
-        try:
-            asked = int((data or {}).get("interval") or 0)
-        except (TypeError, ValueError):
-            asked = 0
-        current = _pending_login.get("interval", 5)
-        _pending_login["interval"] = max(1, min(asked or (current + 5), _LOGIN_MAX_INTERVAL))
-        _tlog("login.slow_down", {"interval": _pending_login["interval"]}, level="warn")
+        _tlog("login.slow_down", level="warn")
+        _pending_login["interval"] = _pending_login.get("interval", 5) + 5
         return None
     if error == "authorization_pending":
         return None  # Keep polling
@@ -1911,70 +1637,6 @@ def _quarantine_snapshot():
         ]
 
 
-# Exec'ing every agent file on EVERY /chat and /health request is the expensive
-# part of "agents reload each request". Cache the exec result (the discovered
-# classes) keyed by (mtime_ns, size) — the same signature scheme as the soul
-# cache — so an edited file still reloads instantly, but instantiate FRESH per
-# call so no agent instance state can ever leak between requests.
-_agent_class_cache = {}
-_agent_class_cache_lock = threading.Lock()
-
-
-def _agent_classes_from_file(filepath):
-    """Exec the agent module (unless the cached exec is current) and return its
-    candidate agent classes. Failures are never cached, so a manual fix (e.g.
-    pip-installing a dependency) takes effect on the next request."""
-    try:
-        stat = os.stat(filepath)
-        signature = (stat.st_mtime_ns, stat.st_size)
-    except OSError:
-        signature = None
-    if signature is not None:
-        with _agent_class_cache_lock:
-            entry = _agent_class_cache.get(filepath)
-            if entry and entry["sig"] == signature:
-                return entry["classes"]
-
-    classes = []
-    loaded = False
-    # Try loading, auto-install missing deps, retry once
-    for attempt in range(2):
-        try:
-            mod_name = f"agent_{os.path.basename(filepath).replace('.', '_')}_{id(filepath)}_{attempt}"
-            spec = importlib.util.spec_from_file_location(mod_name, filepath)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            classes = [
-                getattr(mod, attr)
-                for attr in dir(mod)
-                if (
-                    isinstance(getattr(mod, attr), type)
-                    and getattr(mod, attr).__module__ == mod.__name__
-                    and hasattr(getattr(mod, attr), "perform")
-                    and attr not in ("BasicAgent", "object")
-                    and not attr.startswith("_")
-                )
-            ]
-            loaded = True
-            break  # success
-        except ModuleNotFoundError as e:
-            missing = _extract_package_name(e)
-            # Only retry if the install actually succeeds. A package that can't be
-            # installed is remembered (in _auto_install) so we don't re-run pip — a
-            # 60s-timeout subprocess — on every single /chat and /health request.
-            if missing and attempt == 0 and _auto_install(missing, _declared_requirements(filepath)):
-                continue  # retry after a successful install
-            print(f"[brainstem] Failed to load {filepath}: {e}")
-            break
-        except Exception as e:
-            print(f"[brainstem] Failed to load {filepath}: {e}")
-            break
-    if loaded and signature is not None:
-        with _agent_class_cache_lock:
-            _agent_class_cache[filepath] = {"sig": signature, "classes": classes}
-    return classes
-
-
 def _load_agent_from_file(filepath):
     """Load agent classes from a single .py file. Returns dict of name→instance.
     Auto-installs missing pip packages and shims cloud deps to local storage."""
@@ -1987,35 +1649,57 @@ def _load_agent_from_file(filepath):
     brainstem_dir = os.path.dirname(os.path.abspath(__file__))
     if brainstem_dir not in sys.path:
         sys.path.insert(0, brainstem_dir)
-
+    
     _register_shims()
-
-    for cls in _agent_classes_from_file(filepath):
+    
+    # Try loading, auto-install missing deps, retry once
+    for attempt in range(2):
         try:
-            instance = cls()
+            mod_name = f"agent_{os.path.basename(filepath).replace('.', '_')}_{id(filepath)}_{attempt}"
+            spec = importlib.util.spec_from_file_location(mod_name, filepath)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            for attr in dir(mod):
+                cls = getattr(mod, attr)
+                if (
+                    isinstance(cls, type)
+                    and cls.__module__ == mod.__name__
+                    and hasattr(cls, "perform")
+                    and attr not in ("BasicAgent", "object")
+                    and not attr.startswith("_")
+                ):
+                    instance = cls()
+                    # Hot-load boundary: a tool-illegal name or malformed metadata
+                    # would ship into the tools array and 400 every /chat. On a
+                    # violation, quarantine (skip) this class; healthy classes in the
+                    # same file/sweep keep loading.
+                    reason = _validate_agent_instance(instance)
+                    if reason:
+                        _quarantine_agent(filepath, cls.__name__, reason)
+                        continue
+                    if instance.name in agents or instance.name in duplicate_names:
+                        duplicate_names.add(instance.name)
+                        agents.pop(instance.name, None)
+                        _quarantine_agent(
+                            filepath,
+                            cls.__name__,
+                            f"duplicate agent name {instance.name!r} within one file",
+                        )
+                        continue
+                    agents[instance.name] = instance
+            break  # success
+        except ModuleNotFoundError as e:
+            missing = _extract_package_name(e)
+            # Only retry if the install actually succeeds. A package that can't be
+            # installed is remembered (in _auto_install) so we don't re-run pip — a
+            # 60s-timeout subprocess — on every single /chat and /health request.
+            if missing and attempt == 0 and _auto_install(missing):
+                continue  # retry after a successful install
+            print(f"[brainstem] Failed to load {filepath}: {e}")
+            break
         except Exception as e:
-            # One failing constructor must not silently drop the remaining
-            # classes in the file — record it and keep loading the rest.
-            _quarantine_agent(filepath, cls.__name__, f"constructor raised: {e}")
-            continue
-        # Hot-load boundary: a tool-illegal name or malformed metadata
-        # would ship into the tools array and 400 every /chat. On a
-        # violation, quarantine (skip) this class; healthy classes in the
-        # same file/sweep keep loading.
-        reason = _validate_agent_instance(instance)
-        if reason:
-            _quarantine_agent(filepath, cls.__name__, reason)
-            continue
-        if instance.name in agents or instance.name in duplicate_names:
-            duplicate_names.add(instance.name)
-            agents.pop(instance.name, None)
-            _quarantine_agent(
-                filepath,
-                cls.__name__,
-                f"duplicate agent name {instance.name!r} within one file",
-            )
-            continue
-        agents[instance.name] = instance
+            print(f"[brainstem] Failed to load {filepath}: {e}")
+            break
     return agents
 
 
@@ -2122,47 +1806,11 @@ def _extract_package_name(error):
 # unresolvable agent import doesn't run pip (a 60s-timeout subprocess) on every request.
 _failed_installs = set()
 
-# Gate refusals already printed once, so per-request reloads don't spam the log.
-_refused_installs = set()
 
-# '# requires: beautifulsoup4, feedparser' — an agent file's explicit dependency
-# declaration, the author's signature that these exact pip names are intended.
-_REQUIRES_DECL_RE = re.compile(
-    r"^#\s*requires:\s*([A-Za-z0-9._\-\s,]+?)\s*$", re.MULTILINE | re.IGNORECASE)
-
-
-def _declared_requirements(filepath):
-    """pip package names the agent file declares via '# requires:' lines."""
-    try:
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            head = f.read(8192)
-    except OSError:
-        return frozenset()
-    declared = set()
-    for match in _REQUIRES_DECL_RE.finditer(head):
-        declared.update(
-            part.strip().lower() for part in match.group(1).split(",") if part.strip())
-    return frozenset(declared)
-
-
-def _auto_install(package, declared=frozenset()):
+def _auto_install(package):
     """Auto-install a pip package. Returns True on success. A package that fails is
-    remembered and never retried (returns False immediately next time).
-
-    Typosquat gate: a bare `import requets` used to pip-install the literal
-    (typo'd) name — running an arbitrary PyPI package's setup.py and persisting
-    it in the venv. Only install names from the curated import→package map or
-    ones the agent file itself declares with a '# requires: <package>' line."""
+    remembered and never retried (returns False immediately next time)."""
     if package in _failed_installs:
-        return False
-    package_lower = package.lower()
-    curated = {name.lower() for name in _PIP_MAP.values()}
-    if package_lower not in curated and package_lower not in declared:
-        if package_lower not in _refused_installs:
-            _refused_installs.add(package_lower)
-            print(f"[brainstem] NOT auto-installing undeclared package '{package}'. "
-                  f"If the agent really needs it, add '# requires: {package}' to the "
-                  f"agent file or install it yourself: pip install {package}")
         return False
     print(f"[brainstem] Auto-installing dependency: {package}")
     try:
@@ -2220,10 +1868,6 @@ _TIMEOUT_USER_MSG = (
 _STREAM_INTERRUPTED_USER_MSG = (
     "The model's response was interrupted before it finished. Try again."
 )
-
-# After this many failed fallback-model attempts, surface the error instead of
-# serially sweeping every remaining model (each is a fresh 60s-timeout call).
-_FALLBACK_ATTEMPT_CAP = 3
 
 
 def call_copilot(messages, tools=None):
@@ -2285,16 +1929,11 @@ def call_copilot(messages, tools=None):
         error_detail = resp.text[:500] if resp.text else "No details"
         _tlog("api.error", {"model": MODEL, "status": resp.status_code, "detail": error_detail[:300]}, level="error")
         print(f"[brainstem] API error {resp.status_code} with model '{MODEL}': {error_detail}")
-        # On 400/429/5xx, try a bounded set of other models before giving up.
-        # Seed the dedupe from body["model"] (this request's model), not the
-        # global MODEL — a mid-request /models/set would otherwise let the
-        # just-failed model be retried. Cap the sweep: an all-models serial
-        # sweep on a deterministic 400 could hang a request for many minutes.
+        # On 400/429/5xx, cycle through other available models before giving up
         if resp.status_code in (400, 429, 500, 502, 503):
-            tried = {body["model"]}
-            attempts = 0
+            tried = {MODEL}
             fallback_ids = [m["id"] for m in AVAILABLE_MODELS
-                            if m["id"] != body["model"] and m.get("available", True)]
+                            if m["id"] != MODEL and m.get("available", True)]
             # Try the universal gpt-4o safety net first.
             if _SAFETY_NET_MODEL in fallback_ids:
                 fallback_ids.remove(_SAFETY_NET_MODEL)
@@ -2302,10 +1941,6 @@ def call_copilot(messages, tools=None):
             for fallback_model in fallback_ids:
                 if fallback_model in tried:
                     continue
-                if attempts >= _FALLBACK_ATTEMPT_CAP:
-                    print(f"[brainstem] Fallback cap ({_FALLBACK_ATTEMPT_CAP}) reached — giving up")
-                    break
-                attempts += 1
                 tried.add(fallback_model)
                 print(f"[brainstem] Retrying with {fallback_model}...")
                 body["model"] = fallback_model
@@ -2362,39 +1997,6 @@ def call_copilot(messages, tools=None):
     # from MODEL when the fallback loop above had to switch models. Return it so
     # callers can surface a silent substitution instead of hiding it.
     return result, body["model"]
-
-# Seconds between SSE comment heartbeats while a blocking upstream call runs
-# inside /chat/stream. Must stay well under stream_matrix.py's 35s dead-stream
-# rule — the whole point is that a healthy-but-slow fallback keeps bytes moving.
-_STREAM_HEARTBEAT_SECS = 10
-
-
-def _blocking_call_with_heartbeat(fn, *args, **kwargs):
-    """Run a blocking upstream call in a worker thread, yielding SSE comment
-    frames (": ping") while it runs. The non-streaming fallback inside
-    /chat/stream otherwise emits zero bytes for the entire call — long enough
-    to trip every dead-stream watchdog while the request is actually healthy.
-    Use via `yield from`; returns fn's result, re-raises fn's exception. SSE
-    comment frames are ignored by EventSource and all three in-repo parsers."""
-    holder = {}
-
-    def _worker():
-        try:
-            holder["result"] = fn(*args, **kwargs)
-        except BaseException as exc:
-            holder["error"] = exc
-
-    worker = threading.Thread(target=_worker, daemon=True)
-    worker.start()
-    while True:
-        worker.join(_STREAM_HEARTBEAT_SECS)
-        if not worker.is_alive():
-            break
-        yield ": ping\n\n"
-    if "error" in holder:
-        raise holder["error"]
-    return holder["result"]
-
 
 # ── Streaming LLM call ───────────────────────────────────────────────────────
 #
@@ -2571,17 +2173,6 @@ def call_copilot_stream(messages, tools=None, model=None):
 # ── Agent execution ───────────────────────────────────────────────────────────
 
 
-# Memory agents are cloud-parity code whose user_guid parameter partitions
-# storage per user. Locally there is exactly one user: a model-invented guid
-# would silo the memory in a per-guid store that ContextMemory.system_context
-# (which reads the shared store) can never surface again. Strip it so every
-# memory lands where injection finds it. Documented in the root CLAUDE.md.
-_MEMORY_AGENT_STRIP_ARGS = {
-    "ManageMemory": ("user_guid",),
-    "ContextMemory": ("user_guid",),
-}
-
-
 def run_tool_calls(tool_calls, agents, session_id=None):
     results = []
     logs = []
@@ -2609,9 +2200,6 @@ def run_tool_calls(tool_calls, agents, session_id=None):
                 "content": result
             })
             continue
-
-        for strip_arg in _MEMORY_AGENT_STRIP_ARGS.get(fn_name, ()):
-            args.pop(strip_arg, None)
 
         print(f"[brainstem] {fn_name} args: {json.dumps(args)[:200]}")
 
@@ -2934,8 +2522,7 @@ def chat_stream():
                 # Fall back to non-streaming when the model rejected streaming or the
                 # stream produced nothing usable (no content and no tool_calls).
                 if round_msg is None or (not round_msg.get("content") and not round_msg.get("tool_calls")):
-                    response, responded_model = yield from _blocking_call_with_heartbeat(
-                        call_copilot, messages, tools=tools)
+                    response, responded_model = call_copilot(messages, tools=tools)
                     round_msg = response["choices"][0]["message"]
                     round_from_fallback = True
                     # Emit the whole content as one delta so the client still renders
@@ -2983,8 +2570,7 @@ def chat_stream():
                         reply = "".join(collected).strip()
                     answer_streamed = bool(collected) or answer_streamed
                 except StreamingUnsupported:
-                    final_response, responded_model = yield from _blocking_call_with_heartbeat(
-                        call_copilot, messages, tools=None)
+                    final_response, responded_model = call_copilot(messages, tools=None)
                     reply = (final_response["choices"][0]["message"].get("content") or "").strip()
                     answer_streamed = False
                     if reply:
@@ -3079,24 +2665,6 @@ def login():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def _sibling_completed_the_login():
-    """True when another brainstem redeemed the device code we are waiting on.
-
-    Compares the token's saved_at against when THIS login started, so a token
-    left over from a previous sign-in can never be mistaken for this one's
-    success - which matters most when the user is re-authenticating.
-    """
-    global _pending_login
-    started = float((_pending_login or {}).get("started_at") or 0)
-    saved = float((_read_token_file() or {}).get("saved_at") or 0)
-    if not (saved and started and saved >= started):
-        return False
-    _tlog("login.completed_by_sibling", {})
-    _pending_login = {}
-    _save_pending_login()
-    return True
-
-
 @app.route("/login/poll", methods=["POST"])
 @_require_secret
 def login_poll():
@@ -3109,14 +2677,6 @@ def login_poll():
     # Check if bg thread has completed (or errored)
     if _login_result:
         return jsonify(_login_result.copy())
-
-    # A SIBLING may have completed it. Only one brainstem polls a device code;
-    # the others never write _login_result, so without this they sit at "pending"
-    # until their own copy of expires_at passes and then report "Login code
-    # expired" - after a sign-in that actually SUCCEEDED. Whichever window the
-    # user happens to be looking at would be a coin flip.
-    if _pending_login and _sibling_completed_the_login():
-        return jsonify({"status": "ok", "message": "Authenticated with GitHub Copilot!"})
 
     # Check if code has expired
     if _pending_login and time.time() >= _pending_login.get("expires_at", 0):
@@ -3332,7 +2892,6 @@ def voice_config_save():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/voice/export", methods=["POST"])
-@_require_secret
 def voice_export():
     """Generate and return a password-protected voice.zip for download."""
     data = request.get_json(force=True, silent=True)
@@ -3614,7 +3173,6 @@ def health():
             "agents": list(agents.keys()),
             "quarantined": _quarantine_snapshot(),
             "auth_error": "invalid_credentials" if invalid_credential else None,
-            "brainstem_dir": os.path.dirname(os.path.abspath(__file__)),
         })
 
 @app.route("/debug/auth", methods=["GET"])
@@ -3680,27 +3238,19 @@ def diagnostics_export():
     with _flight_log_lock:
         events = list(_flight_log)
 
-    # The filename invites sharing ("share with an admin") — scrub events with
-    # the same pass /diagnostics/report uses so device codes, session ids,
-    # caller IPs, and home paths never leave the machine raw.
-    events = [_scrub_diagnostic_value(event) for event in events]
-
     # Build the book
     github_token = get_github_token()
     book = {
         "title": "RAPP Brainstem Flight Recorder",
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "version": VERSION,
-        # Scrubbed like events: soul/agents paths carry the user's home dir
-        # (auth_state stays as built — it is already reduced to booleans and a
-        # 4-char prefix, and the key-based scrubber would redact it wholesale).
-        "config": _scrub_diagnostic_value({
+        "config": {
             "model": MODEL,
             "soul_path": SOUL_PATH,
             "agents_path": AGENTS_PATH,
             "port": PORT,
             "voice_mode": VOICE_MODE,
-        }),
+        },
         "auth_state": {
             "github_token_exists": github_token is not None,
             "github_token_prefix": github_token[:4] + "..." if github_token else None,

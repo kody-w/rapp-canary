@@ -226,7 +226,6 @@ def _deletion_feature(repo: Path) -> None:
 
 
 SCENARIOS = {
-    "backend-route": _backend_feature,
     "ui-meta": _ui_feature,
     "agent-addition": _agent_feature,
     "installer-parity": _installer_feature,
@@ -518,6 +517,28 @@ def _promote_scenario(
 def _failure_scenarios(root: Path, config: Path) -> list[dict]:
     root.mkdir(parents=True, exist_ok=True)
     results = []
+
+    kernel_root = root / "kernel-drift"
+    kernel_root.mkdir()
+    canary = _clone_ring(kernel_root, "canary")
+    nightly = _clone_ring(kernel_root, "nightly")
+    _backend_feature(canary)
+    canary_commit = _commit(canary, "test: forbidden Brainstem mutation")
+    try:
+        promote_ring.promote(
+            canary,
+            nightly,
+            "canary",
+            "nightly",
+            canary_commit,
+            _git(nightly, "rev-parse", "HEAD^{commit}"),
+            config,
+        )
+        raise ScenarioError("kernel drift unexpectedly promoted")
+    except promote_ring.preprod_gate.PreprodError as error:
+        if "kernel-drift" not in str(error):
+            raise
+        results.append({"name": "immutable-grail-kernel-drift", "status": "blocked"})
 
     rewrite_root = root / "rewrite-drift"
     rewrite_root.mkdir()
