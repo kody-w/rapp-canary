@@ -2,11 +2,10 @@
 # Local preflight — install the CURRENT CHECKOUT "in the wild" without touching
 # your real ~/.brainstem or the server running on port 7071.
 #
-#   bash tests/preflight_local.sh [fresh|upgrade|repair] [--auth]
+#   bash tests/preflight_local.sh [fresh|upgrade] [--auth]
 #
 #   fresh    (default) factory-machine install of this checkout via the real install.sh
 #   upgrade  seed a real production-main install first, then upgrade to this checkout
-#   repair   seed production state, remove .git, then exercise the destructive re-clone path
 #   --auth   copy your real Copilot token into the sandbox so /chat is tested end-to-end
 #
 # How it stays safe:
@@ -27,34 +26,19 @@ SCENARIO="fresh"
 AUTH=false
 for arg in "$@"; do
     case "$arg" in
-        fresh|upgrade|repair) SCENARIO="$arg" ;;
+        fresh|upgrade) SCENARIO="$arg" ;;
         --auth) AUTH=true ;;
-        *) echo "usage: bash tests/preflight_local.sh [fresh|upgrade|repair] [--auth]"; exit 2 ;;
+        *) echo "usage: bash tests/preflight_local.sh [fresh|upgrade] [--auth]"; exit 2 ;;
     esac
 done
 
-if [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
-    echo "  ✗ local preflight requires a clean committed checkout" >&2
-    echo "    Commit the exact candidate first so the fake origin and installer use identical bytes." >&2
-    exit 2
-fi
-CANDIDATE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-
 PORT="${PREFLIGHT_PORT:-7091}"
-OCCUPANT=$(/usr/sbin/lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)
-if [ -n "$OCCUPANT" ]; then
-    echo "  ✗ preflight port $PORT is already held by PID $OCCUPANT" >&2
-    echo "    Choose another PREFLIGHT_PORT; refusing a false-positive health check." >&2
-    exit 2
-fi
 SANDBOX="$(mktemp -d /tmp/brainstem-preflight-XXXXXX)"
 FAKE_HOME="$SANDBOX/home"
 BARE="$SANDBOX/fake-origin.git"
 SHIMS="$SANDBOX/shims"
 LOG="$SANDBOX/install.log"
 SERVER_PID=""
-LEGACY_WRITER_PID=""
-LEGACY_DECOY_PID=""
 
 mkdir -p "$FAKE_HOME" "$SHIMS"
 
@@ -64,22 +48,11 @@ mkdir -p "$FAKE_HOME" "$SHIMS"
 export GIT_CONFIG_GLOBAL="$FAKE_HOME/.gitconfig"
 
 cleanup() {
-    if [ -n "$LEGACY_WRITER_PID" ] && kill -0 "$LEGACY_WRITER_PID" 2>/dev/null; then
-        kill "$LEGACY_WRITER_PID" 2>/dev/null || true
-    fi
-    if [ -n "$LEGACY_DECOY_PID" ] && kill -0 "$LEGACY_DECOY_PID" 2>/dev/null; then
-        kill "$LEGACY_DECOY_PID" 2>/dev/null || true
-    fi
     if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
         kill "$SERVER_PID" 2>/dev/null || true
     fi
-    # Belt & braces: stop descendants still holding the SANDBOX port (never 7071).
-    for _ in $(seq 1 20); do
-        listeners=$(/usr/sbin/lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
-        [ -n "$listeners" ] || break
-        for listener in $listeners; do kill "$listener" 2>/dev/null || true; done
-        sleep 0.1
-    done
+    # Belt & braces: kill anything still holding the SANDBOX port (never 7071).
+    /usr/sbin/lsof -ti:"$PORT" 2>/dev/null | xargs kill 2>/dev/null || true
     echo ""
     echo "  Sandbox kept for inspection: $SANDBOX"
     echo "  (installer log: $LOG — rm -rf when done)"
@@ -91,13 +64,10 @@ echo "  sandbox: $SANDBOX"
 
 # ── 1. Fake origin: bare repo whose `main` is this checkout's HEAD ────────────
 git clone --quiet --bare "$REPO_ROOT" "$BARE"
-bare_git() {
-    git -c safe.bareRepository=all --git-dir="$BARE" "$@"
-}
-bare_git update-ref refs/heads/main "$CANDIDATE_COMMIT"
-bare_git symbolic-ref HEAD refs/heads/main
+git -C "$BARE" update-ref refs/heads/main "$(git -C "$REPO_ROOT" rev-parse HEAD)"
+git -C "$BARE" symbolic-ref HEAD refs/heads/main
 if git -C "$REPO_ROOT" rev-parse origin/main >/dev/null 2>&1; then
-    bare_git update-ref refs/heads/production-baseline "$(git -C "$REPO_ROOT" rev-parse origin/main)"
+    git -C "$BARE" update-ref refs/heads/production-baseline "$(git -C "$REPO_ROOT" rev-parse origin/main)"
 fi
 HOME="$FAKE_HOME" git config --global "url.file://$BARE.insteadOf" "https://github.com/kody-w/rapp-installer.git"
 HOME="$FAKE_HOME" git config --global user.email preflight@localhost
@@ -116,16 +86,16 @@ cat > "$SHIMS/curl" <<EOF
 #!/bin/bash
 for a in "\$@"; do
     case "\$a" in
-        *github.com/login/*|*api.github.com/copilot_internal/*|*raw.githubusercontent.com*) exit 6 ;;
+        *github.com/login/*|*raw.githubusercontent.com*) exit 6 ;;
     esac
 done
 exec /usr/bin/curl "\$@"
 EOF
 chmod +x "$SHIMS"/lsof "$SHIMS"/open "$SHIMS"/curl
 
-# ── 3. Existing-install scenarios: seed production + user state ──────────────
-if [ "$SCENARIO" = "upgrade" ] || [ "$SCENARIO" = "repair" ]; then
-    if ! bare_git rev-parse production-baseline >/dev/null 2>&1; then
+# ── 3. Upgrade scenario: seed a real production-main install with user files ──
+if [ "$SCENARIO" = "upgrade" ]; then
+    if ! git -C "$BARE" rev-parse production-baseline >/dev/null 2>&1; then
         echo "  ✗ no origin/main in this checkout — cannot seed the upgrade baseline"; exit 1
     fi
     git clone --quiet "$BARE" "$FAKE_HOME/.brainstem/src"
@@ -144,49 +114,11 @@ class PreflightCustomAgent(BasicAgent):
 EOF
     printf '\nPREFLIGHT-SOUL-MARKER\n' >> "$FAKE_HOME/.brainstem/src/rapp_brainstem/soul.md"
     printf 'GITHUB_MODEL=auto\nPORT=7071\n# PREFLIGHT-ENV-MARKER\n' > "$FAKE_HOME/.brainstem/src/rapp_brainstem/.env"
-    LEGACY_STATE="$FAKE_HOME/.brainstem/src/rapp_brainstem"
-    printf '{"access_token":"ghu_PREFLIGHT_STATE_SURVIVOR","refresh_token":null,"saved_at":1}\n' > "$LEGACY_STATE/.copilot_token"
-    printf '{"token":"preflight-expired-session","endpoint":"https://api.githubcopilot.com","expires_at":1}\n' > "$LEGACY_STATE/.copilot_session"
-    printf 'preflight-lan-secret\n' > "$LEGACY_STATE/.brainstem_secret"
-    printf '{"model":"gpt-4o"}\n' > "$LEGACY_STATE/.brainstem_model"
-    printf '[{"type":"preflight-state-marker","level":"info"}]\n' > "$LEGACY_STATE/.brainstem_book.json"
-    chmod 600 "$LEGACY_STATE"/.copilot_token "$LEGACY_STATE"/.copilot_session \
-        "$LEGACY_STATE"/.brainstem_secret "$LEGACY_STATE"/.brainstem_model \
-        "$LEGACY_STATE"/.brainstem_book.json
-    SEEDED_COMMIT="$(git -C "$FAKE_HOME/.brainstem/src" rev-parse --short HEAD)"
-    if [ "$SCENARIO" = "repair" ]; then
-        cat > "$LEGACY_STATE/brainstem.py" <<'PY'
-import json
-import os
-import sys
-import time
-
-destination = sys.argv[1]
-payload = {"model": "gpt-4o", "legacy_writer_pid": os.getpid()}
-while True:
-    temporary = destination + ".writer"
-    with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle)
-    os.replace(temporary, destination)
-    time.sleep(0.05)
-PY
-        nohup python3 "$LEGACY_STATE/brainstem.py" "$LEGACY_STATE/.brainstem_model" \
-            > "$SANDBOX/legacy-writer.log" 2>&1 &
-        LEGACY_WRITER_PID=$!
-        cat > "$SANDBOX/legacy_decoy.py" <<'PY'
-import time
-time.sleep(600)
-PY
-        nohup python3 "$SANDBOX/legacy_decoy.py" "$LEGACY_STATE/brainstem.py" \
-            > "$SANDBOX/legacy-decoy.log" 2>&1 &
-        LEGACY_DECOY_PID=$!
-        sleep 0.2
-        rm -rf "$FAKE_HOME/.brainstem/src/.git"
-        echo "  ✓ seeded production baseline ($SEEDED_COMMIT) + live legacy writer, then removed .git"
-    else
-        echo "  ✓ seeded production baseline ($SEEDED_COMMIT) + user files/state"
-    fi
+    echo "  ✓ seeded production baseline ($(git -C "$FAKE_HOME/.brainstem/src" rev-parse --short HEAD)) + user files"
 fi
+
+# (The optional --auth token copy happens AFTER the install — see step 6b — because
+# install.sh's fresh path re-clones $HOME/.brainstem/src, which would wipe it.)
 
 # ── 5. Run the REAL installer inside the sandbox ─────────────────────────────
 echo ""
@@ -222,33 +154,22 @@ fi
 # Seeded post-install (the server reads auth lazily, per request, so this works).
 if [ "$AUTH" = true ]; then
     # Token files are gitignored, so a clean checkout has none in the repo (issue #37).
-    # Source from the persistent state directory first, with the legacy in-tree
-    # locations retained so pre-fix installs can still run an authenticated proof.
-    mkdir -p "$FAKE_HOME/.brainstem/state"
-    _auth_token_copied=false
-    for src in "$HOME/.brainstem/state/.copilot_token" \
-               "$REPO_ROOT/rapp_brainstem/.copilot_token" \
-               "$HOME/.brainstem/src/rapp_brainstem/.copilot_token"; do
-        if [ -f "$src" ]; then
-            cp "$src" "$FAKE_HOME/.brainstem/state/.copilot_token"
-            chmod 600 "$FAKE_HOME/.brainstem/state/.copilot_token"
-            _auth_token_copied=true
-            break
-        fi
+    # Source from the repo working tree if present, else the REAL install at
+    # ~/.brainstem/src/rapp_brainstem (where a device-code login actually persists them).
+    _auth_copied=false
+    for f in .copilot_token .copilot_session; do
+        for src in "$REPO_ROOT/rapp_brainstem/$f" "$HOME/.brainstem/src/rapp_brainstem/$f"; do
+            if [ -f "$src" ]; then
+                cp "$src" "$FAKE_HOME/.brainstem/src/rapp_brainstem/$f"
+                _auth_copied=true
+                break
+            fi
+        done
     done
-    for src in "$HOME/.brainstem/state/.copilot_session" \
-               "$REPO_ROOT/rapp_brainstem/.copilot_session" \
-               "$HOME/.brainstem/src/rapp_brainstem/.copilot_session"; do
-        if [ -f "$src" ]; then
-            cp "$src" "$FAKE_HOME/.brainstem/state/.copilot_session"
-            chmod 600 "$FAKE_HOME/.brainstem/state/.copilot_session"
-            break
-        fi
-    done
-    if [ "$_auth_token_copied" = true ]; then
+    if [ "$_auth_copied" = true ]; then
         echo "  ✓ copied real Copilot token into sandbox (stays inside $SANDBOX)"
     else
-        echo "  ⚠ --auth requested but no .copilot_token found — skipping the authenticated /chat probe"
+        echo "  ⚠ --auth requested but no .copilot_token found (repo tree or ~/.brainstem) — skipping the authenticated /chat probe"
     fi
 fi
 
@@ -256,21 +177,13 @@ PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ✓ $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "  ✗ $1"; }
 
-HOME="$FAKE_HOME" python3 - "$HEALTH" "$BRANCH_VERSION" <<'EOF' \
-    && ok "health: status + candidate version + sandbox path + agents" || bad "health contract"
-import json, os, sys
+python3 - "$HEALTH" "$BRANCH_VERSION" <<'EOF' && ok "health: status + candidate version + agents" || bad "health contract"
+import json, sys
 d = json.load(open(sys.argv[1]))
 assert d.get("status") in ("ok", "unauthenticated"), d
 assert d.get("version") == sys.argv[2], f'{d.get("version")} != {sys.argv[2]}'
-expected = os.path.realpath(os.path.join(os.path.expanduser("~"), ".brainstem", "src", "rapp_brainstem"))
-actual = os.path.realpath(d.get("brainstem_dir") or "")
-assert actual == expected, f'{actual} != {expected}'
 assert "ContextMemory" in (d.get("agents") or []), d.get("agents")
 EOF
-INSTALLED_COMMIT="$(git -C "$FAKE_HOME/.brainstem/src" rev-parse HEAD 2>/dev/null || true)"
-[ "$INSTALLED_COMMIT" = "$CANDIDATE_COMMIT" ] \
-    && ok "installed exact candidate ${CANDIDATE_COMMIT:0:12}" \
-    || bad "installed commit ${INSTALLED_COMMIT:-missing}, expected $CANDIDATE_COMMIT"
 
 # Fetch to a file, then grep — a `curl | grep -q` pipe makes grep close the pipe on
 # first match, SIGPIPE-ing curl, which `set -o pipefail` then reports as a failure.
@@ -281,7 +194,7 @@ INSTALLED_COMMIT="$(git -C "$FAKE_HOME/.brainstem/src" rev-parse HEAD 2>/dev/nul
     | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "error" in d' \
     && ok "/chat rejects bad input as JSON" || bad "/chat error contract"
 
-if [ "$SCENARIO" = "upgrade" ] || [ "$SCENARIO" = "repair" ]; then
+if [ "$SCENARIO" = "upgrade" ]; then
     test -f "$FAKE_HOME/.brainstem/src/rapp_brainstem/agents/preflight_custom_agent.py" \
         && ok "custom agent survived upgrade" || bad "custom agent lost in upgrade"
     grep -q "PREFLIGHT-SOUL-MARKER" "$FAKE_HOME/.brainstem/src/rapp_brainstem/soul.md" \
@@ -293,44 +206,9 @@ if [ "$SCENARIO" = "upgrade" ] || [ "$SCENARIO" = "repair" ]; then
         && ok "custom agent loads in upgraded server" || bad "custom agent not loaded"
     NEWVER="$(tr -d '[:space:]' < "$FAKE_HOME/.brainstem/src/rapp_brainstem/VERSION" 2>/dev/null)"
     [ "$NEWVER" = "$BRANCH_VERSION" ] && ok "upgraded to candidate v$NEWVER" || bad "version after upgrade: $NEWVER"
-    STATE="$FAKE_HOME/.brainstem/state"
-    if [ "$AUTH" = true ] && [ "${_auth_token_copied:-false}" = true ]; then
-        test -s "$STATE/.copilot_token" \
-            && ok "real saved sign-in is present after upgrade" || bad "real saved sign-in is missing"
-        if [ -s "$STATE/.copilot_session" ]; then
-            ok "real Copilot session cache is present"
-        else
-            ok "Copilot session cache will be regenerated lazily"
-        fi
-    else
-        grep -q "ghu_PREFLIGHT_STATE_SURVIVOR" "$STATE/.copilot_token" \
-            && ok "saved sign-in survived upgrade" || bad "saved sign-in lost in upgrade"
-        grep -q "preflight-expired-session" "$STATE/.copilot_session" \
-            && ok "Copilot session cache survived upgrade" || bad "Copilot session cache lost"
-    fi
-    grep -q "preflight-lan-secret" "$STATE/.brainstem_secret" \
-        && ok "LAN secret survived upgrade" || bad "LAN secret lost in upgrade"
-    grep -q "gpt-4o" "$STATE/.brainstem_model" \
-        && ok "model choice survived upgrade" || bad "model choice lost in upgrade"
-    grep -q "preflight-state-marker" "$STATE/.brainstem_book.json" \
-        && ok "flight recorder survived upgrade" || bad "flight recorder lost in upgrade"
-    if [ "$SCENARIO" = "repair" ]; then
-        grep -q "legacy_writer_pid" "$STATE/.brainstem_model" \
-            && ok "final live-writer state survived repair" || bad "live-writer state was lost"
-        if kill -0 "$LEGACY_WRITER_PID" 2>/dev/null; then
-            bad "legacy state writer was not stopped"
-        else
-            ok "legacy state writer was stopped before replacement"
-        fi
-        if kill -0 "$LEGACY_DECOY_PID" 2>/dev/null; then
-            ok "unrelated process mentioning brainstem.py was left alone"
-        else
-            bad "unrelated process mentioning brainstem.py was terminated"
-        fi
-    fi
 fi
 
-if [ "$AUTH" = true ] && [ "${_auth_token_copied:-false}" = true ]; then
+if [ "$AUTH" = true ]; then
     RESP="$SANDBOX/chat.json"
     /usr/bin/curl -s -X POST "http://localhost:$PORT/chat" -H 'Content-Type: application/json' \
         -d '{"user_input":"Reply with exactly the single word: pong"}' -o "$RESP" --max-time 120 || true

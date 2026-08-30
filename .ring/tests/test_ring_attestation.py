@@ -526,6 +526,12 @@ class RingAttestationTests(unittest.TestCase):
         _git(self.repo, "add", "-A")
         _git(self.repo, "commit", "-qm", "delete required agent")
         source_commit = _git(self.repo, "rev-parse", "HEAD^{commit}")
+        config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        config["required_shared_paths"] = [
+            "rapp_brainstem/agents/experimental/copilot_research_agent.py"
+        ]
+        config_path = self.root / "required-path-train.json"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
 
         with self.assertRaisesRegex(
             PROMOTE.PromotionError,
@@ -538,7 +544,7 @@ class RingAttestationTests(unittest.TestCase):
                 "nightly",
                 source_commit,
                 self.nightly_commit,
-                CONFIG_PATH,
+                config_path,
                 self.policy,
             )
 

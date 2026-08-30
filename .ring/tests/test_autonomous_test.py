@@ -14,6 +14,11 @@ SPEC.loader.exec_module(AUTONOMOUS)
 
 
 class AutonomousMutationTests(unittest.TestCase):
+    def test_brainstem_mutation_is_a_failure_case_not_a_feature(self):
+        self.assertNotIn("backend-route", AUTONOMOUS.SCENARIOS)
+        source = MODULE.read_text(encoding="utf-8").replace("\r\n", "\n")
+        self.assertIn("immutable-grail-kernel-drift", source)
+
     def test_storage_probe_targets_the_method_name_not_an_old_signature(self):
         with tempfile.TemporaryDirectory() as temporary:
             repo = Path(temporary)

@@ -5,7 +5,6 @@ rapp_brainstem/.brainstem_secret
 rapp_brainstem/.env
 rapp_brainstem/.brainstem_data/
 rapp_brainstem/.remote_agents/
-rapp_brainstem/feed/
 rapp_brainstem/voice.zip
 rapp_brainstem/voice.json
 rapp_brainstem/.pytest_cache/

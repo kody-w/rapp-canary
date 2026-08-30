@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/kody-w/rapp-installer/security/advisories/new
+    about: Report vulnerabilities privately.
+  - name: Agent contribution
+    url: https://github.com/kody-w/RAR/blob/main/CONTRIBUTING.md
+    about: Publish reusable single-file agents through RAR.
