@@ -31,6 +31,7 @@ class PreprodGateTests(unittest.TestCase):
         self.source = self.root / "candidate"
         (self.source / "rapp_brainstem").mkdir(parents=True)
         GATE._git(self.source, "init", "-q")
+        GATE._git(self.source, "branch", "-M", "main")
         GATE._git(self.source, "config", "user.name", "Preprod Test")
         GATE._git(self.source, "config", "user.email", "preprod@example.invalid")
         GATE._git(
