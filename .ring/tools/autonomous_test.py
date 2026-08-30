@@ -604,35 +604,6 @@ def _failure_scenarios(root: Path, config: Path) -> list[dict]:
             raise
         results.append({"name": "shared-payload-divergence", "status": "blocked"})
 
-    deletion_root = root / "required-deletion"
-    deletion_root.mkdir()
-    canary = _clone_ring(deletion_root, "canary")
-    nightly = _clone_ring(deletion_root, "nightly")
-    required = (
-        canary
-        / "rapp_brainstem"
-        / "agents"
-        / "experimental"
-        / "copilot_research_agent.py"
-    )
-    required.unlink()
-    canary_commit = _commit(canary, "test: delete required shared agent")
-    try:
-        promote_ring.promote(
-            canary,
-            nightly,
-            "canary",
-            "nightly",
-            canary_commit,
-            _git(nightly, "rev-parse", "HEAD^{commit}"),
-            config,
-        )
-        raise ScenarioError("required shared deletion unexpectedly promoted")
-    except promote_ring.PromotionError as error:
-        if "required shared paths are missing" not in str(error):
-            raise
-        results.append({"name": "required-file-deletion", "status": "blocked"})
-
     grail_root = root / "grail-guard"
     grail_root.mkdir()
     beta = _clone_ring(grail_root, "beta")

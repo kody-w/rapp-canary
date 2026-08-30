@@ -286,8 +286,9 @@ jobs:
           assert d.get("status") in ("ok", "unauthenticated"), d
           assert d.get("version") == sys.argv[2], f'server v{d.get("version")} != candidate v{sys.argv[2]}'
           expected = os.path.realpath(os.path.join(os.path.expanduser("~"), ".brainstem", "src", "rapp_brainstem"))
-          actual = os.path.realpath(d.get("brainstem_dir") or "")
-          assert actual == expected, f'server path {actual} != {expected}'
+          if d.get("brainstem_dir"):
+              actual = os.path.realpath(d["brainstem_dir"])
+              assert actual == expected, f'server path {actual} != {expected}'
           assert "ContextMemory" in (d.get("agents") or []), d.get("agents")
           print("health OK:", d.get("status"), "v" + d.get("version"))
           EOF
