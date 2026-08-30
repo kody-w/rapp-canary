@@ -15,6 +15,10 @@ import tempfile
 import time
 from pathlib import Path
 
+TOOLS = Path(__file__).resolve().parent
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
+
 import promote_ring
 import render_ring
 import ring_attestation

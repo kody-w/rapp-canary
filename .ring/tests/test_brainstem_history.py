@@ -80,6 +80,8 @@ class BrainstemHistoryTests(unittest.TestCase):
         count, tip = HISTORY.verify_history(self.repo, self.root)
         self.assertEqual(count, 2)
         self.assertEqual(tip, second)
+        self.assertEqual(HISTORY.verify_chain(self.repo, self.root), (2, second))
+        self.assertRegex(HISTORY.history_sha256(self.root), r"^[0-9a-f]{64}$")
 
     def test_missing_release_frame_breaks_the_history(self):
         first_tag = self.release("1.0.0", "print('stable one')\n")
@@ -91,6 +93,25 @@ class BrainstemHistoryTests(unittest.TestCase):
         self.release("1.1.0", "print('stable two')\n")
         with self.assertRaisesRegex(HISTORY.HistoryError, "missing"):
             HISTORY.verify_history(self.repo, self.root)
+
+    def test_archived_chain_remains_valid_after_a_future_tag(self):
+        first_tag = self.release("1.0.0", "print('stable one')\n")
+        first_path = self.root / f"{first_tag}.json"
+        first = HISTORY.create_frame(self.repo, first_tag, first_path)
+        second_tag = self.release("1.1.0", "print('stable two')\n")
+        second_path = self.root / f"{second_tag}.json"
+        second = HISTORY.create_frame(
+            self.repo,
+            second_tag,
+            second_path,
+            first_path,
+        )
+        self.release("1.2.0", "print('future release')\n")
+
+        with self.assertRaisesRegex(HISTORY.HistoryError, "missing"):
+            HISTORY.verify_history(self.repo, self.root)
+        self.assertEqual(HISTORY.verify_chain(self.repo, self.root), (2, second))
+        self.assertEqual(second["parent"]["sha256"], HISTORY.frame_sha256(first))
 
     def test_moved_release_tag_is_rejected(self):
         tag = self.release("1.0.0", "print('stable')\n")

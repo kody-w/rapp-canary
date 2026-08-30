@@ -57,6 +57,33 @@ def frame_sha256(value: dict) -> str:
     return hashlib.sha256(_canonical_bytes(value)).hexdigest()
 
 
+def _version_key(release_ref: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"brainstem-v([0-9]+)\.([0-9]+)\.([0-9]+)", release_ref)
+    if not match:
+        raise HistoryError(f"invalid Brainstem release ref: {release_ref}")
+    return tuple(int(value) for value in match.groups())
+
+
+def _history_paths(directory: Path) -> list[Path]:
+    paths = list(directory.glob("brainstem-v*.json"))
+    if not paths:
+        raise HistoryError("brainstem history contains no frames")
+    return sorted(paths, key=lambda path: _version_key(path.stem))
+
+
+def history_sha256(directory: Path) -> str:
+    digest = hashlib.sha256()
+    for path in _history_paths(directory):
+        frame = _read_frame(path)
+        _validate_shape(frame)
+        if path.name != f"{frame['release_ref']}.json":
+            raise HistoryError(f"frame filename does not match release: {path.name}")
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(frame_sha256(frame)))
+    return digest.hexdigest()
+
+
 def _read_frame(path: Path) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -198,6 +225,31 @@ def verify_frame(
     return frame
 
 
+def verify_chain(repo: Path, directory: Path) -> tuple[int, dict]:
+    parent_path = None
+    previous = None
+    paths = _history_paths(directory)
+    for frame_path in paths:
+        frame = _read_frame(frame_path)
+        _validate_shape(frame)
+        if frame_path.name != f"{frame['release_ref']}.json":
+            raise HistoryError(
+                f"frame filename does not match release: {frame_path.name}"
+            )
+        frame = verify_frame(repo, frame_path, parent_path)
+        expected_parent = None if previous is None else {
+            "release_ref": previous["release_ref"],
+            "sha256": frame_sha256(previous),
+        }
+        if frame["parent"] != expected_parent:
+            raise HistoryError(
+                f"{frame['release_ref']} does not link to the previous Grail frame"
+            )
+        previous = frame
+        parent_path = frame_path
+    return len(paths), previous
+
+
 def verify_history(repo: Path, directory: Path) -> tuple[int, dict]:
     tags = [
         value
@@ -221,20 +273,7 @@ def verify_history(repo: Path, directory: Path) -> tuple[int, dict]:
             f"brainstem history does not match Grail tags; missing={missing}, extra={extra}"
         )
 
-    parent_path = None
-    previous = None
-    for tag in tags:
-        frame_path = directory / f"{tag}.json"
-        frame = verify_frame(repo, frame_path, parent_path)
-        expected_parent = None if previous is None else {
-            "release_ref": previous["release_ref"],
-            "sha256": frame_sha256(previous),
-        }
-        if frame["parent"] != expected_parent:
-            raise HistoryError(f"{tag} does not link to the previous Grail frame")
-        previous = frame
-        parent_path = frame_path
-    return len(tags), previous
+    return verify_chain(repo, directory)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -250,6 +289,11 @@ def _parse_args() -> argparse.Namespace:
     verify_all = subparsers.add_parser("verify-all")
     verify_all.add_argument("--repo", type=Path, required=True)
     verify_all.add_argument("--directory", type=Path, required=True)
+    verify_chain_parser = subparsers.add_parser("verify-chain")
+    verify_chain_parser.add_argument("--repo", type=Path, required=True)
+    verify_chain_parser.add_argument("--directory", type=Path, required=True)
+    digest = subparsers.add_parser("digest")
+    digest.add_argument("--directory", type=Path, required=True)
     return parser.parse_args()
 
 
@@ -273,12 +317,20 @@ def main() -> int:
                 f"BRAINSTEM VERIFIED — {frame['release_ref']} "
                 f"{frame['brainstem']['sha256'][:12]}"
             )
-        else:
+        elif args.command == "verify-all":
             count, tip = verify_history(args.repo, args.directory)
             print(
                 f"BRAINSTEM HISTORY VERIFIED — {count} frames "
                 f"(tip {tip['release_ref']})"
             )
+        elif args.command == "verify-chain":
+            count, tip = verify_chain(args.repo, args.directory)
+            print(
+                f"BRAINSTEM CHAIN VERIFIED — {count} frames "
+                f"(tip {tip['release_ref']})"
+            )
+        else:
+            print(history_sha256(args.directory))
     except (HistoryError, OSError, ValueError) as error:
         print(f"brainstem history failed: {error}", file=os.sys.stderr)
         return 1

@@ -11,10 +11,12 @@ import os
 import platform
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tarfile
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
@@ -31,11 +33,92 @@ BETA_REPOSITORY = "kody-w/rapp-beta"
 QUALIFICATION_REPOSITORY = "kody-w/rapp-canary"
 QUALIFICATION_WORKFLOW = "Test Pre-Grail Rings"
 BETA_PREFLIGHT_WORKFLOW = "preflight"
+PREPROD_CERT_IDENTITY = (
+    "https://github.com/kody-w/rapp-canary/"
+    ".github/workflows/stage-preprod.yml@refs/heads/main"
+)
+RAPP1_AUTHORITY_PIN = {
+    "repository": "kody-w/rapp-1",
+    "revision": "rev-10",
+    "commit": "be742eb97c36a705df0ee250e163e20c6d1cee76",
+    "spec_path": "SPEC.md",
+    "spec_sha256": "78f9cae4cbed02c7b5cd2a648350ccb4ffeacebb49fcbbe34ac6c80a4e507cf0",
+    "constitution_path": "CONSTITUTION.md",
+    "constitution_sha256": "6ea14f72152892120e2192670331235be3808c436dd1e37aa00f754695a0cbf5",
+    "immutable_grail_section": "11.1",
+    "constitutional_article": "15",
+}
+GRAIL_KERNEL_PIN = {
+    "repository": "kody-w/rapp-installer",
+    "release_scope": "https://github.com/kody-w/rapp-canary",
+    "grail_id": "grail:1a501dd7a01f05698abcf5f9bbe0273ebb9d09f5d6ec444aa71edccff947c8c7",
+    "immutable_ref": "refs/tags/brainstem-v0.6.16",
+    "object_format": "sha1",
+    "commit": "5fbde1776a72715935c3d597a9ddfce28a04032b",
+    "path": "rapp_brainstem/brainstem.py",
+    "mode": "100644",
+    "blob": "3f7102ff508c813bb6494511fc32a421a633e418",
+    "sha256": "bd55a7f0bcf5efd3f7966ca39bb146da3c25fda9a0b1ce5ba587919d3c3775f4",
+    "size_bytes": 154059,
+    "policy": "immutable-forever",
+}
 REQUIRED_MATERIALS = {
     "dependency-material-linux",
     "dependency-material-macos",
     "dependency-material-windows",
 }
+MAX_ARCHIVE_BYTES = 104857600
+MAX_ARCHIVE_FILES = 10000
+MAX_ARCHIVE_UNPACKED_BYTES = 536870912
+SOAK_URL_PATTERN = re.compile(
+    r"https://raw\.githubusercontent\.com/kody-w/rapp-canary/"
+    r"(?P<commit>[0-9a-f]{40})/\.ring/soak/[A-Za-z0-9._-]+\.json"
+)
+REQUIREMENT_PATTERN = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+    r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?"
+    r"(?:\s*(?:===|==|~=|!=|<=|>=|<|>)\s*"
+    r"[A-Za-z0-9](?:[A-Za-z0-9.*+!_-]*[A-Za-z0-9*+!_-])?"
+    r"(?:\s*,\s*(?:===|==|~=|!=|<=|>=|<|>)\s*"
+    r"[A-Za-z0-9](?:[A-Za-z0-9.*+!_-]*[A-Za-z0-9*+!_-])?)*"
+    r")?"
+)
+LOCK_PATTERN = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+    r"==[A-Za-z0-9](?:[A-Za-z0-9.*+!_-]*[A-Za-z0-9*+!_-])?"
+)
+WINDOWS_RESERVED_NAMES = {
+    "aux",
+    "con",
+    "nul",
+    "prn",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+    "com¹",
+    "com²",
+    "com³",
+    "lpt¹",
+    "lpt²",
+    "lpt³",
+}
+KERNEL_BOOTSTRAP = """\
+import os
+import sys
+
+path = sys.argv[1]
+source_dir = os.path.dirname(path)
+os.chdir(source_dir)
+sys.path.insert(0, source_dir)
+source = sys.stdin.buffer.read()
+sys.argv = [path]
+namespace = {
+    "__name__": "__main__",
+    "__file__": path,
+    "__package__": None,
+    "__cached__": None,
+}
+exec(compile(source, path, "exec"), namespace, namespace)
+"""
 
 
 class PreprodError(RuntimeError):
@@ -91,6 +174,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _grail_id(payload: bytes) -> str:
+    return "grail:" + hashlib.sha256(b"rapp/1:grail\n" + payload).hexdigest()
+
+
 def _parse_material_specs(values: list[str]) -> dict[str, Path]:
     materials = {}
     for value in values:
@@ -104,6 +191,132 @@ def _parse_material_specs(values: list[str]) -> dict[str, Path]:
             raise PreprodError(f"invalid deployment material: {value}")
         materials[name] = Path(raw_path).resolve()
     return materials
+
+
+def _requirement_lines(path: Path, *, exact: bool = False) -> list[str]:
+    try:
+        raw_lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise PreprodError(f"cannot read requirements file {path}: {error}") from error
+    pattern = LOCK_PATTERN if exact else REQUIREMENT_PATTERN
+    requirements = []
+    for raw in raw_lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not pattern.fullmatch(line):
+            raise PreprodError(
+                f"requirements must use registry package names and "
+                f"{'exact pins' if exact else 'version specifiers'} only: {line}"
+            )
+        requirements.append(line)
+    if not requirements:
+        raise PreprodError(f"requirements file is empty: {path}")
+    return requirements
+
+
+def _validate_soak_evidence(
+    evidence: dict,
+    *,
+    beta_commit: str,
+    qualification_commit: str,
+    qualification_run_id: str,
+    model_id: str,
+    policy: dict,
+    reference_time: datetime,
+) -> tuple[datetime, datetime]:
+    expected_keys = {
+        "schema",
+        "result",
+        "canary_commit",
+        "beta_commit",
+        "qualification_run_id",
+        "model_id",
+        "started_at",
+        "completed_at",
+        "probe_interval_seconds",
+        "health_probe_count",
+        "authenticated_chat_count",
+        "authenticated_chat_times",
+        "probes",
+        "checks",
+    }
+    expected_checks = {
+        "authenticated_chat": True,
+        "state_isolated": True,
+        "health_stable": True,
+        "no_critical_events": True,
+    }
+    if (
+        set(evidence) != expected_keys
+        or evidence.get("schema") != "rapp/1:soak"
+        or evidence.get("result") != "passed"
+        or evidence.get("canary_commit") != qualification_commit
+        or evidence.get("beta_commit") != beta_commit
+        or evidence.get("qualification_run_id") != qualification_run_id
+        or evidence.get("model_id") != model_id
+        or evidence.get("checks") != expected_checks
+    ):
+        raise PreprodError("soak evidence does not match the candidate and model")
+    started = _parse_time(str(evidence.get("started_at", "")))
+    completed = _parse_time(str(evidence.get("completed_at", "")))
+    if completed <= started:
+        raise PreprodError("soak evidence has an invalid duration")
+    if completed - started < timedelta(minutes=policy["minimum_soak_minutes"]):
+        raise PreprodError("soak evidence is shorter than policy")
+    probe_interval = evidence.get("probe_interval_seconds")
+    health_probe_count = evidence.get("health_probe_count")
+    probes = evidence.get("probes")
+    chat_times = evidence.get("authenticated_chat_times")
+    if (
+        not isinstance(probe_interval, int)
+        or not 15 <= probe_interval <= 300
+        or not isinstance(health_probe_count, int)
+        or not isinstance(probes, list)
+        or health_probe_count != len(probes)
+        or health_probe_count < 2
+        or evidence.get("authenticated_chat_count") != 2
+        or not isinstance(chat_times, list)
+        or len(chat_times) != 2
+    ):
+        raise PreprodError("soak evidence does not cover the authenticated interval")
+    probe_times = []
+    for probe in probes:
+        if (
+            not isinstance(probe, dict)
+            or set(probe) != {"at", "status", "model_id"}
+            or probe.get("status") != "ok"
+            or probe.get("model_id") != model_id
+        ):
+            raise PreprodError("soak evidence contains an unhealthy probe")
+        probe_times.append(_parse_time(str(probe.get("at", ""))))
+    if probe_times != sorted(probe_times):
+        raise PreprodError("soak evidence probes are not ordered")
+    if (
+        probe_times[0] < started
+        or probe_times[-1] != completed
+        or probe_times[0] - started
+        > max(timedelta(minutes=3), timedelta(seconds=probe_interval * 2))
+        or any(
+            right - left > timedelta(seconds=probe_interval * 2)
+            for left, right in zip(probe_times, probe_times[1:])
+        )
+    ):
+        raise PreprodError("soak evidence has a gap in health coverage")
+    parsed_chat_times = [_parse_time(str(value)) for value in chat_times]
+    if (
+        parsed_chat_times[0] < started
+        or parsed_chat_times[0] > completed
+        or parsed_chat_times[0] - started > timedelta(minutes=3)
+        or parsed_chat_times[1] != completed
+        or parsed_chat_times != sorted(parsed_chat_times)
+    ):
+        raise PreprodError("soak evidence does not bind both authenticated chats")
+    if completed > reference_time:
+        raise PreprodError("soak evidence is future-dated")
+    if reference_time - completed > timedelta(hours=policy["max_candidate_age_hours"]):
+        raise PreprodError("soak evidence is stale")
+    return started, completed
 
 
 def _material_manifest(materials: dict[str, Path]) -> dict:
@@ -137,6 +350,20 @@ def _git(repo: Path, *args: str) -> str:
     if result.returncode:
         raise PreprodError(
             f"git {' '.join(args)} failed in {repo}: {result.stderr.strip()}"
+        )
+    return result.stdout
+
+
+def _git_bytes(repo: Path, *args: str) -> bytes:
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        raise PreprodError(
+            f"git {' '.join(args)} failed in {repo}: "
+            f"{result.stderr.decode('utf-8', errors='replace').strip()}"
         )
     return result.stdout
 
@@ -185,10 +412,12 @@ def _verify_github_provenance(
                 str(subject),
                 "-R",
                 QUALIFICATION_REPOSITORY,
-                "--signer-workflow",
-                "kody-w/rapp-canary/.github/workflows/stage-preprod.yml",
+                "--cert-identity",
+                PREPROD_CERT_IDENTITY,
                 "--source-ref",
                 "refs/heads/main",
+                "--source-digest",
+                manifest["evidence"]["control_plane"]["commit"],
                 "--signer-digest",
                 manifest["evidence"]["control_plane"]["commit"],
                 "--deny-self-hosted-runners",
@@ -285,18 +514,34 @@ def _validate_policy(policy: dict) -> None:
     reviewers = policy.get("minimum_required_reviewers")
     if not isinstance(reviewers, int) or reviewers < 1:
         raise PreprodError("preprod must require at least one reviewer")
+    soak_minutes = policy.get("minimum_soak_minutes")
+    if not isinstance(soak_minutes, int) or soak_minutes < 1:
+        raise PreprodError("invalid minimum_soak_minutes")
     if policy.get("same_artifact_to_grail") is not True:
         raise PreprodError("policy must require the same artifact to reach Grail")
     if policy.get("human_approval_required") is not True:
         raise PreprodError("policy must require human approval")
     if policy.get("require_pinned_model") is not True:
         raise PreprodError("policy must require a pinned model")
+    authority = policy.get("rapp1_authority")
+    if authority != RAPP1_AUTHORITY_PIN:
+        raise PreprodError("invalid RAPP/1 immutable Grail authority")
+    kernel = policy.get("grail_kernel")
+    if kernel != GRAIL_KERNEL_PIN:
+        raise PreprodError("invalid immutable Grail kernel policy")
     age = policy.get("max_candidate_age_hours")
     if not isinstance(age, int) or not 1 <= age <= 720:
         raise PreprodError("invalid max_candidate_age_hours")
-    for key in ("max_artifact_bytes", "max_unpacked_bytes", "max_files"):
+    if soak_minutes > age * 60:
+        raise PreprodError("minimum soak duration exceeds candidate lifetime")
+    hard_limits = {
+        "max_artifact_bytes": MAX_ARCHIVE_BYTES,
+        "max_unpacked_bytes": MAX_ARCHIVE_UNPACKED_BYTES,
+        "max_files": MAX_ARCHIVE_FILES,
+    }
+    for key, hard_limit in hard_limits.items():
         value = policy.get(key)
-        if not isinstance(value, int) or value < 1:
+        if not isinstance(value, int) or not 1 <= value <= hard_limit:
             raise PreprodError(f"invalid {key}")
     checks = policy.get("required_checks")
     if (
@@ -304,8 +549,91 @@ def _validate_policy(policy: dict) -> None:
         or not checks
         or len(set(checks)) != len(checks)
         or not all(isinstance(item, str) and item for item in checks)
+        or "immutable-grail-kernel" not in checks
     ):
         raise PreprodError("invalid required_checks")
+
+
+def verify_grail_kernel_bytes(repo: Path, policy: dict) -> dict:
+    _validate_policy(policy)
+    kernel = policy["grail_kernel"]
+    repo = repo.resolve()
+    path = repo / kernel["path"]
+    if not path.is_file():
+        raise PreprodError("kernel-drift: candidate Brainstem is missing")
+    payload = path.read_bytes()
+    if (
+        _sha256(path) != kernel["sha256"]
+        or _grail_id(payload) != kernel["grail_id"]
+        or len(payload) != kernel["size_bytes"]
+    ):
+        raise PreprodError("kernel-drift: candidate Brainstem differs from Grail")
+    index_entry = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "-s", "--", kernel["path"]],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if index_entry.returncode == 0 and index_entry.stdout.strip():
+        match = re.fullmatch(
+            r"(?P<mode>[0-9]{6}) (?P<blob>[0-9a-f]+) [0-3]\t"
+            + re.escape(kernel["path"]),
+            index_entry.stdout.strip(),
+        )
+        if (
+            not match
+            or match.group("mode") != kernel["mode"]
+            or match.group("blob") != kernel["blob"]
+        ):
+            raise PreprodError(
+                "kernel-drift: candidate Brainstem Git mode or blob differs"
+            )
+    elif os.name != "nt":
+        executable = bool(path.stat().st_mode & stat.S_IXUSR)
+        if executable != (kernel["mode"] == "100755"):
+            raise PreprodError("kernel-drift: candidate Brainstem mode differs")
+    return kernel
+
+
+def verify_grail_kernel(repo: Path, policy: dict) -> dict:
+    kernel = verify_grail_kernel_bytes(repo, policy)
+    origin = _git(repo, "remote", "get-url", "origin").strip()
+    if _repo_slug(origin) != kernel["repository"]:
+        raise PreprodError("kernel verification target is not the Grail repository")
+    release_commit = _git(
+        repo,
+        "rev-parse",
+        f"{kernel['immutable_ref']}^{{commit}}",
+    ).strip()
+    if release_commit != kernel["commit"]:
+        raise PreprodError("immutable Grail release ref moved")
+    tree_entry = _git(
+        repo,
+        "ls-tree",
+        kernel["commit"],
+        "--",
+        kernel["path"],
+    ).strip()
+    match = re.fullmatch(
+        r"(?P<mode>[0-9]{6}) blob (?P<blob>[0-9a-f]+)\t"
+        + re.escape(kernel["path"]),
+        tree_entry,
+    )
+    if (
+        not match
+        or match.group("mode") != kernel["mode"]
+        or match.group("blob") != kernel["blob"]
+    ):
+        raise PreprodError("immutable Grail path does not resolve to its pinned blob")
+    release_blob = match.group("blob")
+    payload = _git_bytes(repo, "cat-file", "blob", release_blob)
+    if (
+        hashlib.sha256(payload).hexdigest() != kernel["sha256"]
+        or _grail_id(payload) != kernel["grail_id"]
+        or len(payload) != kernel["size_bytes"]
+    ):
+        raise PreprodError("immutable Grail bytes do not match their constitutional pin")
+    return kernel
 
 
 def package_candidate(
@@ -316,9 +644,12 @@ def package_candidate(
     beta_commit: str,
     qualification_run_id: str,
     qualification_url: str,
+    qualification_commit: str,
     beta_preflight_run_id: str,
     beta_preflight_url: str,
+    soak_evidence_path: Path,
     soak_evidence_url: str,
+    soak_evidence_sha256: str,
     owner: str,
     control_plane_commit: str,
     model_id: str,
@@ -329,6 +660,8 @@ def package_candidate(
 ) -> dict:
     if not re.fullmatch(r"[0-9a-f]{40}", beta_commit):
         raise PreprodError("beta commit must be a full lowercase SHA")
+    if not re.fullmatch(r"[0-9a-f]{40}", qualification_commit):
+        raise PreprodError("qualification commit must be a full lowercase SHA")
     for label, value in (
         ("qualification run id", qualification_run_id),
         ("beta preflight run id", beta_preflight_run_id),
@@ -349,10 +682,24 @@ def package_candidate(
     for label, value in (
         ("qualification URL", qualification_url),
         ("Beta preflight URL", beta_preflight_url),
-        ("soak evidence URL", soak_evidence_url),
     ):
         if not value.startswith("https://github.com/"):
             raise PreprodError(f"{label} must be a GitHub HTTPS URL")
+    if qualification_url != (
+        f"https://github.com/{QUALIFICATION_REPOSITORY}/actions/runs/"
+        f"{qualification_run_id}"
+    ):
+        raise PreprodError("qualification URL does not match its run id")
+    if beta_preflight_url != (
+        f"https://github.com/{BETA_REPOSITORY}/actions/runs/{beta_preflight_run_id}"
+    ):
+        raise PreprodError("Beta preflight URL does not match its run id")
+    if not SOAK_URL_PATTERN.fullmatch(soak_evidence_url):
+        raise PreprodError("soak evidence must be a commit-pinned Canary raw URL")
+    if not re.fullmatch(r"[0-9a-f]{64}", soak_evidence_sha256):
+        raise PreprodError("invalid soak evidence digest")
+    if _sha256(soak_evidence_path) != soak_evidence_sha256:
+        raise PreprodError("soak evidence digest does not match")
 
     policy = _read_json(policy_path)
     _validate_policy(policy)
@@ -362,9 +709,24 @@ def package_candidate(
         pass
     else:
         raise PreprodError("readiness manifest must live outside the candidate tree")
-    lifetime = expires_hours or policy["max_candidate_age_hours"]
+    lifetime = (
+        policy["max_candidate_age_hours"]
+        if expires_hours is None
+        else expires_hours
+    )
     if not isinstance(lifetime, int) or not 1 <= lifetime <= policy["max_candidate_age_hours"]:
         raise PreprodError("candidate lifetime exceeds preprod policy")
+    now = (issued_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    soak_evidence = _read_json(soak_evidence_path)
+    soak_started, soak_completed = _validate_soak_evidence(
+        soak_evidence,
+        beta_commit=beta_commit,
+        qualification_commit=qualification_commit,
+        qualification_run_id=qualification_run_id,
+        model_id=model_id,
+        policy=policy,
+        reference_time=now,
+    )
     version_path = source / "rapp_brainstem" / "VERSION"
     try:
         version = version_path.read_text(encoding="utf-8").strip()
@@ -382,9 +744,15 @@ def package_candidate(
         raise PreprodError(f"invalid rollback brainstem frame: {error}") from error
     if rollback_frame["release_ref"] != rollback_ref:
         raise PreprodError("rollback frame does not match rollback ref")
+    rollback_history = rollback_frame_path.parent
+    history_count, history_tip = brainstem_history.verify_chain(
+        source,
+        rollback_history,
+    )
     origin = _git(source, "remote", "get-url", "origin").strip()
     if _repo_slug(origin) != "kody-w/rapp-installer":
         raise PreprodError("candidate is not a Grail-shaped repository")
+    grail_kernel = verify_grail_kernel(source, policy)
     grail_base_commit = _git(source, "rev-parse", "HEAD^{commit}").strip()
     expected_tree = _git(source, "write-tree").strip()
     if not re.fullmatch(r"[0-9a-f]{40}", grail_base_commit):
@@ -395,15 +763,21 @@ def package_candidate(
     artifact_sha256 = build_artifact(source, artifact)
     if artifact.stat().st_size > policy["max_artifact_bytes"]:
         raise PreprodError("candidate artifact exceeds preprod policy")
-    now = (issued_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     expires = now + timedelta(hours=lifetime)
     passed_controls = {
         "pre-grail-attestation-chain": [qualification_url],
+        "rapp1-immutable-grail-law": [
+            "https://github.com/kody-w/rapp-1/blob/"
+            f"{policy['rapp1_authority']['commit']}/SPEC.md#111-immutable-grail-kernel-conformance"
+        ],
         "beta-main-preflight": [beta_preflight_url],
         "immutable-artifact": [f"sha256:{artifact_sha256}"],
         "critical-brainstem-hash": [f"sha256:{_sha256(brainstem_path)}"],
+        "immutable-grail-kernel": [
+            f"{grail_kernel['immutable_ref']}:{grail_kernel['sha256']}"
+        ],
         "pinned-model-policy": [f"model:{model_id}"],
-        "real-auth-soak": [soak_evidence_url],
+        "real-auth-soak": [f"sha256:{soak_evidence_sha256}", soak_evidence_url],
         "brainstem-rollback-frame": [
             f"sha256:{brainstem_history.frame_sha256(rollback_frame)}"
         ],
@@ -426,6 +800,10 @@ def package_candidate(
             "format": "tar+gzip",
             "version": version,
             "brainstem_sha256": _sha256(brainstem_path),
+            "grail_id": grail_kernel["grail_id"],
+            "release_scope": grail_kernel["release_scope"],
+            "grail_kernel_ref": grail_kernel["immutable_ref"],
+            "grail_kernel_commit": grail_kernel["commit"],
             "grail_base_commit": grail_base_commit,
             "expected_grail_tree": expected_tree,
             "beta_repository": BETA_REPOSITORY,
@@ -434,6 +812,9 @@ def package_candidate(
         "runtime": {
             "model_id": model_id,
             "data_classification": "synthetic",
+            "kernel_entrypoint": grail_kernel["path"],
+            "grail_id": grail_kernel["grail_id"],
+            "release_scope": grail_kernel["release_scope"],
         },
         "evidence": {
             "qualification": {
@@ -441,6 +822,7 @@ def package_candidate(
                 "workflow": QUALIFICATION_WORKFLOW,
                 "run_id": qualification_run_id,
                 "url": qualification_url,
+                "commit": qualification_commit,
             },
             "beta_preflight": {
                 "repository": BETA_REPOSITORY,
@@ -449,13 +831,33 @@ def package_candidate(
                 "url": beta_preflight_url,
             },
             "soak": {
+                "schema": soak_evidence["schema"],
+                "result": soak_evidence["result"],
                 "url": soak_evidence_url,
+                "sha256": soak_evidence_sha256,
+                "started_at": _format_time(soak_started),
+                "completed_at": _format_time(soak_completed),
+                "canary_commit": qualification_commit,
+                "beta_commit": beta_commit,
+                "qualification_run_id": qualification_run_id,
+                "model_id": model_id,
+                "probe_interval_seconds": soak_evidence["probe_interval_seconds"],
+                "health_probe_count": soak_evidence["health_probe_count"],
+                "authenticated_chat_count": soak_evidence[
+                    "authenticated_chat_count"
+                ],
+                "authenticated_chat_times": soak_evidence[
+                    "authenticated_chat_times"
+                ],
+                "probes": soak_evidence["probes"],
+                "checks": soak_evidence["checks"],
             },
             "control_plane": {
                 "repository": QUALIFICATION_REPOSITORY,
                 "commit": control_plane_commit,
                 "workflow": ".github/workflows/stage-preprod.yml",
             },
+            "rapp1_authority": policy["rapp1_authority"],
             "required_checks": policy["required_checks"],
             "controls": control_results,
         },
@@ -468,6 +870,9 @@ def package_candidate(
             "commit": rollback_frame["commit"],
             "brainstem_sha256": rollback_frame["brainstem"]["sha256"],
             "frame_sha256": brainstem_history.frame_sha256(rollback_frame),
+            "history_sha256": brainstem_history.history_sha256(rollback_history),
+            "history_count": history_count,
+            "history_tip": history_tip["release_ref"],
         },
         "issued_at": _format_time(now),
         "expires_at": _format_time(expires),
@@ -478,28 +883,59 @@ def package_candidate(
 
 def _validate_archive(artifact: Path) -> list[tarfile.TarInfo]:
     try:
+        if artifact.stat().st_size > MAX_ARCHIVE_BYTES:
+            raise PreprodError("archive exceeds the hard compressed-size limit")
         with tarfile.open(artifact, "r:gz") as archive:
             members = archive.getmembers()
+            if len(members) > MAX_ARCHIVE_FILES:
+                raise PreprodError("archive contains too many files")
+            if sum(member.size for member in members) > MAX_ARCHIVE_UNPACKED_BYTES:
+                raise PreprodError("archive exceeds the hard expanded-size limit")
             seen = set()
+            normalized_seen = set()
             for member in members:
                 path = PurePosixPath(member.name)
-                normalized_parts = {
-                    part.rstrip(" .").casefold()
-                    for part in path.parts
-                }
+                normalized_parts = []
+                unsafe_component = False
+                for part in path.parts:
+                    normalized = unicodedata.normalize("NFC", part).casefold()
+                    basename = normalized.split(".", 1)[0]
+                    if (
+                        not part
+                        or part != part.rstrip(" .")
+                        or any(ord(character) < 32 or ord(character) == 127 for character in part)
+                        or any(character in '<>:"|?*' for character in part)
+                        or basename in WINDOWS_RESERVED_NAMES
+                        or len(part.encode("utf-8")) > 255
+                    ):
+                        unsafe_component = True
+                    normalized_parts.append(normalized)
+                normalized_name = "/".join(normalized_parts)
                 if (
-                    path.is_absolute()
+                    not member.name
+                    or "\\" in member.name
+                    or path.is_absolute()
+                    or not path.parts
+                    or "." in path.parts
                     or ".." in path.parts
+                    or member.name != path.as_posix()
+                    or len(member.name.encode("utf-8")) > 4096
                     or ".git" in normalized_parts
-                    or any(":" in part for part in path.parts)
+                    or unsafe_component
                     or member.issym()
                     or member.islnk()
                     or not member.isfile()
+                    or member.size < 0
                 ):
                     raise PreprodError(f"unsafe artifact member: {member.name}")
                 if member.name in seen:
                     raise PreprodError(f"duplicate artifact member: {member.name}")
+                if normalized_name in normalized_seen:
+                    raise PreprodError(
+                        f"cross-platform duplicate artifact member: {member.name}"
+                    )
                 seen.add(member.name)
+                normalized_seen.add(normalized_name)
             return members
     except (OSError, tarfile.TarError) as error:
         raise PreprodError(f"cannot inspect artifact: {error}") from error
@@ -511,21 +947,31 @@ def _validate_dependency_material(name: str, artifact: Path) -> dict:
     by_name = {member.name: member for member in members}
     required_metadata = {
         "requirements.lock",
+        "test-requirements.lock",
         "sbom.json",
         "vulnerability-report.json",
         "licenses.json",
     }
     if not required_metadata.issubset(by_name):
         raise PreprodError(f"{name} lacks required lock, SBOM, or scan evidence")
-    wheel_members = {
+    runtime_wheels = {
         member.name: member
         for member in members
         if member.name.startswith("wheelhouse/")
     }
-    if not wheel_members:
-        raise PreprodError(f"{name} contains no wheels")
+    test_wheels = {
+        member.name: member
+        for member in members
+        if member.name.startswith("test-wheelhouse/")
+    }
+    wheel_members = runtime_wheels | test_wheels
+    if not runtime_wheels or not test_wheels:
+        raise PreprodError(f"{name} must contain runtime and test wheels")
+    if any(not path.endswith(".whl") for path in wheel_members):
+        raise PreprodError(f"{name} contains a non-wheel dependency")
     with tarfile.open(artifact, "r:gz") as archive:
         lock_handle = archive.extractfile(by_name["requirements.lock"])
+        test_lock_handle = archive.extractfile(by_name["test-requirements.lock"])
         sbom_handle = archive.extractfile(by_name["sbom.json"])
         vulnerability_handle = archive.extractfile(by_name["vulnerability-report.json"])
         license_handle = archive.extractfile(by_name["licenses.json"])
@@ -533,6 +979,7 @@ def _validate_dependency_material(name: str, artifact: Path) -> dict:
             handle is None
             for handle in (
                 lock_handle,
+                test_lock_handle,
                 sbom_handle,
                 vulnerability_handle,
                 license_handle,
@@ -540,6 +987,13 @@ def _validate_dependency_material(name: str, artifact: Path) -> dict:
         ):
             raise PreprodError(f"{name} metadata cannot be read")
         lock = lock_handle.read().decode("utf-8").splitlines()
+        test_lock = test_lock_handle.read().decode("utf-8").splitlines()
+        if (
+            not lock
+            or not test_lock
+            or not all(LOCK_PATTERN.fullmatch(item) for item in lock + test_lock)
+        ):
+            raise PreprodError(f"{name} contains a non-exact dependency lock")
         try:
             sbom = json.loads(sbom_handle.read().decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -567,12 +1021,11 @@ def _validate_dependency_material(name: str, artifact: Path) -> dict:
             raise PreprodError(
                 f"{name} contains vulnerable dependencies: {', '.join(vulnerable)}"
             )
-        expected_files = {
-            path.removeprefix("wheelhouse/") for path in wheel_members
-        }
+        expected_files = set(wheel_members)
         if (
             not isinstance(license_report, dict)
             or license_report.get("schema") != "rapp-license-report/1"
+            or license_report.get("platform") != expected_platform
             or license_report.get("blocked")
             or set(license_report.get("licenses", {})) != expected_files
         ):
@@ -583,7 +1036,8 @@ def _validate_dependency_material(name: str, artifact: Path) -> dict:
             or not re.fullmatch(r"[0-9]+\.[0-9]+", str(sbom.get("python_version", "")))
             or not isinstance(sbom.get("architecture"), str)
             or not sbom["architecture"]
-            or sbom.get("requirements") != lock
+            or sbom.get("runtime_requirements") != lock
+            or sbom.get("test_requirements") != test_lock
             or not isinstance(sbom.get("files"), dict)
         ):
             raise PreprodError(f"{name} SBOM does not match its lock")
@@ -593,9 +1047,8 @@ def _validate_dependency_material(name: str, artifact: Path) -> dict:
             handle = archive.extractfile(member)
             if handle is None:
                 raise PreprodError(f"{name} cannot read {path}")
-            filename = path.removeprefix("wheelhouse/")
-            if hashlib.sha256(handle.read()).hexdigest() != sbom["files"][filename]:
-                raise PreprodError(f"{name} wheel hash mismatch: {filename}")
+            if hashlib.sha256(handle.read()).hexdigest() != sbom["files"][path]:
+                raise PreprodError(f"{name} wheel hash mismatch: {path}")
     return sbom
 
 
@@ -644,6 +1097,15 @@ def verify_candidate(
         raise PreprodError("unsupported artifact format")
     if not re.fullmatch(r"[0-9a-f]{64}", str(subject.get("brainstem_sha256", ""))):
         raise PreprodError("invalid brainstem digest")
+    kernel = policy["grail_kernel"]
+    if (
+        subject.get("brainstem_sha256") != kernel["sha256"]
+        or subject.get("grail_id") != kernel["grail_id"]
+        or subject.get("release_scope") != kernel["release_scope"]
+        or subject.get("grail_kernel_ref") != kernel["immutable_ref"]
+        or subject.get("grail_kernel_commit") != kernel["commit"]
+    ):
+        raise PreprodError("kernel-drift: readiness does not use the immutable Grail")
     if subject.get("beta_repository") != BETA_REPOSITORY:
         raise PreprodError("readiness subject is not the Beta repository")
     if not re.fullmatch(r"[0-9a-f]{40}", str(subject.get("beta_commit", ""))):
@@ -661,6 +1123,9 @@ def verify_candidate(
         )
         or runtime["model_id"].lower() == "auto"
         or runtime.get("data_classification") != "synthetic"
+        or runtime.get("kernel_entrypoint") != kernel["path"]
+        or runtime.get("grail_id") != kernel["grail_id"]
+        or runtime.get("release_scope") != kernel["release_scope"]
     ):
         raise PreprodError("runtime configuration is not production-safe")
 
@@ -668,24 +1133,64 @@ def verify_candidate(
     beta_preflight = evidence.get("beta_preflight")
     soak = evidence.get("soak")
     control_plane = evidence.get("control_plane")
+    rapp1_authority = evidence.get("rapp1_authority")
     if not all(
         isinstance(item, dict)
-        for item in (qualification, beta_preflight, soak, control_plane)
+        for item in (
+            qualification,
+            beta_preflight,
+            soak,
+            control_plane,
+            rapp1_authority,
+        )
     ):
         raise PreprodError("readiness evidence is incomplete")
     if (
         qualification.get("repository") != QUALIFICATION_REPOSITORY
         or qualification.get("workflow") != QUALIFICATION_WORKFLOW
         or not re.fullmatch(r"[0-9]+", str(qualification.get("run_id", "")))
+        or not re.fullmatch(r"[0-9a-f]{40}", str(qualification.get("commit", "")))
+        or qualification.get("url")
+        != (
+            f"https://github.com/{QUALIFICATION_REPOSITORY}/actions/runs/"
+            f"{qualification.get('run_id')}"
+        )
     ):
         raise PreprodError("invalid qualification evidence")
     if (
         beta_preflight.get("repository") != BETA_REPOSITORY
         or beta_preflight.get("workflow") != BETA_PREFLIGHT_WORKFLOW
         or not re.fullmatch(r"[0-9]+", str(beta_preflight.get("run_id", "")))
+        or beta_preflight.get("url")
+        != (
+            f"https://github.com/{BETA_REPOSITORY}/actions/runs/"
+            f"{beta_preflight.get('run_id')}"
+        )
     ):
         raise PreprodError("invalid Beta preflight evidence")
-    if not str(soak.get("url", "")).startswith("https://github.com/"):
+    if not SOAK_URL_PATTERN.fullmatch(str(soak.get("url", ""))):
+        raise PreprodError("invalid soak evidence")
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", str(soak.get("sha256", "")))
+        or set(soak) != {
+            "schema",
+            "result",
+            "url",
+            "sha256",
+            "started_at",
+            "completed_at",
+            "canary_commit",
+            "beta_commit",
+            "qualification_run_id",
+            "model_id",
+            "probe_interval_seconds",
+            "health_probe_count",
+            "authenticated_chat_count",
+            "authenticated_chat_times",
+            "probes",
+            "checks",
+        }
+    ):
         raise PreprodError("invalid soak evidence")
     if (
         control_plane.get("repository") != QUALIFICATION_REPOSITORY
@@ -693,6 +1198,8 @@ def verify_candidate(
         or not re.fullmatch(r"[0-9a-f]{40}", str(control_plane.get("commit", "")))
     ):
         raise PreprodError("invalid control-plane evidence")
+    if rapp1_authority != policy["rapp1_authority"]:
+        raise PreprodError("readiness does not match the RAPP/1 authority pin")
     if (
         expected_qualification_run
         and qualification["run_id"] != expected_qualification_run
@@ -729,15 +1236,33 @@ def verify_candidate(
         raise PreprodError("rollback ref is missing")
     if not re.fullmatch(r"[0-9a-f]{40}", str(rollback.get("commit", ""))):
         raise PreprodError("rollback commit is invalid")
-    for key in ("brainstem_sha256", "frame_sha256"):
+    for key in ("brainstem_sha256", "frame_sha256", "history_sha256"):
         if not re.fullmatch(r"[0-9a-f]{64}", str(rollback.get(key, ""))):
             raise PreprodError(f"rollback {key} is invalid")
+    if not isinstance(rollback.get("history_count"), int) or rollback["history_count"] < 1:
+        raise PreprodError("rollback history count is invalid")
+    if not re.fullmatch(
+        r"brainstem-v[0-9]+\.[0-9]+\.[0-9]+",
+        str(rollback.get("history_tip", "")),
+    ):
+        raise PreprodError("rollback history tip is invalid")
 
     issued = _parse_time(str(manifest.get("issued_at", "")))
     expires = _parse_time(str(manifest.get("expires_at", "")))
+    _validate_soak_evidence(
+        {key: value for key, value in soak.items() if key not in {"url", "sha256"}},
+        beta_commit=subject["beta_commit"],
+        qualification_commit=qualification["commit"],
+        qualification_run_id=qualification["run_id"],
+        model_id=runtime["model_id"],
+        policy=policy,
+        reference_time=issued,
+    )
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     if expires <= issued:
         raise PreprodError("readiness expiry must follow issuance")
+    if issued > current:
+        raise PreprodError("preprod readiness is future-dated")
     if current > expires and not allow_expired:
         raise PreprodError("preprod readiness has expired; re-qualify")
     if expires - issued > timedelta(hours=policy["max_candidate_age_hours"]):
@@ -748,7 +1273,11 @@ def verify_candidate(
             not isinstance(preprod, dict)
             or preprod.get("environment") != "preprod"
             or not re.fullmatch(r"[0-9]+", str(preprod.get("run_id", "")))
-            or not str(preprod.get("url", "")).startswith("https://github.com/")
+            or preprod.get("url")
+            != (
+                f"https://github.com/{QUALIFICATION_REPOSITORY}/actions/runs/"
+                f"{preprod.get('run_id')}"
+            )
             or preprod.get("approval_authority") != "github-environment:preprod"
         ):
             raise PreprodError("seaworthy readiness lacks approved preprod evidence")
@@ -788,6 +1317,9 @@ def verify_candidate(
             raise PreprodError("artifact has no brainstem.py") from error
         if handle is None:
             raise PreprodError("cannot read artifact brainstem.py")
+        expected_executable = policy["grail_kernel"]["mode"] == "100755"
+        if bool(member.mode & stat.S_IXUSR) != expected_executable:
+            raise PreprodError("artifact brainstem.py mode differs from Grail")
         if hashlib.sha256(handle.read()).hexdigest() != subject["brainstem_sha256"]:
             raise PreprodError("artifact brainstem.py does not match readiness manifest")
     return manifest
@@ -806,8 +1338,11 @@ def seal_candidate(
 ) -> dict:
     if not re.fullmatch(r"[0-9]+", preprod_run_id):
         raise PreprodError("preprod run id must be numeric")
-    if not preprod_run_url.startswith("https://github.com/"):
-        raise PreprodError("preprod run URL must be a GitHub HTTPS URL")
+    if preprod_run_url != (
+        f"https://github.com/{QUALIFICATION_REPOSITORY}/actions/runs/"
+        f"{preprod_run_id}"
+    ):
+        raise PreprodError("preprod run URL does not match its run id")
     if approval_authority != "github-environment:preprod":
         raise PreprodError("invalid preprod approval authority")
     now = (sealed_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -882,7 +1417,10 @@ def export_candidate(
         )
     rollback_frame = _read_json(rollback_frame_path)
     try:
-        brainstem_history.verify_frame(target, rollback_frame_path)
+        history_count, history_tip = brainstem_history.verify_chain(
+            target,
+            rollback_frame_path.parent,
+        )
     except brainstem_history.HistoryError as error:
         raise PreprodError(f"rollback Brainstem frame is invalid: {error}") from error
     if (
@@ -892,6 +1430,10 @@ def export_candidate(
         != manifest["rollback"]["brainstem_sha256"]
         or brainstem_history.frame_sha256(rollback_frame)
         != manifest["rollback"]["frame_sha256"]
+        or brainstem_history.history_sha256(rollback_frame_path.parent)
+        != manifest["rollback"]["history_sha256"]
+        or history_count != manifest["rollback"]["history_count"]
+        or history_tip["release_ref"] != manifest["rollback"]["history_tip"]
     ):
         raise PreprodError("rollback Brainstem frame does not match readiness manifest")
     if verify_provenance:
@@ -971,17 +1513,49 @@ def export_candidate(
     return changed
 
 
-def verify_staged_tree(manifest_path: Path, target: Path) -> str:
-    manifest = _read_json(manifest_path)
-    if manifest.get("status") != "seaworthy":
-        raise PreprodError("only a seaworthy manifest can authorize a Grail tree")
+def _validate_grail_target(target: Path) -> tuple[Path, str]:
     target = target.resolve()
     top = Path(_git(target, "rev-parse", "--show-toplevel").strip()).resolve()
     if top != target:
         raise PreprodError("Grail target must be its repository root")
     if _repo_slug(_git(target, "remote", "get-url", "origin").strip()) != "kody-w/rapp-installer":
         raise PreprodError("target is not the Grail repository")
-    if _git(target, "rev-parse", "--abbrev-ref", "HEAD").strip() in {"main", "HEAD"}:
+    return target, _git(target, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+
+def _verify_release_commit_shape(manifest: dict, target: Path, commit: str) -> None:
+    record = _git(target, "rev-list", "--parents", "-n", "1", commit).split()
+    if len(record) != 2 or record[1] != manifest["subject"]["grail_base_commit"]:
+        raise PreprodError("release commit is not based directly on the sealed Grail base")
+    if _git(target, "rev-parse", f"{commit}^{{tree}}").strip() != manifest["subject"]["expected_grail_tree"]:
+        raise PreprodError("release commit tree does not match sealed Preprod")
+
+
+def verify_staged_tree(
+    artifact: Path,
+    manifest_path: Path,
+    target: Path,
+    policy_path: Path,
+    materials: dict[str, Path],
+    now: datetime | None = None,
+    verify_provenance: bool = True,
+) -> str:
+    manifest = verify_candidate(
+        artifact,
+        manifest_path,
+        policy_path,
+        now=now,
+        materials=materials,
+    )
+    if manifest["status"] != "seaworthy":
+        raise PreprodError("only a seaworthy manifest can authorize a Grail tree")
+    if verify_provenance:
+        _verify_github_provenance(
+            manifest,
+            (artifact, manifest_path, *materials.values()),
+        )
+    target, branch = _validate_grail_target(target)
+    if branch in {"main", "HEAD"}:
         raise PreprodError("Grail verification requires a release branch")
     if _git(target, "rev-parse", "HEAD^{commit}").strip() != manifest["subject"]["grail_base_commit"]:
         raise PreprodError("Grail base moved since Preprod")
@@ -1006,20 +1580,117 @@ def verify_staged_tree(manifest_path: Path, target: Path) -> str:
     return tree
 
 
+def verify_release_commit(
+    artifact: Path,
+    manifest_path: Path,
+    target: Path,
+    policy_path: Path,
+    materials: dict[str, Path],
+    now: datetime | None = None,
+    verify_provenance: bool = True,
+) -> str:
+    manifest = verify_candidate(
+        artifact,
+        manifest_path,
+        policy_path,
+        now=now,
+        materials=materials,
+    )
+    if manifest["status"] != "seaworthy":
+        raise PreprodError("only a seaworthy manifest can authorize a release commit")
+    if verify_provenance:
+        _verify_github_provenance(
+            manifest,
+            (artifact, manifest_path, *materials.values()),
+        )
+    target, branch = _validate_grail_target(target)
+    if branch in {"main", "HEAD"}:
+        raise PreprodError("release commit verification requires a release branch")
+    if _git(target, "status", "--porcelain=v1", "--untracked-files=all"):
+        raise PreprodError("release branch must be clean after commit")
+    commit = _git(target, "rev-parse", "HEAD^{commit}").strip()
+    _verify_release_commit_shape(manifest, target, commit)
+    return commit
+
+
+def verify_final_merge(
+    artifact: Path,
+    manifest_path: Path,
+    target: Path,
+    release_commit: str,
+    policy_path: Path,
+    materials: dict[str, Path],
+    now: datetime | None = None,
+    verify_provenance: bool = True,
+) -> str:
+    manifest = verify_candidate(
+        artifact,
+        manifest_path,
+        policy_path,
+        now=now,
+        materials=materials,
+    )
+    if manifest["status"] != "seaworthy":
+        raise PreprodError("only a seaworthy manifest can authorize a Grail merge")
+    if verify_provenance:
+        _verify_github_provenance(
+            manifest,
+            (artifact, manifest_path, *materials.values()),
+        )
+    if not re.fullmatch(r"[0-9a-f]{40}", release_commit):
+        raise PreprodError("release commit must be a full lowercase SHA")
+    target, branch = _validate_grail_target(target)
+    if branch != "main":
+        raise PreprodError("final merge verification requires the main branch")
+    if _git(target, "status", "--porcelain=v1", "--untracked-files=all"):
+        raise PreprodError("Grail main must be clean after merge")
+    _verify_release_commit_shape(manifest, target, release_commit)
+    merge_commit = _git(target, "rev-parse", "HEAD^{commit}").strip()
+    record = _git(target, "rev-list", "--parents", "-n", "1", merge_commit).split()
+    expected_parents = [
+        manifest["subject"]["grail_base_commit"],
+        release_commit,
+    ]
+    if len(record) != 3 or record[1:] != expected_parents:
+        raise PreprodError("final merge parents do not preserve the sealed release")
+    if _git(target, "rev-parse", "HEAD^{tree}").strip() != manifest["subject"]["expected_grail_tree"]:
+        raise PreprodError("final Grail merge tree does not match sealed Preprod")
+    return merge_commit
+
+
 def _extract_archive(artifact: Path, destination: Path) -> None:
     members = _validate_archive(artifact)
+    destination = destination.resolve()
+    if destination.exists() and (
+        not destination.is_dir() or any(destination.iterdir())
+    ):
+        raise PreprodError("archive destination must be absent or empty")
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(artifact, "r:gz") as archive:
         for member in members:
-            output = destination / member.name
+            output = destination.joinpath(*PurePosixPath(member.name).parts)
+            try:
+                output.resolve(strict=False).relative_to(destination)
+            except ValueError as error:
+                raise PreprodError(
+                    f"artifact member escapes extraction root: {member.name}"
+                ) from error
             output.parent.mkdir(parents=True, exist_ok=True)
             source = archive.extractfile(member)
             if source is None:
                 raise PreprodError(f"cannot read artifact member: {member.name}")
-            with output.open("wb") as handle:
-                while chunk := source.read(1024 * 1024):
-                    handle.write(chunk)
-            os.chmod(output, 0o755 if member.mode & stat.S_IXUSR else 0o644)
+            temporary = output.with_name(f".{output.name}.{os.getpid()}.tmp")
+            try:
+                with temporary.open("wb") as handle:
+                    while chunk := source.read(1024 * 1024):
+                        handle.write(chunk)
+                os.chmod(temporary, 0o755 if member.mode & stat.S_IXUSR else 0o644)
+                os.replace(temporary, output)
+            finally:
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
 
 
 def prepare_runtime(
@@ -1032,15 +1703,24 @@ def prepare_runtime(
     platform_name: str | None = None,
     verify_provenance: bool = True,
     install_dependencies: bool = True,
+    allow_candidate: bool = False,
+    now: datetime | None = None,
 ) -> dict:
+    policy = _read_json(policy_path)
+    _validate_policy(policy)
     manifest = verify_candidate(
         artifact,
         manifest_path,
         policy_path,
-        materials=materials,
+        now=now,
+        materials=None if allow_candidate else materials,
     )
-    if manifest["status"] != "seaworthy":
-        raise PreprodError("only a seaworthy artifact can prepare a runtime")
+    if manifest["status"] != "seaworthy" and not (
+        allow_candidate and manifest["status"] == "preprod-candidate"
+    ):
+        raise PreprodError("artifact status cannot prepare this runtime")
+    if allow_candidate and verify_provenance:
+        raise PreprodError("candidate runtime preparation cannot claim provenance")
     if verify_provenance:
         _verify_github_provenance(
             manifest,
@@ -1052,9 +1732,13 @@ def prepare_runtime(
         "darwin": "macos",
         "win32": "windows",
     }.get(sys.platform)
+    if platform_key not in {"linux", "macos", "windows"}:
+        raise PreprodError(f"unsupported runtime platform: {platform_key}")
     material_name = f"dependency-material-{platform_key}"
     if material_name not in materials:
         raise PreprodError(f"no sealed dependency material for {platform_key}")
+    selected_material = materials[material_name]
+    _validate_dependency_material(material_name, selected_material)
     destination = destination.resolve()
     state_dir = state_dir.resolve()
     if destination.exists():
@@ -1074,7 +1758,8 @@ def prepare_runtime(
         source_dir = temporary / "src"
         dependencies = temporary / "dependencies"
         _extract_archive(artifact, source_dir)
-        _extract_archive(materials[material_name], dependencies)
+        verify_grail_kernel_bytes(source_dir, policy)
+        _extract_archive(selected_material, dependencies)
         lock = dependencies / "requirements.lock"
         wheelhouse = dependencies / "wheelhouse"
         if not lock.is_file() or not wheelhouse.is_dir():
@@ -1096,7 +1781,7 @@ def prepare_runtime(
         if install_dependencies:
             venv = temporary / "venv"
             result = subprocess.run(
-                [sys.executable, "-m", "venv", str(venv)],
+                [sys.executable, "-I", "-m", "venv", str(venv)],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -1111,6 +1796,7 @@ def prepare_runtime(
             result = subprocess.run(
                 [
                     str(python),
+                    "-I",
                     "-m",
                     "pip",
                     "install",
@@ -1132,11 +1818,29 @@ def prepare_runtime(
         _write_json(
             temporary / "deployment.json",
             {
-                "schema": "rapp-seaworthy-deployment/1",
+                "schema": (
+                    "rapp-preprod-deployment/1"
+                    if allow_candidate
+                    else "rapp-seaworthy-deployment/1"
+                ),
                 "artifact_sha256": manifest["subject"]["artifact_sha256"],
                 "brainstem_sha256": manifest["subject"]["brainstem_sha256"],
+                "grail_id": manifest["subject"]["grail_id"],
+                "release_scope": manifest["subject"]["release_scope"],
+                "kernel_entrypoint": manifest["runtime"]["kernel_entrypoint"],
+                "resolved_kernel_path": str(
+                    (
+                        destination
+                        / "src"
+                        / manifest["runtime"]["kernel_entrypoint"]
+                    ).resolve(strict=False)
+                ),
                 "material": material_name,
-                "material_sha256": manifest["deployment_materials"][material_name]["sha256"],
+                "material_sha256": (
+                    _sha256(selected_material)
+                    if allow_candidate
+                    else manifest["deployment_materials"][material_name]["sha256"]
+                ),
                 "model_id": manifest["runtime"]["model_id"],
                 "state_dir": str(state_dir),
             },
@@ -1158,6 +1862,118 @@ def prepare_runtime(
     }
 
 
+def launch_runtime(
+    runtime: Path,
+    policy_path: Path,
+    evidence_path: Path,
+) -> int:
+    policy = _read_json(policy_path)
+    _validate_policy(policy)
+    kernel = policy["grail_kernel"]
+    runtime = runtime.resolve()
+    deployment = _read_json(runtime / "deployment.json")
+    if (
+        deployment.get("schema")
+        not in {"rapp-seaworthy-deployment/1", "rapp-preprod-deployment/1"}
+        or deployment.get("grail_id") != kernel["grail_id"]
+        or deployment.get("brainstem_sha256") != kernel["sha256"]
+        or deployment.get("kernel_entrypoint") != kernel["path"]
+        or deployment.get("release_scope") != kernel["release_scope"]
+    ):
+        raise PreprodError("runtime deployment record does not match the Grail pin")
+    source_root = (runtime / "src").resolve(strict=True)
+    declared_path = source_root.joinpath(*PurePosixPath(kernel["path"]).parts)
+    current = declared_path
+    while current != source_root:
+        if current.is_symlink():
+            raise PreprodError("kernel entrypoint path contains a symlink")
+        current = current.parent
+    kernel_path = declared_path.resolve(strict=True)
+    try:
+        kernel_path.relative_to(source_root)
+    except ValueError as error:
+        raise PreprodError("kernel entrypoint resolves outside the release root") from error
+    if kernel_path != declared_path:
+        raise PreprodError("kernel entrypoint resolves outside its declared path")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(kernel_path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise PreprodError("kernel entrypoint is not a regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            payload = handle.read()
+    finally:
+        os.close(descriptor)
+    if (
+        len(payload) != kernel["size_bytes"]
+        or hashlib.sha256(payload).hexdigest() != kernel["sha256"]
+        or _grail_id(payload) != kernel["grail_id"]
+    ):
+        raise PreprodError("kernel-drift: runtime entrypoint differs from Grail")
+
+    python = (
+        runtime / "venv" / "Scripts" / "python.exe"
+        if os.name == "nt"
+        else runtime / "venv" / "bin" / "python"
+    )
+    if not python.is_file():
+        raise PreprodError("runtime Python interpreter is missing")
+    environment = os.environ.copy()
+    environment["BRAINSTEM_STATE_DIR"] = str(deployment["state_dir"])
+    environment["GITHUB_MODEL"] = str(deployment["model_id"])
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    process = subprocess.Popen(
+        [
+            str(python),
+            "-I",
+            "-c",
+            KERNEL_BOOTSTRAP,
+            str(kernel_path),
+        ],
+        stdin=subprocess.PIPE,
+        env=environment,
+    )
+    if process.stdin is None:
+        process.kill()
+        raise PreprodError("cannot stream verified kernel bytes to the runtime")
+    previous_handlers = {}
+
+    def forward_signal(signum, _frame):
+        process.send_signal(signum)
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.signal(signum, forward_signal)
+    try:
+        process.stdin.write(payload)
+        process.stdin.close()
+        _write_json(
+            evidence_path,
+            {
+                "schema": "rapp-kernel-launch/1",
+                "release_scope": kernel["release_scope"],
+                "grail_id": kernel["grail_id"],
+                "artifact_sha256": deployment["artifact_sha256"],
+                "kernel_sha256": kernel["sha256"],
+                "kernel_size_bytes": len(payload),
+                "resolved_kernel_path": str(kernel_path),
+                "execution_mode": "verified-memory-snapshot",
+                "runtime_python": str(python.resolve()),
+                "process_id": process.pid,
+                "verified_at": _format_time(datetime.now(timezone.utc)),
+            },
+        )
+        return process.wait()
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+            process.wait()
+        raise
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+
 def _parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser()
@@ -1175,9 +1991,12 @@ def _parse_args() -> argparse.Namespace:
     package.add_argument("--beta-commit", required=True)
     package.add_argument("--qualification-run-id", required=True)
     package.add_argument("--qualification-url", required=True)
+    package.add_argument("--qualification-commit", required=True)
     package.add_argument("--beta-preflight-run-id", required=True)
     package.add_argument("--beta-preflight-url", required=True)
+    package.add_argument("--soak-evidence", type=Path, required=True)
     package.add_argument("--soak-evidence-url", required=True)
+    package.add_argument("--soak-evidence-sha256", required=True)
     package.add_argument("--owner", required=True)
     package.add_argument("--control-plane-commit", required=True)
     package.add_argument("--model-id", required=True)
@@ -1191,6 +2010,7 @@ def _parse_args() -> argparse.Namespace:
     verify.add_argument("--expected-beta-commit")
     verify.add_argument("--expected-qualification-run")
     verify.add_argument("--allow-expired", action="store_true")
+    verify.add_argument("--verify-provenance", action="store_true")
     verify.add_argument("--material", action="append", default=[])
 
     seal = subparsers.add_parser("seal")
@@ -1209,21 +2029,54 @@ def _parse_args() -> argparse.Namespace:
     export.add_argument("--target", type=Path, required=True)
     export.add_argument("--material", action="append", default=[])
 
+    def add_tree_verification_arguments(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--artifact", type=Path, required=True)
+        command.add_argument("--manifest", type=Path, required=True)
+        command.add_argument("--target", type=Path, required=True)
+        command.add_argument("--material", action="append", default=[])
+
     verify_tree = subparsers.add_parser("verify-staged-tree")
-    verify_tree.add_argument("--manifest", type=Path, required=True)
-    verify_tree.add_argument("--target", type=Path, required=True)
+    add_tree_verification_arguments(verify_tree)
+
+    verify_release = subparsers.add_parser("verify-release-commit")
+    add_tree_verification_arguments(verify_release)
+
+    verify_merge = subparsers.add_parser("verify-final-merge")
+    add_tree_verification_arguments(verify_merge)
+    verify_merge.add_argument("--release-commit", required=True)
 
     bundle = subparsers.add_parser("bundle")
     bundle.add_argument("--source", type=Path, required=True)
     bundle.add_argument("--artifact", type=Path, required=True)
 
+    extract = subparsers.add_parser("extract")
+    extract.add_argument("--artifact", type=Path, required=True)
+    extract.add_argument("--destination", type=Path, required=True)
+
+    validate_requirements = subparsers.add_parser("validate-requirements")
+    validate_requirements.add_argument("--requirements", type=Path, required=True)
+
+    verify_kernel = subparsers.add_parser("verify-kernel")
+    verify_kernel.add_argument("--repo", type=Path, required=True)
+
+    subparsers.add_parser("verify-policy")
+
+    launch = subparsers.add_parser("launch-runtime")
+    launch.add_argument("--runtime", type=Path, required=True)
+    launch.add_argument("--evidence", type=Path, required=True)
+
+    def add_runtime_arguments(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--artifact", type=Path, required=True)
+        command.add_argument("--manifest", type=Path, required=True)
+        command.add_argument("--destination", type=Path, required=True)
+        command.add_argument("--state-dir", type=Path, required=True)
+        command.add_argument("--platform", choices=("linux", "macos", "windows"))
+        command.add_argument("--material", action="append", default=[])
+
     prepare = subparsers.add_parser("prepare-runtime")
-    prepare.add_argument("--artifact", type=Path, required=True)
-    prepare.add_argument("--manifest", type=Path, required=True)
-    prepare.add_argument("--destination", type=Path, required=True)
-    prepare.add_argument("--state-dir", type=Path, required=True)
-    prepare.add_argument("--platform", choices=("linux", "macos", "windows"))
-    prepare.add_argument("--material", action="append", default=[])
+    add_runtime_arguments(prepare)
+    prepare_candidate = subparsers.add_parser("prepare-candidate-runtime")
+    add_runtime_arguments(prepare_candidate)
     return parser.parse_args()
 
 
@@ -1239,9 +2092,12 @@ def main() -> int:
                 args.beta_commit,
                 args.qualification_run_id,
                 args.qualification_url,
+                args.qualification_commit,
                 args.beta_preflight_run_id,
                 args.beta_preflight_url,
+                args.soak_evidence.resolve(),
                 args.soak_evidence_url,
+                args.soak_evidence_sha256,
                 args.owner,
                 args.control_plane_commit,
                 args.model_id,
@@ -1255,6 +2111,11 @@ def main() -> int:
                 f"(beta {manifest['subject']['beta_commit'][:12]})"
             )
         elif args.command == "verify":
+            materials = (
+                _parse_material_specs(args.material)
+                if args.material
+                else None
+            )
             manifest = verify_candidate(
                 args.artifact.resolve(),
                 args.manifest.resolve(),
@@ -1262,8 +2123,22 @@ def main() -> int:
                 expected_beta_commit=args.expected_beta_commit,
                 expected_qualification_run=args.expected_qualification_run,
                 allow_expired=args.allow_expired,
-                materials=_parse_material_specs(args.material) if args.material else None,
+                materials=materials,
             )
+            if args.verify_provenance:
+                if manifest["status"] != "seaworthy" or materials is None:
+                    raise PreprodError(
+                        "provenance verification requires a seaworthy "
+                        "manifest and all deployment materials"
+                    )
+                _verify_github_provenance(
+                    manifest,
+                    (
+                        args.artifact.resolve(),
+                        args.manifest.resolve(),
+                        *materials.values(),
+                    ),
+                )
             print(
                 "SEAWORTHINESS VERIFIED — "
                 f"{manifest['subject']['artifact_sha256']} "
@@ -1297,14 +2172,60 @@ def main() -> int:
             print(f"GRAIL HANDOFF — {changed} paths staged from exact preprod artifact")
         elif args.command == "verify-staged-tree":
             tree = verify_staged_tree(
+                args.artifact.resolve(),
                 args.manifest.resolve(),
                 args.target.resolve(),
+                args.policy.resolve(),
+                _parse_material_specs(args.material),
             )
             print(f"GRAIL TREE VERIFIED — {tree}")
+        elif args.command == "verify-release-commit":
+            commit = verify_release_commit(
+                args.artifact.resolve(),
+                args.manifest.resolve(),
+                args.target.resolve(),
+                args.policy.resolve(),
+                _parse_material_specs(args.material),
+            )
+            print(f"GRAIL RELEASE COMMIT VERIFIED — {commit}")
+        elif args.command == "verify-final-merge":
+            commit = verify_final_merge(
+                args.artifact.resolve(),
+                args.manifest.resolve(),
+                args.target.resolve(),
+                args.release_commit,
+                args.policy.resolve(),
+                _parse_material_specs(args.material),
+            )
+            print(f"GRAIL FINAL MERGE VERIFIED — {commit}")
         elif args.command == "bundle":
             digest = build_artifact(args.source.resolve(), args.artifact.resolve())
             print(f"DEPLOYMENT MATERIAL — {digest} ({args.artifact.name})")
-        else:
+        elif args.command == "extract":
+            _extract_archive(args.artifact.resolve(), args.destination.resolve())
+            print(f"ARCHIVE EXTRACTED — {args.destination.resolve()}")
+        elif args.command == "validate-requirements":
+            requirements = _requirement_lines(args.requirements.resolve())
+            print(f"REGISTRY REQUIREMENTS VERIFIED — {len(requirements)} entries")
+        elif args.command == "verify-kernel":
+            kernel = verify_grail_kernel_bytes(
+                args.repo.resolve(),
+                _read_json(args.policy.resolve()),
+            )
+            print(
+                "IMMUTABLE GRAIL VERIFIED — "
+                f"{kernel['immutable_ref']} sha256:{kernel['sha256']}"
+            )
+        elif args.command == "verify-policy":
+            _validate_policy(_read_json(args.policy.resolve()))
+            print("PREPROD POLICY VERIFIED — immutable RAPP/1 and Grail pins")
+        elif args.command == "launch-runtime":
+            return launch_runtime(
+                args.runtime.resolve(),
+                args.policy.resolve(),
+                args.evidence.resolve(),
+            )
+        elif args.command in {"prepare-runtime", "prepare-candidate-runtime"}:
             result = prepare_runtime(
                 args.artifact.resolve(),
                 args.manifest.resolve(),
@@ -1313,8 +2234,12 @@ def main() -> int:
                 args.policy.resolve(),
                 _parse_material_specs(args.material),
                 platform_name=args.platform,
+                verify_provenance=args.command == "prepare-runtime",
+                allow_candidate=args.command == "prepare-candidate-runtime",
             )
             print(f"SEALED RUNTIME — source={result['source']} venv={result['venv']}")
+        else:
+            raise PreprodError(f"unsupported command: {args.command}")
     except (OSError, PreprodError) as error:
         print(f"preprod gate failed: {error}", file=os.sys.stderr)
         return 1

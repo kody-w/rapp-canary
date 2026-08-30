@@ -37,7 +37,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
-      - run: python -m unittest discover .ring/tests -v
+      - run: python -I -m unittest discover .ring/tests -v
 
   test:
     needs: tooling
@@ -100,6 +100,8 @@ jobs:
         working-directory: ${{ runner.temp }}/payload
         run: |
           set -euo pipefail
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" \
+            verify-kernel --repo "$RUNNER_TEMP/payload"
           if [[ -f rapp_brainstem/requirements.txt ]]; then
             python -m pip install --quiet -r rapp_brainstem/requirements.txt pytest
           fi
@@ -157,7 +159,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python .ring/tools/render_ring.py \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/render_ring.py" \
             --repo "$RUNNER_TEMP/payload" \
             --config "$RUNNER_TEMP/payload/.ring/ring.json" \
             --output "$RUNNER_TEMP/rendered" \
@@ -213,27 +215,27 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/attestations"
-          python .ring/tools/ring_attestation.py create \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/ring_attestation.py" create \
             --ring canary \
             --repo "$RUNNER_TEMP/canary" \
             --repository kody-w/rapp-canary \
             --commit "$CANARY_COMMIT" \
             --attestation "$RUNNER_TEMP/attestations/canary.json"
-          python .ring/tools/ring_attestation.py create \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/ring_attestation.py" create \
             --ring nightly \
             --repo "$RUNNER_TEMP/nightly" \
             --repository kody-w/rapp-nightly \
             --commit "$NIGHTLY_COMMIT" \
             --parent "$RUNNER_TEMP/attestations/canary.json" \
             --attestation "$RUNNER_TEMP/attestations/nightly.json"
-          python .ring/tools/ring_attestation.py create \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/ring_attestation.py" create \
             --ring alpha \
             --repo "$RUNNER_TEMP/alpha" \
             --repository kody-w/rapp-alpha \
             --commit "$ALPHA_COMMIT" \
             --parent "$RUNNER_TEMP/attestations/nightly.json" \
             --attestation "$RUNNER_TEMP/attestations/alpha.json"
-          python .ring/tools/ring_attestation.py create \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/ring_attestation.py" create \
             --ring beta \
             --repo "$RUNNER_TEMP/beta" \
             --repository kody-w/rapp-beta \
@@ -249,7 +251,7 @@ jobs:
       - name: Mark Beta eligible for human Grail review
         shell: bash
         run: |
-          DIGEST=$(python -c \
+          DIGEST=$(python -I -c \
             "import json; print(json.load(open('$RUNNER_TEMP/attestations/beta.json'))['payload']['shared_sha256'])")
           {
             echo "## Pre-Grail qualification passed"

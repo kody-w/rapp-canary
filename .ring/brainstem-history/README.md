@@ -15,11 +15,12 @@ binding:
 Verify the chain against a Grail checkout:
 
 ```bash
-python3 .ring/tools/brainstem_history.py verify-all \
+python3 -I .ring/tools/brainstem_history.py verify-all \
   --repo /path/to/rapp-installer \
   --directory .ring/brainstem-history
 ```
 
-The release tag restores the complete compatible product. The frame proves
-which exact Brainstem that tag contains; it is not permission to restore
+Preprod publishes this complete chain and rehearses rollback using the selected
+frame's exact commit. The release tag is a verified human-readable alias; the
+frame proves which exact Brainstem it names and is not permission to restore
 `brainstem.py` alone into a mismatched release.

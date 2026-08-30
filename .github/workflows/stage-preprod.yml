@@ -17,7 +17,11 @@ on:
         required: true
         type: string
       soak_evidence_url:
-        description: GitHub URL containing real-use soak evidence
+        description: Commit-pinned raw URL to a rapp/1:soak JSON frame
+        required: true
+        type: string
+      soak_evidence_sha256:
+        description: SHA-256 of the soak evidence JSON
         required: true
         type: string
       owner:
@@ -59,6 +63,7 @@ jobs:
       BETA_PREFLIGHT_RUN_ID: ${{ inputs.beta_preflight_run_id }}
       ROLLBACK_REF: ${{ inputs.rollback_ref }}
       SOAK_EVIDENCE_URL: ${{ inputs.soak_evidence_url }}
+      SOAK_EVIDENCE_SHA256: ${{ inputs.soak_evidence_sha256 }}
       CANDIDATE_OWNER: ${{ inputs.owner }}
       MODEL_ID: ${{ inputs.model_id }}
       EXPIRES_HOURS: ${{ inputs.expires_hours }}
@@ -66,6 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -80,6 +86,30 @@ jobs:
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
           [[ "$QUALIFICATION_RUN_ID" =~ ^[0-9]+$ ]]
           [[ "$BETA_PREFLIGHT_RUN_ID" =~ ^[0-9]+$ ]]
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" verify-policy
+
+          RAPP1_COMMIT=$(jq -r .rapp1_authority.commit .ring/preprod-policy.json)
+          RAPP1_SPEC_SHA=$(jq -r .rapp1_authority.spec_sha256 .ring/preprod-policy.json)
+          RAPP1_CONSTITUTION_SHA=$(jq -r \
+            .rapp1_authority.constitution_sha256 .ring/preprod-policy.json)
+          [[ "$RAPP1_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          COMPARE=$(gh api \
+            "repos/kody-w/rapp-1/compare/$RAPP1_COMMIT...main")
+          [[ "$(jq -r .status <<<"$COMPARE")" =~ ^(ahead|identical)$ ]]
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --max-filesize 4194304 \
+            "https://raw.githubusercontent.com/kody-w/rapp-1/$RAPP1_COMMIT/SPEC.md" \
+            -o "$RUNNER_TEMP/RAPP1-SPEC.md"
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --max-filesize 1048576 \
+            "https://raw.githubusercontent.com/kody-w/rapp-1/$RAPP1_COMMIT/CONSTITUTION.md" \
+            -o "$RUNNER_TEMP/RAPP1-CONSTITUTION.md"
+          [[ "$(sha256sum "$RUNNER_TEMP/RAPP1-SPEC.md" | awk '{print $1}')" == "$RAPP1_SPEC_SHA" ]]
+          [[ "$(sha256sum "$RUNNER_TEMP/RAPP1-CONSTITUTION.md" | awk '{print $1}')" == "$RAPP1_CONSTITUTION_SHA" ]]
+          grep -q '^### 11[.]1 Immutable Grail kernel conformance$' \
+            "$RUNNER_TEMP/RAPP1-SPEC.md"
+          grep -q '^## Article 15 — The Grail Never Changes$' \
+            "$RUNNER_TEMP/RAPP1-CONSTITUTION.md"
 
           QUALIFICATION=$(gh api \
             "repos/kody-w/rapp-canary/actions/runs/$QUALIFICATION_RUN_ID")
@@ -88,6 +118,7 @@ jobs:
           [[ "$(jq -r .path <<<"$QUALIFICATION")" == ".github/workflows/test-pre-grail-rings.yml" ]]
           [[ "$(jq -r .event <<<"$QUALIFICATION")" == "workflow_dispatch" ]]
           [[ "$(jq -r .head_branch <<<"$QUALIFICATION")" == "main" ]]
+          QUALIFICATION_COMMIT=$(jq -r .head_sha <<<"$QUALIFICATION")
           QUALIFICATION_URL=$(jq -r .html_url <<<"$QUALIFICATION")
           QUALIFICATION_CREATED=$(jq -r .created_at <<<"$QUALIFICATION")
 
@@ -101,7 +132,7 @@ jobs:
           BETA_COMMIT=$(jq -r .payload.commit "$BETA_ATTESTATION")
           CANARY_ATTESTATION=$(find "$RUNNER_TEMP/qualification" -name canary.json -type f)
           [[ "$(printf '%s\n' "$CANARY_ATTESTATION" | sed '/^$/d' | wc -l | tr -d ' ')" == "1" ]]
-          [[ "$(jq -r .head_sha <<<"$QUALIFICATION")" == "$(jq -r .payload.commit "$CANARY_ATTESTATION")" ]]
+          [[ "$QUALIFICATION_COMMIT" == "$(jq -r .payload.commit "$CANARY_ATTESTATION")" ]]
 
           BETA_PREFLIGHT=$(gh api \
             "repos/kody-w/rapp-beta/actions/runs/$BETA_PREFLIGHT_RUN_ID")
@@ -115,7 +146,7 @@ jobs:
           BETA_PREFLIGHT_CREATED=$(jq -r .created_at <<<"$BETA_PREFLIGHT")
 
           MAX_AGE_HOURS=$(jq -r .max_candidate_age_hours .ring/preprod-policy.json)
-          python3 - "$QUALIFICATION_CREATED" "$BETA_PREFLIGHT_CREATED" "$MAX_AGE_HOURS" <<'PY'
+          python -I - "$QUALIFICATION_CREATED" "$BETA_PREFLIGHT_CREATED" "$MAX_AGE_HOURS" <<'PY'
           from datetime import datetime, timedelta, timezone
           import sys
 
@@ -131,7 +162,14 @@ jobs:
           git ls-remote --exit-code \
             https://github.com/kody-w/rapp-installer.git \
             "refs/tags/$ROLLBACK_REF" "refs/tags/$ROLLBACK_REF^{}" >/dev/null
-          [[ "$SOAK_EVIDENCE_URL" == https://github.com/* ]]
+          [[ "$SOAK_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SOAK_EVIDENCE_URL" =~ ^https://raw[.]githubusercontent[.]com/kody-w/rapp-canary/[0-9a-f]{40}/[.]ring/soak/[A-Za-z0-9._-]+[.]json$ ]]
+          SOAK_COMMIT=$(cut -d/ -f6 <<<"$SOAK_EVIDENCE_URL")
+          git merge-base --is-ancestor "$SOAK_COMMIT" "$GITHUB_SHA"
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --max-filesize 1048576 \
+            "$SOAK_EVIDENCE_URL" -o "$RUNNER_TEMP/soak-evidence.json"
+          [[ "$(sha256sum "$RUNNER_TEMP/soak-evidence.json" | awk '{print $1}')" == "$SOAK_EVIDENCE_SHA256" ]]
 
           ENVIRONMENT=$(gh api \
             "repos/kody-w/rapp-canary/environments/preprod")
@@ -150,6 +188,7 @@ jobs:
             <<<"$BRANCH_POLICIES")" == "1" ]]
 
           echo "beta_commit=$BETA_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "qualification_commit=$QUALIFICATION_COMMIT" >> "$GITHUB_OUTPUT"
           echo "qualification_url=$QUALIFICATION_URL" >> "$GITHUB_OUTPUT"
           echo "beta_preflight_url=$BETA_PREFLIGHT_URL" >> "$GITHUB_OUTPUT"
 
@@ -161,7 +200,7 @@ jobs:
             "$RUNNER_TEMP/candidate"
           git -C "$RUNNER_TEMP/candidate" checkout -q \
             -b "preprod/run-$QUALIFICATION_RUN_ID"
-          python .ring/tools/grail_gate.py verify \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/grail_gate.py" verify \
             --run-id "$QUALIFICATION_RUN_ID" \
             --export-to "$RUNNER_TEMP/candidate"
 
@@ -170,46 +209,58 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/preprod"
-          python .ring/tools/brainstem_history.py verify-all \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/brainstem_history.py" verify-all \
             --repo "$RUNNER_TEMP/candidate" \
-            --directory .ring/brainstem-history
-          ROLLBACK_FRAME=".ring/brainstem-history/$ROLLBACK_REF.json"
+            --directory "$GITHUB_WORKSPACE/.ring/brainstem-history"
+          ROLLBACK_FRAME="$GITHUB_WORKSPACE/.ring/brainstem-history/$ROLLBACK_REF.json"
           test -f "$ROLLBACK_FRAME"
-          python .ring/tools/brainstem_history.py verify \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/brainstem_history.py" verify \
             --repo "$RUNNER_TEMP/candidate" \
             --frame "$ROLLBACK_FRAME"
-          cp "$ROLLBACK_FRAME" "$RUNNER_TEMP/preprod/rollback-brainstem.json"
+          cp -R "$GITHUB_WORKSPACE/.ring/brainstem-history" \
+            "$RUNNER_TEMP/preprod/brainstem-history"
 
       - name: Package immutable candidate and readiness manifest
         id: package
         shell: bash
         env:
           BETA_COMMIT: ${{ steps.evidence.outputs.beta_commit }}
+          QUALIFICATION_COMMIT: ${{ steps.evidence.outputs.qualification_commit }}
           QUALIFICATION_URL: ${{ steps.evidence.outputs.qualification_url }}
           BETA_PREFLIGHT_URL: ${{ steps.evidence.outputs.beta_preflight_url }}
         run: |
           set -euo pipefail
           OUT="$RUNNER_TEMP/preprod"
           mkdir -p "$OUT"
+          cp "$RUNNER_TEMP/soak-evidence.json" "$OUT/soak-evidence.json"
           ARTIFACT="rapp-preprod-${BETA_COMMIT:0:12}.tar.gz"
-          python .ring/tools/preprod_gate.py package \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" package \
             --source "$RUNNER_TEMP/candidate" \
             --artifact "$OUT/$ARTIFACT" \
             --manifest "$OUT/readiness.json" \
             --beta-commit "$BETA_COMMIT" \
             --qualification-run-id "$QUALIFICATION_RUN_ID" \
             --qualification-url "$QUALIFICATION_URL" \
+            --qualification-commit "$QUALIFICATION_COMMIT" \
             --beta-preflight-run-id "$BETA_PREFLIGHT_RUN_ID" \
             --beta-preflight-url "$BETA_PREFLIGHT_URL" \
+            --soak-evidence "$RUNNER_TEMP/soak-evidence.json" \
             --soak-evidence-url "$SOAK_EVIDENCE_URL" \
+            --soak-evidence-sha256 "$SOAK_EVIDENCE_SHA256" \
             --owner "$CANDIDATE_OWNER" \
             --control-plane-commit "$GITHUB_SHA" \
             --model-id "$MODEL_ID" \
             --rollback-ref "$ROLLBACK_REF" \
-            --rollback-frame "$OUT/rollback-brainstem.json" \
+            --rollback-frame "$OUT/brainstem-history/$ROLLBACK_REF.json" \
             --expires-hours "$EXPIRES_HOURS"
-          SHA=$(python -c \
-            "import json; print(json.load(open('$OUT/readiness.json'))['subject']['artifact_sha256'])")
+          SHA=$(python -I - "$OUT/readiness.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              print(json.load(handle)["subject"]["artifact_sha256"])
+          PY
+          )
           echo "artifact_name=$ARTIFACT" >> "$GITHUB_OUTPUT"
           echo "artifact_sha256=$SHA" >> "$GITHUB_OUTPUT"
           {
@@ -266,20 +317,16 @@ jobs:
           QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
         run: |
           set -euo pipefail
-          python .ring/tools/preprod_gate.py verify \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" verify \
             --artifact "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" \
             --manifest "$RUNNER_TEMP/preprod/readiness.json" \
             --expected-beta-commit "$BETA_COMMIT" \
             --expected-qualification-run "$QUALIFICATION_RUN_ID"
-          mkdir -p "$RUNNER_TEMP/candidate"
-          tar -xzf "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" \
-            -C "$RUNNER_TEMP/candidate"
-          python -m pip install --quiet \
-            -r "$RUNNER_TEMP/candidate/rapp_brainstem/requirements.txt" pytest
-          (
-            cd "$RUNNER_TEMP/candidate"
-            GITHUB_MODEL="$MODEL_ID" bash tests/test_installer.sh
-          )
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" extract \
+            --artifact "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" \
+            --destination "$RUNNER_TEMP/candidate"
+          test -f "$RUNNER_TEMP/candidate/install.sh"
+          test -f "$RUNNER_TEMP/candidate/rapp_brainstem/brainstem.py"
 
       - name: Parse Windows PowerShell 5.1 installer
         if: runner.os == 'Windows'
@@ -332,112 +379,16 @@ jobs:
           KEY=$(printf '%s' "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')
           CANDIDATE="$RUNNER_TEMP/candidate"
           MATERIAL="$RUNNER_TEMP/dependency-$KEY"
-          mkdir -p "$CANDIDATE" "$MATERIAL/wheelhouse"
-          tar -xzf "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" -C "$CANDIDATE"
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" extract \
+            --artifact "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" \
+            --destination "$CANDIDATE"
           REQUIREMENTS="$CANDIDATE/rapp_brainstem/requirements.txt"
-          python - "$REQUIREMENTS" <<'PY'
-          import pathlib
-          import sys
-
-          for raw in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
-              line = raw.strip()
-              if not line or line.startswith("#"):
-                  continue
-              if line.startswith("-") or "@" in line or "://" in line:
-                  raise SystemExit(f"unsafe dependency source: {line}")
-          PY
-          python -m pip install --quiet --upgrade pip
-          python -m pip install --dry-run --ignore-installed --only-binary=:all: \
-            --report "$MATERIAL/resolution.json" -r "$REQUIREMENTS"
-          python - "$MATERIAL/resolution.json" "$MATERIAL/requirements.lock" <<'PY'
-          import json
-          import pathlib
-          import sys
-
-          report = json.load(open(sys.argv[1], encoding="utf-8"))
-          pins = sorted(
-              f"{item['metadata']['name']}=={item['metadata']['version']}"
-              for item in report.get("install", [])
-          )
-          pathlib.Path(sys.argv[2]).write_text(
-              "\n".join(pins) + "\n",
-              encoding="utf-8",
-          )
-          PY
-          python -m pip download --quiet --only-binary=:all: \
-            --dest "$MATERIAL/wheelhouse" \
-            -r "$MATERIAL/requirements.lock"
-          python -m pip install --quiet pip-audit==2.10.1
-          python -m pip_audit \
-            -r "$MATERIAL/requirements.lock" \
-            --no-deps \
-            --format json \
-            --output "$MATERIAL/vulnerability-report.json"
-          python - "$MATERIAL" "$KEY" <<'PY'
-          import email
-          import hashlib
-          import json
-          import pathlib
-          import platform
-          import sys
-          import zipfile
-
-          root = pathlib.Path(sys.argv[1])
-          files = {}
-          licenses = {}
-          blocked = []
-          for path in sorted((root / "wheelhouse").iterdir()):
-              files[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
-              if path.suffix != ".whl":
-                  blocked.append({"file": path.name, "reason": "non-wheel dependency"})
-                  continue
-              with zipfile.ZipFile(path) as wheel:
-                  metadata_name = next(
-                      (name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")),
-                      None,
-                  )
-                  if not metadata_name:
-                      blocked.append({"file": path.name, "reason": "missing metadata"})
-                      continue
-                  metadata = email.message_from_bytes(wheel.read(metadata_name))
-              declared = (
-                  metadata.get("License-Expression")
-                  or metadata.get("License")
-                  or "; ".join(metadata.get_all("Classifier", []))
-              ).strip()
-              if not declared or declared.upper() in {"UNKNOWN", "NONE"}:
-                  blocked.append({"file": path.name, "reason": "unknown license"})
-              if "AGPL" in declared.upper():
-                  blocked.append({"file": path.name, "reason": declared})
-              licenses[path.name] = declared
-          value = {
-              "schema": "rapp-dependency-materials/1",
-              "platform": sys.argv[2],
-              "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
-              "architecture": platform.machine().lower(),
-              "requirements": root.joinpath("requirements.lock").read_text().splitlines(),
-              "files": files,
-          }
-          root.joinpath("sbom.json").write_text(
-              json.dumps(value, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          license_report = {
-              "schema": "rapp-license-report/1",
-              "platform": sys.argv[2],
-              "licenses": licenses,
-              "blocked": blocked,
-          }
-          root.joinpath("licenses.json").write_text(
-              json.dumps(license_report, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          if blocked:
-              raise SystemExit(f"blocked dependency licenses: {blocked}")
-          PY
           ARCHIVE="$RUNNER_TEMP/dependency-material-$KEY.tar.gz"
-          python .ring/tools/preprod_gate.py bundle \
-            --source "$MATERIAL" \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/build_dependency_material.py" \
+            --requirements "$REQUIREMENTS" \
+            --output "$MATERIAL" \
+            --platform "$KEY" \
+            --audit-lock "$GITHUB_WORKSPACE/.ring/tooling/pip-audit.lock" \
             --artifact "$ARCHIVE"
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
@@ -449,32 +400,106 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Test with the frozen dependency material
+      - name: Exercise the production offline runtime with frozen test tools
         shell: bash
+        env:
+          ARTIFACT_NAME: ${{ needs.stage.outputs.artifact_name }}
         run: |
           set -euo pipefail
           KEY=$(printf '%s' "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')
-          MATERIAL="$RUNNER_TEMP/dependency-$KEY"
-          TEST_VENV="$RUNNER_TEMP/sealed-runtime"
-          python -m venv "$TEST_VENV"
+          ARCHIVE="$RUNNER_TEMP/dependency-material-$KEY.tar.gz"
+          RUNTIME="$RUNNER_TEMP/sealed-runtime"
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" \
+            prepare-candidate-runtime \
+            --artifact "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" \
+            --manifest "$RUNNER_TEMP/preprod/readiness.json" \
+            --destination "$RUNTIME" \
+            --state-dir "$RUNNER_TEMP/sealed-state" \
+            --platform "$KEY" \
+            --material "dependency-material-$KEY=$ARCHIVE"
+          (
+            export HOME="$RUNNER_TEMP/runtime-home"
+            export PORT=17405
+            exec python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" \
+              launch-runtime \
+              --runtime "$RUNTIME" \
+              --evidence "$RUNNER_TEMP/kernel-launch.json"
+          ) > "$RUNNER_TEMP/production-smoke.log" 2>&1 &
+          PROD_PID=$!
+          trap 'kill "$PROD_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 45); do
+            sleep 2
+            if curl -sf --max-time 2 http://localhost:17405/health \
+                -o "$RUNNER_TEMP/production-health.json"; then
+              break
+            fi
+            if [ "$attempt" = 45 ]; then
+              tail -80 "$RUNNER_TEMP/production-smoke.log" || true
+              exit 1
+            fi
+          done
+          python -I - \
+            "$RUNNER_TEMP/production-health.json" \
+            "$RUNNER_TEMP/kernel-launch.json" \
+            "${{ inputs.model_id }}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              health = json.load(handle)
+          with open(sys.argv[2], encoding="utf-8") as handle:
+              launch = json.load(handle)
+          assert health.get("status") in {"ok", "unauthenticated"}, health
+          assert health.get("model") == sys.argv[3], health
+          assert launch.get("execution_mode") == "verified-memory-snapshot", launch
+          assert launch.get("kernel_sha256"), launch
+          assert launch.get("grail_id"), launch
+          PY
+          kill "$PROD_PID"
+          wait "$PROD_PID" 2>/dev/null || true
+          trap - EXIT
+
+          TEST_VENV="$RUNNER_TEMP/test-runtime"
+          python -I -m venv "$TEST_VENV"
           if [ "$RUNNER_OS" = "Windows" ]; then
             TEST_PY="$TEST_VENV/Scripts/python.exe"
-            export PATH="$TEST_VENV/Scripts:$PATH"
+            TEST_PY_FOR_SHIM=$(cygpath -u "$TEST_PY")
           else
             TEST_PY="$TEST_VENV/bin/python"
-            export PATH="$TEST_VENV/bin:$PATH"
+            TEST_PY_FOR_SHIM="$TEST_PY"
           fi
-          "$TEST_PY" -m pip install \
+          "$TEST_PY" -I -m pip install \
             --no-index \
-            --find-links "$MATERIAL/wheelhouse" \
-            -r "$MATERIAL/requirements.lock"
+            --find-links "$RUNTIME/dependencies/wheelhouse" \
+            -r "$RUNTIME/dependencies/requirements.lock"
+          "$TEST_PY" -I -m pip install \
+            --no-index \
+            --find-links "$RUNTIME/dependencies/test-wheelhouse" \
+            -r "$RUNTIME/dependencies/test-requirements.lock"
+          mkdir -p "$RUNNER_TEMP/test-bin"
+          printf '#!/bin/sh\nexec "%s" "$@"\n' "$TEST_PY_FOR_SHIM" \
+            > "$RUNNER_TEMP/test-bin/python3"
+          chmod +x "$RUNNER_TEMP/test-bin/python3"
+          export PATH="$RUNNER_TEMP/test-bin:$PATH"
+          export PIP_NO_INDEX=1
           (
-            cd "$RUNNER_TEMP/candidate"
+            cd "$RUNTIME/src"
             bash tests/test_installer.sh
           )
 
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: preprod-runtime-proof-${{ needs.stage.outputs.beta_commit }}-${{ steps.dependencies.outputs.key }}
+          path: |
+            ${{ runner.temp }}/kernel-launch.json
+            ${{ runner.temp }}/production-health.json
+          if-no-files-found: error
+          retention-days: 90
+
   drill:
-    needs: stage
+    needs:
+      - stage
+      - dependencies
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -498,15 +523,20 @@ jobs:
           name: preprod-candidate-${{ needs.stage.outputs.beta_commit }}
           path: ${{ runner.temp }}/preprod
 
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: preprod-dependencies-${{ needs.stage.outputs.beta_commit }}-linux
+          path: ${{ runner.temp }}/drill-material
+
       - name: Recreate the exact artifact as a candidate repository
         shell: bash
         env:
           ARTIFACT_NAME: ${{ needs.stage.outputs.artifact_name }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/candidate"
-          tar -xzf "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" \
-            -C "$RUNNER_TEMP/candidate"
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" extract \
+            --artifact "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" \
+            --destination "$RUNNER_TEMP/candidate"
           git -C "$RUNNER_TEMP/candidate" init -q
           git -C "$RUNNER_TEMP/candidate" config user.name "Preprod Gate"
           git -C "$RUNNER_TEMP/candidate" config user.email "preprod@rapp.invalid"
@@ -515,12 +545,17 @@ jobs:
           git -C "$RUNNER_TEMP/candidate" remote add origin \
             https://github.com/kody-w/rapp-installer.git
           git -C "$RUNNER_TEMP/candidate" fetch --quiet origin main
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" extract \
+            --artifact "$RUNNER_TEMP/drill-material/dependency-material-linux.tar.gz" \
+            --destination "$RUNNER_TEMP/drill-dependencies"
 
       - name: Exercise fresh, upgrade, and destructive repair
         shell: bash
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/candidate"
+          export PIP_NO_INDEX=1
+          export PIP_FIND_LINKS="$RUNNER_TEMP/drill-dependencies/wheelhouse $RUNNER_TEMP/drill-dependencies/test-wheelhouse"
           GITHUB_MODEL="$MODEL_ID" PREFLIGHT_PORT=17401 bash tests/preflight_local.sh fresh
           GITHUB_MODEL="$MODEL_ID" PREFLIGHT_PORT=17402 bash tests/preflight_local.sh upgrade
           GITHUB_MODEL="$MODEL_ID" PREFLIGHT_PORT=17403 bash tests/preflight_local.sh repair
@@ -551,11 +586,12 @@ jobs:
           EOF
           chmod +x "$SHIMS/lsof" "$SHIMS/open" "$SHIMS/curl"
 
-          git clone --quiet --depth 1 --branch "$ROLLBACK_REF" \
-            https://github.com/kody-w/rapp-installer.git \
-            "$RUNNER_TEMP/rollback-source"
-          EXPECTED_VERSION=$(tr -d '[:space:]' \
-            < "$RUNNER_TEMP/rollback-source/rapp_brainstem/VERSION")
+          ROLLBACK_FRAME="$RUNNER_TEMP/preprod/brainstem-history/$ROLLBACK_REF.json"
+          ROLLBACK_COMMIT=$(jq -r .commit "$ROLLBACK_FRAME")
+          [[ "$ROLLBACK_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          git -C "$RUNNER_TEMP/candidate" cat-file -e "$ROLLBACK_COMMIT^{commit}"
+          EXPECTED_VERSION=$(git -C "$RUNNER_TEMP/candidate" \
+            show "$ROLLBACK_COMMIT:rapp_brainstem/VERSION" | tr -d '[:space:]')
           mkdir -p "$ROLLBACK_HOME/.brainstem/state"
           printf '{"access_token":"ghu_PREPROD_ROLLBACK","saved_at":1}\n' \
             > "$ROLLBACK_HOME/.brainstem/state/.copilot_token"
@@ -570,7 +606,7 @@ jobs:
             export HOME="$ROLLBACK_HOME"
             export PATH="$SHIMS:$PATH"
             export PORT=17404
-            export BRAINSTEM_VERSION="$ROLLBACK_REF"
+            export BRAINSTEM_VERSION="$ROLLBACK_COMMIT"
             script -qec "bash '$RUNNER_TEMP/candidate/install.sh'" \
               "$RUNNER_TEMP/rollback-install.log"
           ) &
@@ -589,13 +625,14 @@ jobs:
               exit 1
             fi
           done
-          python3 - "$RUNNER_TEMP/rollback-health.json" "$EXPECTED_VERSION" <<'PY'
+          python -I - "$RUNNER_TEMP/rollback-health.json" "$EXPECTED_VERSION" <<'PY'
           import json
           import sys
           value = json.load(open(sys.argv[1]))
           assert value["version"] == sys.argv[2], value
           print("rollback booted:", value["version"])
           PY
+          [[ "$(git -C "$ROLLBACK_HOME/.brainstem/src" rev-parse HEAD)" == "$ROLLBACK_COMMIT" ]]
           LEGACY="$ROLLBACK_HOME/.brainstem/src/rapp_brainstem"
           grep -q "ghu_PREPROD_ROLLBACK" "$LEGACY/.copilot_token"
           grep -q "preprod-rollback-secret" "$LEGACY/.brainstem_secret"
@@ -656,12 +693,12 @@ jobs:
             name=$(basename "$material" .tar.gz)
             MATERIAL_ARGS+=(--material "$name=$material")
           done
-          python .ring/tools/preprod_gate.py verify \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" verify \
             --artifact "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" \
             --manifest "$RUNNER_TEMP/preprod/readiness.json" \
             --expected-beta-commit "$BETA_COMMIT" \
             --expected-qualification-run "$QUALIFICATION_RUN_ID"
-          python .ring/tools/preprod_gate.py seal \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" seal \
             --artifact "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" \
             --manifest "$RUNNER_TEMP/preprod/readiness.json" \
             --output "$RUNNER_TEMP/preprod/seaworthy.json" \
@@ -669,7 +706,7 @@ jobs:
             --preprod-run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --approval-authority "github-environment:preprod" \
             "${MATERIAL_ARGS[@]}"
-          python .ring/tools/preprod_gate.py verify \
+          python -I "$GITHUB_WORKSPACE/.ring/tools/preprod_gate.py" verify \
             --artifact "$RUNNER_TEMP/preprod/$ARTIFACT_NAME" \
             --manifest "$RUNNER_TEMP/preprod/seaworthy.json" \
             --expected-beta-commit "$BETA_COMMIT" \
@@ -697,7 +734,8 @@ jobs:
           path: |
             ${{ runner.temp }}/preprod/${{ needs.stage.outputs.artifact_name }}
             ${{ runner.temp }}/preprod/seaworthy.json
-            ${{ runner.temp }}/preprod/rollback-brainstem.json
+            ${{ runner.temp }}/preprod/soak-evidence.json
+            ${{ runner.temp }}/preprod/brainstem-history
             ${{ runner.temp }}/preprod/dependencies/*.tar.gz
           if-no-files-found: error
           retention-days: 90

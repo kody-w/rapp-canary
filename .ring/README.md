@@ -5,8 +5,10 @@ payload. Canary-specific URLs, deployment settings, and future patches live
 here. The Grail-derived files outside `.ring/` remain the promotable payload.
 
 `SEAWORTHINESS-CONSTITUTION.md` is the controlling release doctrine.
-`preprod-policy.json`, `readiness.schema.json`, and the Preprod workflow turn
-that doctrine into machine-enforced gates without changing the Grail runtime. The Grail-derived files outside `.ring/` remain the promotable payload.
+`preprod-policy.json`, `readiness.schema.json`, `soak.schema.json`, and the
+Preprod workflow turn that doctrine into machine-enforced gates without
+changing the immutable Grail `rapp_brainstem/brainstem.py`. The Grail-derived
+files outside `.ring/` remain the promotable payload.
 
 `train.json` defines:
 

@@ -14,6 +14,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+TOOLS = Path(__file__).resolve().parent
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
+
+import preprod_gate
 import ring_attestation as attestation
 
 
@@ -233,8 +238,12 @@ def promote(
     source_commit: str,
     target_commit: str,
     config_path: Path,
+    policy_path: Path | None = None,
 ) -> dict:
     config = attestation._read_json(config_path)
+    policy_path = policy_path or config_path.parent / "preprod-policy.json"
+    policy = attestation._read_json(policy_path)
+    preprod_gate._validate_policy(policy)
     rings = attestation._ring_map(config)
     prefixes = attestation._ring_owned_prefixes(config)
     if source_ring not in rings or target_ring not in rings:
@@ -256,6 +265,7 @@ def promote(
         raise PromotionError("both rings require repository identities")
     _validate_repo(source, source_repository, source_commit)
     _validate_repo(target, target_repository, target_commit)
+    preprod_gate.verify_grail_kernel_bytes(source, policy)
 
     # Experimental-flight poison pill (SOP.md §4): flight/* branches carry a
     # FLIGHT.json marker at the repo root. A flight must NEVER ride a promotion
@@ -305,6 +315,7 @@ def promote(
             shutil.rmtree(destination)
         _write_blob(source, target, path, mode, object_id)
         _stage_raw(target, path, mode)
+    preprod_gate.verify_grail_kernel_bytes(target, policy)
 
     shared_sha256 = attestation._payload_tree_sha256(source, prefixes)
     lock = {
@@ -340,6 +351,11 @@ def main():
         type=Path,
         default=root.parent / "train.json",
     )
+    parser.add_argument(
+        "--policy",
+        type=Path,
+        default=root.parent / "preprod-policy.json",
+    )
     args = parser.parse_args()
     for value in (args.source_commit, args.target_commit):
         if not re.fullmatch(r"[0-9a-f]{40}", value):
@@ -354,8 +370,13 @@ def main():
             args.source_commit,
             args.target_commit,
             args.config.resolve(),
+            args.policy.resolve(),
         )
-    except (PromotionError, attestation.AttestationError) as error:
+    except (
+        PromotionError,
+        attestation.AttestationError,
+        preprod_gate.PreprodError,
+    ) as error:
         print(f"promotion failed: {error}", file=sys.stderr)
         return 1
     print(

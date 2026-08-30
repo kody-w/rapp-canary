@@ -25,6 +25,7 @@ TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 
 import promote_ring  # noqa: E402
+import preprod_gate  # noqa: E402
 import ring_attestation as attestation  # noqa: E402
 
 HUB_REPOSITORY = "kody-w/rapp-canary"
@@ -129,9 +130,11 @@ def _fresh_beta_clone(beta: dict, workdir: Path) -> Path:
     return clone
 
 
-def _export(clone: Path, grail: Path, config: dict) -> int:
+def _export(clone: Path, grail: Path, config: dict, policy: dict) -> int:
     """Copy the verified shared payload onto a Grail feature branch. No commits."""
     prefixes = attestation._ring_owned_prefixes(config)
+    kernel = preprod_gate.verify_grail_kernel(grail, policy)
+    preprod_gate.verify_grail_kernel_bytes(clone, policy)
     origin = _run("git", "-C", str(grail), "remote", "get-url", "origin").strip()
     if attestation._repo_slug(origin) != "kody-w/rapp-installer":
         raise GateError(f"--export-to origin is {origin}, not the grail")
@@ -164,6 +167,7 @@ def _export(clone: Path, grail: Path, config: dict) -> int:
         promote_ring._write_blob(clone, grail, path, mode, object_id)
         promote_ring._stage_raw(grail, path, mode)
         changed += 1
+    preprod_gate.verify_grail_kernel(grail, policy)
     return changed
 
 
@@ -176,12 +180,17 @@ def main() -> int:
     verify.add_argument(
         "--config", type=Path, default=TOOLS.parent / "train.json"
     )
+    verify.add_argument(
+        "--policy", type=Path, default=TOOLS.parent / "preprod-policy.json"
+    )
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9]+", args.run_id):
         print("gate failed: --run-id must be numeric", file=sys.stderr)
         return 1
     try:
         config = attestation._read_json(args.config.resolve())
+        policy = attestation._read_json(args.policy.resolve())
+        preprod_gate._validate_policy(policy)
         rings = attestation._ring_map(config)
         run = json.loads(
             _run("gh", "api", f"repos/{HUB_REPOSITORY}/actions/runs/{args.run_id}")
@@ -208,7 +217,9 @@ def main() -> int:
             _beta_still_current(chain["beta"])
             clone = _fresh_beta_clone(chain["beta"], workdir)
             _run(
-                sys.executable, str(TOOLS / "ring_attestation.py"),
+                sys.executable,
+                "-I",
+                str(TOOLS / "ring_attestation.py"),
                 "--config", str(args.config.resolve()),
                 "verify",
                 "--repo", str(clone),
@@ -224,7 +235,12 @@ def main() -> int:
             print(f"  run: {run.get('html_url')}")
             print(f"  beta: {chain['beta']['payload']['commit']}")
             if args.export_to:
-                changed = _export(clone, args.export_to.resolve(), config)
+                changed = _export(
+                    clone,
+                    args.export_to.resolve(),
+                    config,
+                    policy,
+                )
                 print(f"  exported: {changed} paths staged in {args.export_to}")
                 print(
                     "next: inspect `git status`, run the tests, commit with the\n"
@@ -232,7 +248,8 @@ def main() -> int:
                     "URL first — see .ring/RUNBOOK.md), and follow RELEASING.md."
                 )
     except (GateError, attestation.AttestationError,
-            promote_ring.PromotionError, OSError, ValueError) as error:
+            promote_ring.PromotionError, preprod_gate.PreprodError,
+            OSError, ValueError) as error:
         print(f"gate failed: {error}", file=sys.stderr)
         return 1
     return 0

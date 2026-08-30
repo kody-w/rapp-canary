@@ -61,6 +61,9 @@ class RingAttestationTests(unittest.TestCase):
             encoding="utf-8",
             newline="\n",
         )
+        (self.repo / "rapp_brainstem").mkdir()
+        kernel = self.repo / "rapp_brainstem" / "brainstem.py"
+        kernel.write_text("print('immutable kernel')\n", encoding="utf-8")
         (self.repo / ".ring").mkdir()
         (self.repo / ".ring/ring.json").write_text(
             '{"ring":"canary","url":"https://kody-w.github.io/rapp-canary"}\n',
@@ -96,6 +99,7 @@ class RingAttestationTests(unittest.TestCase):
             "payload.txt",
             "run.sh",
             "rapp_brainstem/agents/experimental/copilot_research_agent.py",
+            "rapp_brainstem/brainstem.py",
             ".ring/ring.json",
         )
         _git(self.repo, "update-index", "--chmod=+x", "run.sh")
@@ -178,8 +182,36 @@ class RingAttestationTests(unittest.TestCase):
             )
         self.canary = self.root / "canary.json"
         self.nightly = self.root / "nightly.json"
+        self.policy = self.root / "preprod-policy.json"
+        policy = json.loads(
+            (REPO_ROOT / ".ring" / "preprod-policy.json").read_text(encoding="utf-8")
+        )
+        kernel_entry = _git(
+            self.repo,
+            "ls-files",
+            "-s",
+            "rapp_brainstem/brainstem.py",
+        ).split()
+        policy["grail_kernel"] = {
+            "repository": "kody-w/rapp-installer",
+            "release_scope": "https://github.com/kody-w/rapp-canary",
+            "grail_id": PROMOTE.preprod_gate._grail_id(kernel.read_bytes()),
+            "immutable_ref": "refs/tags/brainstem-v1.0.0",
+            "object_format": "sha1",
+            "commit": "a" * 40,
+            "path": "rapp_brainstem/brainstem.py",
+            "mode": "100644",
+            "blob": kernel_entry[1],
+            "sha256": PROMOTE.preprod_gate._sha256(kernel),
+            "size_bytes": kernel.stat().st_size,
+            "policy": "immutable-forever",
+        }
+        self.policy.write_text(json.dumps(policy), encoding="utf-8")
+        self.original_grail_kernel_pin = PROMOTE.preprod_gate.GRAIL_KERNEL_PIN
+        PROMOTE.preprod_gate.GRAIL_KERNEL_PIN = policy["grail_kernel"]
 
     def tearDown(self):
+        PROMOTE.preprod_gate.GRAIL_KERNEL_PIN = self.original_grail_kernel_pin
         self.temp.cleanup()
 
     def _create_canary(self):
@@ -364,6 +396,7 @@ class RingAttestationTests(unittest.TestCase):
             source_commit,
             self.nightly_commit,
             CONFIG_PATH,
+            self.policy,
         )
 
         self.assertEqual(
@@ -478,6 +511,7 @@ class RingAttestationTests(unittest.TestCase):
                 beta_commit,
                 grail_commit,
                 CONFIG_PATH,
+                self.policy,
             )
 
     def test_required_shared_file_deletion_is_rejected(self):
@@ -505,6 +539,29 @@ class RingAttestationTests(unittest.TestCase):
                 source_commit,
                 self.nightly_commit,
                 CONFIG_PATH,
+                self.policy,
+            )
+
+    def test_promotion_rejects_grail_kernel_drift(self):
+        kernel = self.repo / "rapp_brainstem" / "brainstem.py"
+        kernel.write_text("print('mutated kernel')\n", encoding="utf-8")
+        _git(self.repo, "add", str(kernel.relative_to(self.repo)))
+        _git(self.repo, "commit", "-qm", "mutate kernel")
+        source_commit = _git(self.repo, "rev-parse", "HEAD^{commit}")
+
+        with self.assertRaisesRegex(
+            PROMOTE.preprod_gate.PreprodError,
+            "kernel-drift",
+        ):
+            PROMOTE.promote(
+                self.repo,
+                self.nightly_repo,
+                "canary",
+                "nightly",
+                source_commit,
+                self.nightly_commit,
+                CONFIG_PATH,
+                self.policy,
             )
 
     def test_directory_to_file_transition_is_preflighted(self):
@@ -539,6 +596,7 @@ class RingAttestationTests(unittest.TestCase):
             source_commit,
             target_commit,
             CONFIG_PATH,
+            self.policy,
         )
 
         self.assertTrue((self.nightly_repo / "shape").is_file())
@@ -575,6 +633,7 @@ class RingAttestationTests(unittest.TestCase):
                 self.commit,
                 target_commit,
                 CONFIG_PATH,
+                self.policy,
             )
         self.assertEqual(
             outside.read_text(encoding="utf-8"),

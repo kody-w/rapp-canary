@@ -14,7 +14,8 @@ recovery under the conditions in which enterprises actually operate.
 
 This constitution governs the release control plane. It is Canary-owned under
 `.ring/` and `.github/workflows/`; those paths are excluded from shared payload
-promotion and Grail export. It does not alter `rapp_brainstem/brainstem.py`.
+promotion and Grail export. It treats the pinned Grail
+`rapp_brainstem/brainstem.py` bytes as permanently immutable.
 
 ## Article I — Seaworthiness Is Supreme
 
@@ -28,19 +29,32 @@ promotion and Grail export. It does not alter `rapp_brainstem/brainstem.py`.
 5. Every readiness claim expires. Changed code, dependencies, models, policy,
    configuration, environment, or artifact bytes require requalification.
 
-## Article II — The Grail Shape Is Immutable
+## Article II — The Grail Kernel Never Changes
 
 1. `kody-w/rapp-installer` is the global Grail. Its Brainstem shape is a
    compatibility contract depended on by downstream products.
-2. Preprod, CI/CD, orchestration, and governance mechanisms must not require a
-   change to `rapp_brainstem/brainstem.py`.
+2. `rapp_brainstem/brainstem.py` is permanently pinned by repository, release
+   scope, immutable ref, commit, Git blob, raw SHA-256, byte length, and the
+   RAPP/1 domain-separated `grail_id`. It may not change under that identity.
 3. Canary-owned control-plane files remain under `.ring/` and
    `.github/workflows/`, which promotion and Grail export exclude.
-4. A Grail runtime change is permitted only as an explicitly reviewed product
-   change with compatibility evidence—not as a side effect of release tooling.
-5. Every known-good Grail release has an immutable `rapp/1:brainstem` frame
+4. Every ring may experiment, but qualification and Preprod reject
+   `kernel-drift`; they may not certify or promote a candidate whose Brainstem
+   differs from the constitutional pin.
+5. A release pipeline may not test one Brainstem and substitute the Grail bytes
+   afterward. The exact Grail-shaped artifact containing the immutable kernel
+   must pass Preprod.
+6. New behavior belongs in agents, adapters, configuration, frames, data, and
+   external control planes. If the frozen kernel cannot express it, that is an
+   explicit incompatibility—not permission to edit the Grail.
+7. A successor kernel requires a new Grail identity and lineage; it cannot
+   overwrite, retag, or silently redefine the existing Grail.
+8. Every known-good Grail release has an immutable `rapp/1:brainstem` frame
    binding its release tag, commit, tree, `brainstem.py` blob, file hash, version,
    and predecessor.
+9. RAPP/1 §11.1 and Protocol Constitution Article 15 are the normative source
+   for this invariant. The exact authority bytes are pinned in
+   `preprod-policy.json`; moving documentation cannot weaken the gate.
 
 ## Article III — One Artifact Crosses the Harbor
 
@@ -112,6 +126,14 @@ CI/CD must:
 7. Fail closed when a required tool, environment, credential, or observation is
    unavailable.
 8. Never hold credentials capable of automatically promoting to Grail.
+9. Run trusted control-plane Python in isolated mode and extract archives only
+   through path-normalizing, cross-platform-safe code.
+10. Accept only registry package requirements; keep runtime dependencies and
+    test tooling in separate hash-bound wheelhouses.
+11. Verify the staged tree, release commit tree, and final merge tree against
+    the same sealed Git tree before Grail is pushed or tagged.
+12. Execution gates must consume the exact verified kernel bytes from an
+    immutable snapshot; hashing one path and later reopening it is insufficient.
 
 ## Article VIII — Brainstem Frames and Rollback
 
@@ -120,8 +142,10 @@ CI/CD must:
 3. Frames form an append-only chain through the previous known-good frame hash.
 4. A frame is invalid if its tag moves, commit changes, blob differs, hash fails,
    or parent link breaks.
-5. The Preprod manifest names one verified rollback frame.
-6. Rollback is rehearsed before release, not improvised during an incident.
+5. The Preprod release set carries the complete verified frame chain and names
+   one rollback frame.
+6. Rollback is rehearsed by the frame's exact commit before release, not
+   improvised through mutable name resolution during an incident.
 7. Recovery restores the complete tagged release; `brainstem.py` is never
    restored alone when its surrounding contract differs.
 
@@ -161,7 +185,8 @@ The release candidate is represented by `rapp/1:readiness`:
 - expected Grail base commit and resulting Git tree
 - critical `brainstem.py` hash and sealed dependency materials
 - qualification and Beta preflight evidence
-- soak evidence and accountable owner
+- hash-pinned soak evidence bound to the qualification commit, Beta commit,
+  explicit model, elapsed duration, and accountable owner
 - required control set
 - issuance and expiry
 - rollback frame

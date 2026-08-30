@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kody-w.github.io/rapp-canary/schemas/rapp-1-soak.json",
+  "title": "RAPP/1 Authenticated Soak Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "result",
+    "canary_commit",
+    "beta_commit",
+    "qualification_run_id",
+    "model_id",
+    "started_at",
+    "completed_at",
+    "probe_interval_seconds",
+    "health_probe_count",
+    "authenticated_chat_count",
+    "authenticated_chat_times",
+    "probes",
+    "checks"
+  ],
+  "properties": {
+    "schema": {"const": "rapp/1:soak"},
+    "result": {"const": "passed"},
+    "canary_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "beta_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "qualification_run_id": {"type": "string", "pattern": "^[0-9]+$"},
+    "model_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+      "not": {"const": "auto"}
+    },
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "probe_interval_seconds": {
+      "type": "integer",
+      "minimum": 15,
+      "maximum": 300
+    },
+    "health_probe_count": {"type": "integer", "minimum": 2},
+    "authenticated_chat_count": {"const": 2},
+    "authenticated_chat_times": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"type": "string", "format": "date-time"}
+    },
+    "probes": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["at", "status", "model_id"],
+        "properties": {
+          "at": {"type": "string", "format": "date-time"},
+          "status": {"const": "ok"},
+          "model_id": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authenticated_chat",
+        "state_isolated",
+        "health_stable",
+        "no_critical_events"
+      ],
+      "properties": {
+        "authenticated_chat": {"const": true},
+        "state_isolated": {"const": true},
+        "health_stable": {"const": true},
+        "no_critical_events": {"const": true}
+      }
+    }
+  }
+}
