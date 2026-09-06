@@ -17,12 +17,16 @@ concurrency:
   group: autonomous-pre-grail
   cancel-in-progress: false
 
+env:
+  RAPP_CANARY_REF: ${{ github.ref }}
+  RAPP_CANARY_COMMIT: ${{ github.sha }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      RAPP_RING_REF: ${{ github.ref_name }}
+    outputs:
+      ring_inputs: ${{ steps.matrix.outputs.ring_inputs }}
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -45,19 +49,36 @@ jobs:
             verify-kernel --repo "$GITHUB_WORKSPACE"
 
       - name: Run autonomous feature and failure matrix
+        id: matrix
         run: |
           python -I "$GITHUB_WORKSPACE/.ring/tools/autonomous_test.py" \
             --python "$(command -v python)" \
             --bash "$(command -v bash)" \
             --json-output "$RUNNER_TEMP/AUTONOMOUS_TEST_REPORT.json" \
             --markdown-output "$RUNNER_TEMP/AUTONOMOUS_TEST_REPORT.md"
+          python -I - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          report = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "AUTONOMOUS_TEST_REPORT.json")
+              .read_text(encoding="utf-8")
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("ring_inputs=" + json.dumps(report["ring_inputs"]) + "\n")
+          PY
 
   evidence:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      RAPP_RING_REF: ${{ github.ref_name }}
+      RAPP_NIGHTLY_REF: ${{ fromJSON(needs.test.outputs.ring_inputs).nightly.ref }}
+      RAPP_NIGHTLY_COMMIT: ${{ fromJSON(needs.test.outputs.ring_inputs).nightly.commit }}
+      RAPP_ALPHA_REF: ${{ fromJSON(needs.test.outputs.ring_inputs).alpha.ref }}
+      RAPP_ALPHA_COMMIT: ${{ fromJSON(needs.test.outputs.ring_inputs).alpha.commit }}
+      RAPP_BETA_REF: ${{ fromJSON(needs.test.outputs.ring_inputs).beta.ref }}
+      RAPP_BETA_COMMIT: ${{ fromJSON(needs.test.outputs.ring_inputs).beta.commit }}
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
