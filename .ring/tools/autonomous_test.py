@@ -26,7 +26,6 @@ import ring_attestation
 
 RINGS = ("canary", "nightly", "alpha", "beta")
 REPOSITORIES = {ring: f"kody-w/rapp-{ring}" for ring in RINGS}
-OVERLAY_BRANCH = os.getenv("RAPP_RING_REF", "setup/ring-overlay")
 
 
 class ScenarioError(RuntimeError):
@@ -82,17 +81,51 @@ def _clone_url(url: str, path: Path, *clone_args: str) -> None:
     raise last_error
 
 
-def _clone_ring(root: Path, ring: str) -> Path:
+def _select_inputs() -> dict[str, dict[str, str]]:
+    if "RAPP_RING_REF" in os.environ:
+        raise ScenarioError(
+            "RAPP_RING_REF is ambiguous; use RAPP_CANARY_REF or a per-ring REF"
+        )
+    inputs = {}
+    for ring in RINGS:
+        prefix = f"RAPP_{ring.upper()}"
+        reference = os.environ.get(f"{prefix}_REF", "refs/heads/main")
+        if not reference.startswith("refs/"):
+            reference = f"refs/heads/{reference}"
+        if not reference.startswith(("refs/heads/", "refs/tags/")):
+            raise ScenarioError(f"unsupported {ring} ref: {reference}")
+        _run(["git", "check-ref-format", reference], quiet=True)
+        pin = os.environ.get(f"{prefix}_COMMIT")
+        if pin is not None and not re.fullmatch(r"[0-9a-f]{40}", pin):
+            raise ScenarioError(f"{prefix}_COMMIT must be a full commit SHA")
+        resolved = _remote_ref(REPOSITORIES[ring], reference)
+        inputs[ring] = {
+            "repository": REPOSITORIES[ring],
+            "ref": reference,
+            "commit": pin if pin is not None else resolved,
+        }
+    return inputs
+
+
+def _clone_ring(
+    root: Path,
+    ring: str,
+    inputs: dict[str, dict[str, str]],
+) -> Path:
     path = root / ring
+    commit = inputs[ring]["commit"]
     _clone_url(
         f"https://github.com/{REPOSITORIES[ring]}.git",
         path,
-        "--branch",
-        OVERLAY_BRANCH,
+        "--no-checkout",
     )
     _git(path, "config", "core.autocrlf", "false")
     _git(path, "config", "user.name", "Autonomous Ring Test")
     _git(path, "config", "user.email", "ring-test@example.invalid")
+    _git(path, "fetch", "--quiet", "origin", commit)
+    _git(path, "checkout", "--quiet", "--detach", commit)
+    if _git(path, "rev-parse", "HEAD^{commit}") != commit:
+        raise ScenarioError(f"{ring} checkout does not match selected commit")
     return path
 
 
@@ -101,6 +134,47 @@ def _commit(repo: Path, message: str, *, stage: bool = True) -> str:
         _git(repo, "add", "-f", "-A")
     _git(repo, "commit", "-qm", message)
     return _git(repo, "rev-parse", "HEAD^{commit}")
+
+
+def _stage_rewrite_counts(source: Path, target: Path) -> str | None:
+    for repo in (source, target):
+        if _git(repo, "status", "--porcelain=v1", "--untracked-files=all"):
+            raise ScenarioError("rewrite metadata staging requires clean repositories")
+    source_config = render_ring._config(source / ".ring" / "ring.json")
+    target_path = target / ".ring" / "ring.json"
+    target_config = render_ring._config(target_path)
+    source_rules = source_config["rewrites"]
+    target_rules = target_config["rewrites"]
+    needles = [rule["from"] for rule in source_rules]
+    if (
+        len(set(needles)) != len(needles)
+        or needles != [rule["from"] for rule in target_rules]
+        or any(
+            source_config.get(key, []) != target_config.get(key, [])
+            for key in ("protected_paths", "rewrite_excluded_prefixes")
+        )
+    ):
+        raise ScenarioError("incoming and target rewrite rules do not match")
+    changed = False
+    for incoming, outgoing in zip(source_rules, target_rules):
+        if incoming["expected_count"] != outgoing["expected_count"]:
+            outgoing["expected_count"] = incoming["expected_count"]
+            changed = True
+    if not changed:
+        return None
+    # Only disposable promotion targets receive the incoming declared counts.
+    # Never infer expectations from the payload or copy another ring's identity.
+    target_path.write_text(
+        json.dumps(target_config, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    _git(target, "add", "--", ".ring/ring.json")
+    return _commit(
+        target,
+        "test: stage incoming declared rewrite counts",
+        stage=False,
+    )
 
 
 def _backend_feature(repo: Path) -> None:
@@ -436,18 +510,23 @@ def _promote_scenario(
     python: str,
     bash: str,
     run_tests: bool,
+    inputs: dict[str, dict[str, str]],
 ) -> dict:
-    repos = {ring: _clone_ring(root, ring) for ring in RINGS}
+    repos = {ring: _clone_ring(root, ring, inputs) for ring in RINGS}
     mutation(repos["canary"])
     commits = {
         "canary": _commit(repos["canary"], f"test: {name} in Canary")
     }
     attestations = {}
     builds = {}
+    rewrite_metadata_commits = {}
     parent_path = None
     for index, ring in enumerate(RINGS):
         if index:
             parent = RINGS[index - 1]
+            metadata_commit = _stage_rewrite_counts(repos[parent], repos[ring])
+            if metadata_commit is not None:
+                rewrite_metadata_commits[ring] = metadata_commit
             base_commit = _git(repos[ring], "rev-parse", "HEAD^{commit}")
             promote_ring.promote(
                 repos[parent],
@@ -511,17 +590,22 @@ def _promote_scenario(
         "status": "passed",
         "shared_sha256": next(iter(digests)),
         "commits": commits,
+        "rewrite_metadata_commits": rewrite_metadata_commits,
     }
 
 
-def _failure_scenarios(root: Path, config: Path) -> list[dict]:
+def _failure_scenarios(
+    root: Path,
+    config: Path,
+    inputs: dict[str, dict[str, str]],
+) -> list[dict]:
     root.mkdir(parents=True, exist_ok=True)
     results = []
 
     kernel_root = root / "kernel-drift"
     kernel_root.mkdir()
-    canary = _clone_ring(kernel_root, "canary")
-    nightly = _clone_ring(kernel_root, "nightly")
+    canary = _clone_ring(kernel_root, "canary", inputs)
+    nightly = _clone_ring(kernel_root, "nightly", inputs)
     _backend_feature(canary)
     canary_commit = _commit(canary, "test: forbidden Brainstem mutation")
     try:
@@ -542,7 +626,7 @@ def _failure_scenarios(root: Path, config: Path) -> list[dict]:
 
     rewrite_root = root / "rewrite-drift"
     rewrite_root.mkdir()
-    canary = _clone_ring(rewrite_root, "canary")
+    canary = _clone_ring(rewrite_root, "canary", inputs)
     readme = canary / "README.md"
     readme.write_text(
         readme.read_text(encoding="utf-8").replace(
@@ -568,8 +652,8 @@ def _failure_scenarios(root: Path, config: Path) -> list[dict]:
 
     divergence_root = root / "shared-divergence"
     divergence_root.mkdir()
-    canary = _clone_ring(divergence_root, "canary")
-    nightly = _clone_ring(divergence_root, "nightly")
+    canary = _clone_ring(divergence_root, "canary", inputs)
+    nightly = _clone_ring(divergence_root, "nightly", inputs)
     canary_commit = _git(canary, "rev-parse", "HEAD^{commit}")
     canary_json = divergence_root / "canary.json"
     ring_attestation.create_attestation(
@@ -606,7 +690,7 @@ def _failure_scenarios(root: Path, config: Path) -> list[dict]:
 
     grail_root = root / "grail-guard"
     grail_root.mkdir()
-    beta = _clone_ring(grail_root, "beta")
+    beta = _clone_ring(grail_root, "beta", inputs)
     grail = grail_root / "grail"
     _clone_url(
         "https://github.com/kody-w/rapp-installer.git",
@@ -631,18 +715,33 @@ def _failure_scenarios(root: Path, config: Path) -> list[dict]:
     return results
 
 
-def _remote_main(repository: str) -> str:
+def _remote_ref(repository: str, reference: str) -> str:
     result = _run(
         [
             "git",
             "ls-remote",
+            "--exit-code",
             f"https://github.com/{repository}.git",
-            "refs/heads/main",
+            reference,
+            f"{reference}^{{}}",
         ],
         quiet=True,
         retries=3,
     )
-    return result.stdout.split()[0]
+    refs = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) != 2 or not re.fullmatch(r"[0-9a-f]{40}", fields[0]):
+            raise ScenarioError(f"invalid remote ref response for {repository}")
+        refs[fields[1]] = fields[0]
+    commit = refs.get(f"{reference}^{{}}") or refs.get(reference)
+    if commit is None:
+        raise ScenarioError(f"missing requested ref {reference} in {repository}")
+    return commit
+
+
+def _remote_main(repository: str) -> str:
+    return _remote_ref(repository, "refs/heads/main")
 
 
 def _markdown(report: dict) -> str:
@@ -655,11 +754,26 @@ def _markdown(report: dict) -> str:
         f"- Successful feature scenarios: **{len(report['features'])}**",
         f"- Expected failure scenarios blocked: **{len(report['failures'])}**",
         "",
+        "## Selected inputs",
+        "",
+        "Every scenario checks out these exact commits, not moving branch tips.",
+        "Incoming rewrite counts are staged only in disposable target clones.",
+        "",
+        "| Ring | Ref | Commit |",
+        "|---|---|---|",
+    ]
+    for ring in RINGS:
+        selected = report["ring_inputs"][ring]
+        lines.append(
+            f"| {ring} | `{selected['ref']}` | `{selected['commit']}` |"
+        )
+    lines.extend([
+        "",
         "## Features",
         "",
         "| Scenario | Result | Shared digest |",
         "|---|---|---|",
-    ]
+    ])
     for item in report["features"]:
         lines.append(
             f"| {item['name']} | {item['status']} | "
@@ -703,6 +817,7 @@ def main():
     failures = []
     caught = None
     try:
+        inputs = _select_inputs()
         with tempfile.TemporaryDirectory(prefix="rapp-autonomous-") as temp:
             root = Path(temp)
             for name, mutation in SCENARIOS.items():
@@ -717,9 +832,10 @@ def main():
                         args.python,
                         args.bash,
                         not args.evidence_only,
+                        inputs,
                     )
                 )
-            failures = _failure_scenarios(root / "failures", config)
+            failures = _failure_scenarios(root / "failures", config, inputs)
     except Exception as error:
         caught = error
     finally:
@@ -740,6 +856,7 @@ def main():
         "schema": "rapp-autonomous-test/1",
         "execution": "evidence-only" if args.evidence_only else "isolated-tests",
         "grail_commit": grail_commit,
+        "ring_inputs": inputs,
         "features": features,
         "failures": failures,
         "ring_mains": final,

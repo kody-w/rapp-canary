@@ -1,74 +1,52 @@
 ---
 name: rapp-bootstrap
-description: Install or repair a local RAPP Brainstem, verify its health, and install the unified RAR plugin marketplace for Microsoft Scout or GitHub Copilot CLI.
-allowed-tools: Bash, Read
+description: AI-first local Brainstem setup and coaching. Follow the canonical skill to handle approved technical setup, connect RAR, and guide the learner through a tested MVP and teach-back loop.
 ---
 
 # RAPP Bootstrap
 
-Use this skill when the user wants a local RAPP Brainstem, the RAR agent and
-skill marketplace, or both.
+The canonical end-to-end playbook is [the repository's skill.md](../../skill.md).
+Read it in full before acting. This entry is a router, not a separate installer
+recipe or permission grant.
 
-## Safety boundary
+Resolve `../../skill.md` relative to this skill directory. The `rapp@brainstem`
+plugin's repository source includes that file. If a host cannot access the local
+reference, read the canonical source at:
 
-- Explain that installation writes under `~/.brainstem`, `~/.copilot`, and
-  the user's Copilot plugin configuration.
-- Obtain user approval before running a fresh installer or replacing an
-  existing installation.
-- Never modify `rapp_brainstem/brainstem.py` or the RAPP/1 Grail directly.
-- Preserve user agents, soul, configuration, and local data through the
-  installer's backup/update path.
-- Treat a failed health check as a failure. Do not claim installation worked.
+```text
+https://raw.githubusercontent.com/kody-w/rapp-installer/main/skill.md
+```
 
-## Procedure
+If neither source can be read, report that missing guidance rather than
+inventing an installation procedure.
+Check that the loaded document is the version 2 or later setup-and-learning
+playbook. Do not silently substitute an older install-only guide.
 
-1. Check whether Brainstem already answers:
+## Required behavior
 
-   ```bash
-   curl --silent --show-error --fail http://localhost:7071/health
-   ```
+- Authoring, review, and preview are non-executing. A blanket **do not deploy
+  anything now** blocks setup changes; **approved local setup, no cloud
+  deployment** permits only that approved local scope. Clarify conflicting
+  constraints before acting.
+- Confirm that execution tools operate on the learner-approved computer, not
+  the assistant's unrelated cloud workspace.
+- Obtain scoped approval before installation or persistent changes. Let the
+  learner complete personal sign-in, MFA, and OS consent.
+- Use the supported installer/bootstrap path; never patch the Brainstem kernel,
+  create an ad-hoc runtime, or discard an existing installation's data.
+- Preserve the manual one-liners as a fallback, but do the technical work for a
+  learner who chooses the approved AI-first path.
+- On supported plugin hosts, approved `rapp@brainstem` setup includes registering
+  `kody-w/RAR` and installing `rapp@rar`. Use the host's actual plugin commands
+  and verify discovery after a new conversation.
+- Do not stop at a healthy port. Follow the canonical baseline, memory exercise,
+  bounded MVP, synthetic-data, tests-first, Brainstem feedback, rehearsal, and
+  learner-understanding checkpoints.
+- Establish the canonical safe-practice boundary before chat or memory tests.
+  Do not query broad memories or unrestricted builder-capable instances as a
+  supposedly read-only baseline.
+- Report **setup-ready**, **productive-ready**, or **blocked** honestly. Cloud
+  deployment, publishing, external drafts, and sending remain separate approvals.
 
-2. If it is unavailable and the user approved installation, run the matching
-   platform installer.
-
-   macOS or Linux:
-
-   ```bash
-   curl -fsSL https://kody-w.github.io/rapp-installer/install.sh | bash
-   ```
-
-   Windows PowerShell:
-
-   ```powershell
-   irm https://raw.githubusercontent.com/kody-w/rapp-installer/main/install.ps1 | iex
-   ```
-
-3. Poll `http://localhost:7071/health` until it returns JSON with
-   `status: "ok"`. If authentication is required, direct the user to the
-   Brainstem login flow instead of inventing success.
-
-4. Register and install the unified RAR plugin:
-
-   ```bash
-   copilot plugin marketplace add kody-w/RAR
-   copilot plugin install rapp@rar
-   ```
-
-5. Start a new Scout or Copilot CLI conversation so `rapp-skills` is
-   discovered.
-
-6. Use the installed `rapp-skills` capability to:
-
-   - inspect/start Brainstem with `status` or `ensure`;
-   - browse and sync RAR channels;
-   - run `bootstrap_callback` for the optional external-AI collaboration loop;
-   - generate `manual_export` HTML packages for Scout, Copilot Studio, or
-     Microsoft Copilot Cowork.
-
-## Acceptance checks
-
-- Brainstem `/health` is reachable.
-- The response identifies the installed Brainstem version and loaded agents.
-- `copilot plugin marketplace list` includes `kody-w/RAR`.
-- `copilot plugin list` includes `rapp@rar`.
-- A new conversation discovers `rapp-skills`.
+The learner owns the goal and final judgment. The AI handles the approved work
+and teaches the loop one useful result at a time.

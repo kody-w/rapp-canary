@@ -25,6 +25,20 @@
   .hero p { color: #8b949e; font-size: 16px; line-height: 1.6; }
   .hero .tagline { color: #58a6ff; font-weight: 600; font-size: 14px; margin-top: 12px; }
 
+  .agent-start { padding: 24px; }
+  .agent-start h2 { font-size: 24px; margin-bottom: 8px; }
+  .agent-start p { font-size: 14px; line-height: 1.6; }
+  .agent-start textarea {
+    width: 100%; min-height: 150px; margin: 16px 0;
+    line-height: 1.5; resize: vertical; cursor: text;
+    overflow-wrap: anywhere; field-sizing: content;
+  }
+  .agent-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+  .agent-actions .open-btn { margin-top: 0; }
+  .agent-actions a { font-size: 13px; }
+  .agent-copy-status { min-height: 1.6em; margin-top: 12px; }
+  .agent-start :focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+
   .one-liner {
     max-width: 620px; width: 100%;
     background: #161b22; border: 2px solid #238636; border-radius: 12px;
@@ -214,6 +228,18 @@
   <div class="tagline">Start simple. Layer up when you're ready.</div>
 </div>
 
+<section class="install-widget agent-start" id="use-your-agent" aria-labelledby="agent-start-title">
+  <h2 id="agent-start-title">Use your agent</h2>
+  <p>Paste this into the AI agent you already use. It will check its access, guide you through the existing setup, and help you learn by doing. No special agent or plugin required.</p>
+  <textarea class="cmd" id="agent-start-prompt" rows="8" readonly spellcheck="false" aria-label="Setup prompt for your AI agent">Read https://raw.githubusercontent.com/kody-w/rapp-installer/main/skill.md. Help me set up RAPP Brainstem with the existing installer and learn through one safe practice workflow. Confirm you can work on my device, handle the technical steps, and ask before changes. Do not deploy to the cloud, publish, or send anything without separate approval.</textarea>
+  <div class="agent-actions">
+    <button class="open-btn" type="button" onclick="copyAgentPrompt(this)">Copy setup prompt</button>
+    <a href="https://raw.githubusercontent.com/kody-w/rapp-installer/main/skill.md" target="_blank" rel="noopener noreferrer">Read the guide</a>
+    <a href="#install-widget">Prefer the manual one-liner?</a>
+  </div>
+  <p class="agent-copy-status" id="agent-copy-status" role="status" aria-live="polite"></p>
+</section>
+
 <div class="install-widget" id="install-widget">
   <div class="install-tabs">
     <div class="install-tabs-left">
@@ -396,6 +422,26 @@
 </div>
 
 <script>
+  async function copyAgentPrompt(button) {
+    const prompt = document.getElementById('agent-start-prompt');
+    const status = document.getElementById('agent-copy-status');
+    button.disabled = true;
+    status.textContent = '';
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.writeText) {
+        throw new Error('Clipboard is unavailable');
+      }
+      await navigator.clipboard.writeText(prompt.value);
+      status.textContent = 'Copied. Paste the prompt into your agent.';
+    } catch {
+      prompt.focus();
+      prompt.select();
+      status.textContent = 'The prompt is selected. Copy it manually and paste it into your agent.';
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   // ── Install widget ──
   const installs = {
     'macOS/Linux': {

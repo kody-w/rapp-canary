@@ -14,12 +14,12 @@
     {
       "from": "kody-w.github.io/rapp-installer",
       "to": "kody-w.github.io/rapp-canary",
-      "expected_count": 27
+      "expected_count": 25
     },
     {
       "from": "kody-w/rapp-installer",
       "to": "kody-w/rapp-canary",
-      "expected_count": 81
+      "expected_count": 83
     },
     {
       "from": "kody-w/rapp-support",
