@@ -4,6 +4,11 @@ This directory belongs to the Canary ring and is never promoted as shared
 payload. Canary-specific URLs, deployment settings, and future patches live
 here. The Grail-derived files outside `.ring/` remain the promotable payload.
 
+`SERVE-TIME-IDENTITY.md` is the pattern for anything ring-specific: identity
+is applied at serve time by the renderer, never written into the payload, and
+every deploy is gated on the served identity. Read it before adding a ring URL,
+banner, or check.
+
 `SEAWORTHINESS-CONSTITUTION.md` is the controlling release doctrine.
 `preprod-policy.json`, `readiness.schema.json`, `soak.schema.json`, and the
 Preprod workflow turn that doctrine into machine-enforced gates without

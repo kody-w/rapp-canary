@@ -60,6 +60,19 @@ def _config(path: Path) -> dict:
         for item in protected
     ):
         raise RenderError("invalid protected_paths")
+    advisories = value.get("advisories", [])
+    if not isinstance(advisories, list) or not all(
+        isinstance(item, dict)
+        and set(item) == {"path", "text"}
+        and isinstance(item["path"], str)
+        and item["path"]
+        and not item["path"].startswith(("/", "\\"))
+        and ".." not in Path(item["path"]).parts
+        and isinstance(item["text"], str)
+        and item["text"].strip()
+        for item in advisories
+    ):
+        raise RenderError("invalid advisories")
     excluded = value.get("rewrite_excluded_prefixes", [])
     if not isinstance(excluded, list) or not all(
         isinstance(item, str)
@@ -129,6 +142,37 @@ def _text_files(output: Path, excluded_prefixes: tuple[str, ...]):
         yield path, data
 
 
+def _apply_advisories(output: Path, advisories: list[dict]) -> list[dict]:
+    """Insert ring-owned advisory text into rendered files at serve time.
+
+    The shared payload never carries ring-specific prose; a ring that needs to
+    tell readers something about itself (for example, "use the flight sandbox,
+    not the production installer") declares it in its own ring.json and the
+    renderer inserts it after the file's YAML front matter (or at the top).
+    """
+    applied = []
+    for item in advisories:
+        path = output / Path(item["path"].replace("\\", "/"))
+        if not path.is_file():
+            raise RenderError(f"advisory target missing: {item['path']!r}")
+        text = item["text"].strip() + "\n\n"
+        data = path.read_text(encoding="utf-8")
+        if data.startswith("---\n"):
+            end = data.find("\n---\n", 4)
+            if end == -1:
+                raise RenderError(
+                    f"advisory target has unterminated front matter: {item['path']!r}"
+                )
+            head = data[: end + len("\n---\n")]
+            body = data[end + len("\n---\n"):].lstrip("\n")
+            data = head + "\n" + text + body
+        else:
+            data = text + data
+        path.write_text(data, encoding="utf-8", newline="\n")
+        applied.append({"path": item["path"], "inserted": True})
+    return applied
+
+
 def _digest(output: Path, modes: dict[str, str]) -> str:
     digest = hashlib.sha256()
     for relative, mode in sorted(modes.items()):
@@ -186,12 +230,14 @@ def render(repo: Path, config_path: Path, output: Path) -> dict:
             raise RenderError(
                 f"rewrite source remains in production files: {rule['from']!r}"
             )
+    advisories = _apply_advisories(output, config.get("advisories", []))
     return {
         "schema": "rapp-ring-render/1",
         "ring": config["name"],
         "source_commit": _git(repo, "rev-parse", "HEAD^{commit}").strip(),
         "rendered_sha256": _digest(output, modes),
         "rewrites": applied,
+        "advisories": advisories,
     }
 
 

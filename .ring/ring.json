@@ -14,12 +14,12 @@
     {
       "from": "kody-w.github.io/rapp-installer",
       "to": "kody-w.github.io/rapp-canary",
-      "expected_count": 25
+      "expected_count": 30
     },
     {
       "from": "kody-w/rapp-installer",
       "to": "kody-w/rapp-canary",
-      "expected_count": 83
+      "expected_count": 78
     },
     {
       "from": "kody-w/rapp-support",
@@ -30,5 +30,11 @@
   "protected_paths": [
     ".ring/",
     ".github/workflows/"
+  ],
+  "advisories": [
+    {
+      "path": "skill.md",
+      "text": "> **Canary ring notice.** This text is inserted when the canary ring serves this playbook; it is not part of the shared payload. Canary is a pre-release ring. Its installer installs into the same `~/.brainstem` as the stable release, so on a machine that already has a Brainstem, do not run the canary installer over it. Test canary in the isolated flight sandbox instead:\n>\n> ```bash\n> curl -fsSL https://kody-w.github.io/rapp-train/flight.sh | bash -s -- canary\n> ```\n>\n> That lives under `~/.rapp-flight/canary` with its own port (7075), HOME, memory, and sign-in; nothing in `~/.brainstem` is touched. Report findings on kody-w/rapp-canary."
+    }
   ]
 }

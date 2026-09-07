@@ -59,8 +59,26 @@ jobs:
           mkdir "$RUNNER_TEMP/site"
           cp -R "$RUNNER_TEMP/rendered/docs/." "$RUNNER_TEMP/site/"
           if [ -d .ring/pages ]; then cp .ring/pages/* "$RUNNER_TEMP/site/"; fi
-          # the ring's own one-liner must exist and carry ring identity
+          # Serve-time identity (see .ring/SERVE-TIME-IDENTITY.md): the AI entry
+          # point is the RENDERED skill.md at the site root, never the raw blob.
+          cp "$RUNNER_TEMP/rendered/skill.md" "$RUNNER_TEMP/site/skill.md"
+          mkdir -p "$RUNNER_TEMP/site/skills"
+          cp -R "$RUNNER_TEMP/rendered/skills/." "$RUNNER_TEMP/site/skills/"
+          # the ring's own one-liner and skill must exist and carry ring identity
           grep -q "github.com/${GITHUB_REPOSITORY}" "$RUNNER_TEMP/site/install.sh"
+
+      - name: Gate — served identity points at THIS ring (pre-deploy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          GATE=.ring/tools/check_served_identity.py
+          if [ ! -f "$GATE" ]; then
+            curl -fsSL https://raw.githubusercontent.com/kody-w/rapp-canary/main/.ring/tools/check_served_identity.py \
+              -o "$RUNNER_TEMP/check_served_identity.py"
+            GATE="$RUNNER_TEMP/check_served_identity.py"
+          fi
+          python "$GATE" --site "$RUNNER_TEMP/site" --config .ring/ring.json \
+            --report "$RUNNER_TEMP/served-identity-pre.json"
 
       - uses: actions/upload-pages-artifact@v4
         with:
@@ -68,3 +86,15 @@ jobs:
 
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Gate — live site points at THIS ring (post-deploy)
+        shell: bash
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          GATE=.ring/tools/check_served_identity.py
+          [ -f "$GATE" ] || GATE="$RUNNER_TEMP/check_served_identity.py"
+          # CDN propagation: up to ~2 minutes per entry point before this is a red run.
+          python "$GATE" --url "$PAGE_URL" --config .ring/ring.json \
+            --attempts 12 --wait 10 --report "$RUNNER_TEMP/served-identity-live.json"
