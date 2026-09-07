@@ -272,7 +272,8 @@ def test_registry_fetch_is_user_initiated_and_dropped_code_requires_confirmation
     assert "loadFeatured" not in startup
     assert "loadRarRegistry()" in registry
     assert "This executes Python code on your machine" in drop
-    assert drop.index("confirm(") < drop.index("fetch(`${API}/agents/import`")
+    assert "'/skills/import' : '/agents/import'" in drop
+    assert drop.index("confirm(") < drop.index("fetch(`${API}${route}`")
 
 
 def test_transcript_import_validates_before_mutating_live_chat():

@@ -275,6 +275,10 @@ jobs:
           assert 'PreflightCustom' in (d.get('agents') or []), d.get('agents')
           print('custom agent survived upgrade')"
 
+      - name: stored skills and RAPP/1 smoke
+        shell: bash
+        run: python3 tests/smoke_skills.py --url http://127.0.0.1:7071 --filesystem
+
       - name: collect installer log
         if: always()
         shell: bash

@@ -14,8 +14,8 @@
 # Format: <64-hex normalized sha256>  # <representative commit>
 1896e150bf33b682f02e74d61b8ca605abb89063b1fc1a4f82cf8a14fe62ac55  # eed2465 polish: soul teaches drag-and-drop as THE way to add agents
 2e410e6f64f0565917db8a60ba0b46353fbc7b0583d4196f4521bcb66686c631  # d4c6270 polish: tour keynote redesign, native styling, precise wording, brevity
-37d8138afdecebaa0d6216eaa3278637fe4cd2df5b946f402dcff5bc0b011d96  # maintenance: align agent visibility and install guidance with the loader
 37c876210039ad76f24dafb64892d8e8e1a2052be7e2280593f189d56724d735  # d0cfb0b soul: the agents/ folder does not exist as far as the model knows
+37d8138afdecebaa0d6216eaa3278637fe4cd2df5b946f402dcff5bc0b011d96  # 5fbde17 release: v0.6.16
 4ce48e55ad7b14042a05e6c4489658c54ad023995c818c42d11d2d14d10cbc6a  # 46e918c refactor: separate RAPP Brainstem from openrappter IP
 4fa13a8e14885753a9682c84b2209b9336391690ac61c17d9d243082d10768bd  # 68bd207 Rewrite soul.md with brainstem persona and tier-aware guidance
 7a50bc1911602b712f6e5da9703f50a027218b12a5cf93076060ea92f4dc5f59  # 7367da9 polish: cut Flask/port trivia from the soul
@@ -24,6 +24,7 @@
 92540084854fbc628bc863e33a16f846e924cd2b170261dc53c429fb08b51d16  # 02e73f9 Align content with Constitution: naïve organism framing across repo
 a18f6ba8eeed9f1da9adc22ca0340dc7618f14ae4353a4789132e015277e450f  # cefaf1c soul: cut the Training Quest bullet — the UI owns quest discovery
 bcf0c4b1a0a7955d49541b1cfd3f1ec96c4fe4565da799eba8123bf68c7de841  # 22f44f6 fix: bundled memory agents count as agents — no more 'no agents loaded' contradiction
+be10e28766d0e8116349a74b658204f2b9f76b6cec12a6946c138e76de322d80  # current working tree (rapp_brainstem/soul.md)
 c67f7071575f27fbd480281f03c6df75f4d2a036ca28a9a17e80b20beef197a0  # daeca74 fix: update soul.md with Hippocampus one-liner for Tier 2
 cb54c1eaa309a10028860201f52b886508c2d314602f6a6ff43ea5a23597bb4a  # 7ce5c21 polish: show-don't-tell tour + trust-the-metadata soul
 f7966ea24dcab093df75a393ff64c0b216a5070c2710d94dce6302a6b1e8210e  # e7ece69 feat: add Training Quest tutorial link (soul.md + toolbar)

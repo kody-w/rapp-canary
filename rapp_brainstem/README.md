@@ -158,6 +158,7 @@ All config is via environment variables in `.env` (auto-created from `.env.examp
 | `GITHUB_MODEL` | `auto` | `auto` picks the highest Claude Haiku your account can use — fastest responses (falling back to the highest Sonnet, then `gpt-4o`), or pin a specific id. A model picked in the web UI is remembered (`.brainstem_model`) and overrides this. Changeable at runtime via `/models/set` (`"model": "auto"` re-selects). |
 | `SOUL_PATH` | `./soul.md` | Path to the system prompt file. |
 | `AGENTS_PATH` | `./agents` | Directory to discover `*_agent.py` files from. |
+| `SKILLS_PATH` | `./skills` | Directory to discover Markdown skill files from. |
 | `PORT` | `7071` | Server port. |
 | `BRAINSTEM_LAN_MODE` | `false` | Set `true` to bind all interfaces. Non-loopback capability routes require the per-install secret. |
 | `BRAINSTEM_ALLOWED_HOSTS` | *(empty)* | Optional comma-separated LAN hostnames. Loopback and private IP literals are handled automatically. |
@@ -236,6 +237,88 @@ class GreetingAgent(BasicAgent):
 4. The LLM decides when to call them based on the `description` in `metadata`.
 
 **Stateless by design:** Agents load fresh every request. Edit a file, hit the endpoint, see the change. No restart needed.
+
+### Hot-loading Markdown skills
+
+Drag a `SKILL.md`, `skill.md`, `skills.md`, or another `.md` skill file into the
+chat window, exactly like a `.py` agent. The same drop control routes Markdown
+to the skills adapter and Python to the existing agent importer.
+**LearnNew is included out of the box.**
+
+**Store as Markdown (default):** `.md` files go into `skills/`, parallel to
+Python files in `agents/`. You can also copy a Markdown file directly into
+`SKILLS_PATH`. Top-level `.md` files are discovered fresh, so additions, edits,
+and deletions take effect without a restart. Skills survive refresh, new
+conversations, and server restarts; clearing a chat does not delete them.
+
+The model sees the installed skills' names and descriptions and uses LearnNew's
+`use` action to read a relevant skill's current instructions. Markdown stays
+Markdown; it is not automatically compiled, executed as Python, or copied into
+a browser-side skill store.
+
+**Convert to agent (explicit):** Choose **Convert to agent** in the Agents panel
+or ask LearnNew to convert a stored skill. The complete Markdown becomes its
+specification for generating a real `*_agent.py`, through the existing Python
+hot-import path. The original Markdown remains in `skills/`.
+
+Conversion uses Brainstem's authenticated model connection. No separate Copilot
+CLI or API key is required. Storing Markdown and importing Python do not make a
+code-generation model call.
+
+Optional YAML frontmatter supplies the skill's name and description:
+
+```markdown
+---
+name: release-notes
+description: Write release notes from a list of changes.
+---
+
+Group the supplied changes into Features, Fixes, and Breaking Changes.
+Do not invent changes that were not supplied.
+```
+
+Uploading this stores `release-notes.md`; explicitly converting it creates
+`release_notes_agent.py`. Without frontmatter, the name comes from
+the filename (or the first heading for `SKILL.md` / `skills.md`). Names use
+lowercase letters, digits, and single hyphens, up to 64 characters; descriptions
+are at most 1024 characters.
+
+Drop an updated file with the **same skill name** to replace the stored Markdown,
+or edit the file directly. Different named skills can all be uploaded as
+`SKILL.md`. Invalid files and duplicate skill names are reported in the skill
+list rather than silently selected. Subdirectories and symbolic links are not
+loaded. User Markdown files in the default `skills/` directory are ignored by Git.
+
+Converted agents have the normal manifest, tool metadata, and Python behavior,
+with the original Markdown retained in `SKILL_MD` for traceability. They can be
+exported or deleted normally and need no `.md` sidecar. Direct filesystem
+discovery still loads only top-level `*_agent.py` files.
+
+For API clients, `POST /skills/import` accepts Markdown with multipart field
+`file`. It defaults to `mode=skill`; `mode=agent` explicitly generates Python (`mode=remember`
+remains a conversion alias). `GET /skills` lists stored files,
+`GET /skills/export/<filename>` downloads the original Markdown, and
+`DELETE /skills/<filename>` removes it. There is no `session_skills` payload to
+carry between chat requests.
+
+`LearnNew.perform(skill_md=..., skill_filename=...)` stores and uses Markdown.
+`action="use", name="release-notes"` reads a stored skill fresh; `action="convert"`
+generates its Python agent. `remember` is a conversion alias, and `preview`
+generates code without saving an agent. Description-based creation is unchanged.
+
+The adapter is registered by LearnNew during normal startup. It uses Flask
+extension hooks, the existing authorization checks, and the normal agent
+validation boundary; the pinned `brainstem.py` bytes are unchanged.
+Python files still use the unmodified `POST /agents/import` endpoint.
+
+**RAPP/1 receipts:** store, use, conversion, and deletion emit local, hash-linked
+`rapp/1` frames using the unmodified reference implementation pinned in
+`rapp_adapters/rapp1/PROVENANCE.json`. Responses expose a `frame` receipt.
+The local ledger lives in `.brainstem_skill_frames/` beside the skills directory
+and is ignored by Git. The canonical checker must scan actual frames and return
+`COMPLIANT`; an empty `CLEAN` scan is not acceptance. These are keyless local
+integrity receipts, not authenticated swarm messages. The legacy kernel's HTTP
+responses and `BasicAgent` manifests are not relabeled as RAPP/1 frames.
 
 ### Agent conventions
 
