@@ -750,19 +750,50 @@ function Install-CLI {
     # avoids cmd.exe mis-parsing a path that happens to contain a parenthesis.
     $cmdContent = @"
 @echo off
+setlocal
 cd /d "$BRAINSTEM_HOME\src\rapp_brainstem"
+set "RAPP_ENTRY=brainstem.py"
+if exist "launch.py" goto RAPP_PLUGIN_ENTRY
+if exist "provider_plugins\plugins.json" goto RAPP_BROKEN_ENTRY
+if exist "runtime_profile.json" goto RAPP_BROKEN_ENTRY
+goto RAPP_SELECT_PYTHON
+:RAPP_PLUGIN_ENTRY
+set "RAPP_ENTRY=launch.py"
+:RAPP_SELECT_PYTHON
 if exist "$venvPy" goto RAPP_VENV
-"$sysPy" brainstem.py %*
-goto :eof
+set "RAPP_PYTHON=$sysPy"
+goto RAPP_CHECK
 :RAPP_VENV
-"$venvPy" brainstem.py %*
+set "RAPP_PYTHON=$venvPy"
+:RAPP_CHECK
+if not "%RAPP_ENTRY%"=="launch.py" goto RAPP_RUN
+"%RAPP_PYTHON%" launch.py --check >nul
+if errorlevel 1 exit /b %errorlevel%
+:RAPP_RUN
+"%RAPP_PYTHON%" "%RAPP_ENTRY%" %*
+exit /b %errorlevel%
+:RAPP_BROKEN_ENTRY
+echo ERROR: Provider launcher is missing; reinstall this Brainstem release. 1>&2
+exit /b 1
 "@
     Set-Content -Path "$BRAINSTEM_BIN\brainstem.cmd" -Value $cmdContent
 
     # PowerShell wrapper
     $psContent = @"
 Set-Location "$BRAINSTEM_HOME\src\rapp_brainstem"
-if (Test-Path "$venvPy") { & "$venvPy" brainstem.py @args } else { & "$sysPy" brainstem.py @args }
+`$entrypoint = "brainstem.py"
+if (Test-Path -LiteralPath "launch.py" -PathType Leaf) {
+    `$entrypoint = "launch.py"
+} elseif ((Test-Path -LiteralPath "provider_plugins/plugins.json") -or (Test-Path -LiteralPath "runtime_profile.json")) {
+    throw "Provider launcher is missing; reinstall this Brainstem release."
+}
+`$runPython = "$sysPy"
+if (Test-Path "$venvPy") { `$runPython = "$venvPy" }
+if (`$entrypoint -eq "launch.py") {
+    & `$runPython launch.py --check | Out-Null
+    if (`$LASTEXITCODE -ne 0) { throw "Provider startup validation failed." }
+}
+& `$runPython `$entrypoint @args
 "@
     Set-Content -Path "$BRAINSTEM_BIN\brainstem.ps1" -Value $psContent
 
@@ -937,6 +968,16 @@ function Launch-Brainstem {
 
     Push-Location "$BRAINSTEM_HOME\src\rapp_brainstem"
 
+    $py = Resolve-RunPython
+    $entrypoint = "brainstem.py"
+    if (Test-Path -LiteralPath "launch.py" -PathType Leaf) {
+        $entrypoint = "launch.py"
+        & $py launch.py --check | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Provider startup validation failed." }
+    } elseif ((Test-Path -LiteralPath "provider_plugins/plugins.json") -or (Test-Path -LiteralPath "runtime_profile.json")) {
+        throw "Provider launcher is missing; reinstall this Brainstem release."
+    }
+
     # Free port 7071 before launching — an upgrade must not leave the OLD server
     # running, or the health poll below would pass against it and report a false
     # success while the new code never actually binds the port. Guarded for the
@@ -970,8 +1011,7 @@ function Launch-Brainstem {
         Start-Process "http://localhost:7071"
     } | Out-Null
 
-    $py = Resolve-RunPython
-    & $py brainstem.py
+    & $py $entrypoint
 }
 
 function Main {

@@ -110,4 +110,12 @@ if ($gh) {
 
 Write-Host ""
 Write-Host "Starting RAPP Brainstem..." -ForegroundColor Cyan
-& $py brainstem.py
+$entrypoint = "brainstem.py"
+if (Test-Path -LiteralPath "launch.py" -PathType Leaf) {
+    $entrypoint = "launch.py"
+    & $py launch.py --check | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Provider startup validation failed." }
+} elseif ((Test-Path -LiteralPath "provider_plugins/plugins.json") -or (Test-Path -LiteralPath "runtime_profile.json")) {
+    throw "Provider launcher is missing; reinstall this Brainstem release."
+}
+& $py $entrypoint

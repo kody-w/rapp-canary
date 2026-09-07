@@ -1,0 +1,2 @@
+# The immutable kernel must retain its canonical bytes on Windows checkouts too.
+rapp_brainstem/brainstem.py text eol=lf

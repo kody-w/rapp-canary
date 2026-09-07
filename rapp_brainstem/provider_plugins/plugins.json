@@ -1,0 +1,17 @@
+{
+  "schema": "brainstem-provider-plugins/1",
+  "plugins": [
+    {
+      "id": "responses",
+      "api_version": 1,
+      "version": "1.0.0",
+      "entrypoint": "provider_plugins.responses:ResponsesPlugin",
+      "capabilities": [
+        "catalog",
+        "completion",
+        "streaming",
+        "tool-calls"
+      ]
+    }
+  ]
+}

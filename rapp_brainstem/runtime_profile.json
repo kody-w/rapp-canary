@@ -1,0 +1,8 @@
+{
+  "schema": "brainstem-runtime-profile/1",
+  "entrypoint": "launch.py",
+  "kernel_sha256": "bd55a7f0bcf5efd3f7966ca39bb146da3c25fda9a0b1ce5ba587919d3c3775f4",
+  "provider_api": 1,
+  "providers": ["responses"],
+  "support_repository": "kody-w/rapp-support"
+}

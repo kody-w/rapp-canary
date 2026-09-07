@@ -136,6 +136,17 @@ os.chdir(source_dir)
 sys.path.insert(0, source_dir)
 source = sys.stdin.buffer.read()
 sys.argv = [path]
+profile = os.path.join(source_dir, "runtime_profile.json")
+if os.path.lexists(profile):
+    launcher = os.path.join(source_dir, "launch.py")
+    if not os.path.isfile(launcher) or os.path.islink(launcher):
+        raise RuntimeError("Provider runtime is missing its regular launcher")
+    from launch import run_verified_kernel
+    raise SystemExit(run_verified_kernel(source, path))
+if os.path.exists(os.path.join(source_dir, "launch.py")) or os.path.exists(
+    os.path.join(source_dir, "provider_plugins", "plugins.json")
+):
+    raise RuntimeError("Incomplete provider runtime; refusing a kernel-only fallback")
 namespace = {
     "__name__": "__main__",
     "__file__": path,
@@ -2059,6 +2070,33 @@ def launch_runtime(
         environment["BRAINSTEM_STATE_DIR"] = str(state_dir)
         environment["GITHUB_MODEL"] = manifest["runtime"]["model_id"]
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        profile_path = kernel_path.parent / "runtime_profile.json"
+        runtime_profile = "kernel-only"
+        provider_plugins = []
+        if profile_path.exists():
+            profile = _read_json(profile_path)
+            provider_plugins = profile.get("providers")
+            if (
+                profile.get("schema") != "brainstem-runtime-profile/1"
+                or profile.get("entrypoint") != "launch.py"
+                or profile.get("kernel_sha256") != kernel["sha256"]
+                or type(profile.get("provider_api")) is not int
+                or profile["provider_api"] != 1
+                or not isinstance(provider_plugins, list)
+                or not all(
+                    isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", name)
+                    for name in provider_plugins
+                )
+                or len(set(provider_plugins)) != len(provider_plugins)
+            ):
+                raise PreprodError("incompatible provider runtime profile")
+            runtime_profile = profile["schema"]
+            # Sealed launches use the artifact's selection, not inherited local overrides.
+            environment["BRAINSTEM_PROVIDER_PLUGINS"] = ",".join(provider_plugins) or "none"
+        elif (kernel_path.parent / "launch.py").exists() or (
+            kernel_path.parent / "provider_plugins" / "plugins.json"
+        ).exists():
+            raise PreprodError("provider runtime is missing its explicit profile")
         process = subprocess.Popen(
             [
                 str(python),
@@ -2094,6 +2132,8 @@ def launch_runtime(
                     "kernel_size_bytes": len(payload),
                     "resolved_kernel_path": str(kernel_path),
                     "execution_mode": "verified-memory-snapshot",
+                    "runtime_profile": runtime_profile,
+                    "provider_plugins": provider_plugins,
                     "material": material_name,
                     "material_sha256": prepared["material_sha256"],
                     "runtime_python": str(python.resolve()),

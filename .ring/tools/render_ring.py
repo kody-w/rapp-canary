@@ -7,10 +7,15 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
 from pathlib import Path
+
+
+KERNEL_PATH = "rapp_brainstem/brainstem.py"
+KERNEL_SHA256 = "bd55a7f0bcf5efd3f7966ca39bb146da3c25fda9a0b1ce5ba587919d3c3775f4"
 
 
 class RenderError(RuntimeError):
@@ -109,7 +114,11 @@ def _materialize(
     return modes
 
 
-def _text_files(output: Path, excluded_prefixes: tuple[str, ...]):
+def _text_files(
+    output: Path,
+    excluded_prefixes: tuple[str, ...],
+    excluded_paths: tuple[str, ...] = (),
+):
     for path in output.rglob("*"):
         if not path.is_file() or path.is_symlink():
             continue
@@ -121,6 +130,8 @@ def _text_files(output: Path, excluded_prefixes: tuple[str, ...]):
         except UnicodeDecodeError:
             continue
         relative = path.relative_to(output).as_posix()
+        if relative in excluded_paths:
+            continue
         if any(
             relative == prefix.rstrip("/") or relative.startswith(prefix)
             for prefix in excluded_prefixes
@@ -141,6 +152,44 @@ def _digest(output: Path, modes: dict[str, str]) -> str:
     return digest.hexdigest()
 
 
+def _profile_exclusions(output: Path, modes: dict[str, str]) -> tuple[str, ...]:
+    relative = "rapp_brainstem/runtime_profile.json"
+    if relative not in modes:
+        if "rapp_brainstem/launch.py" in modes or "rapp_brainstem/provider_plugins/plugins.json" in modes:
+            raise RenderError("provider runtime is missing its explicit profile")
+        return ()
+    # Read profile data only; rendering must never import candidate Python code.
+    try:
+        profile = json.loads((output / relative).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RenderError("invalid provider runtime profile") from error
+    if (
+        not isinstance(profile, dict)
+        or set(profile) != {
+            "schema", "entrypoint", "kernel_sha256", "provider_api", "providers", "support_repository"
+        }
+        or profile.get("schema") != "brainstem-runtime-profile/1"
+        or profile.get("entrypoint") != "launch.py"
+        or profile.get("kernel_sha256") != KERNEL_SHA256
+        or type(profile.get("provider_api")) is not int
+        or profile["provider_api"] != 1
+        or not isinstance(profile.get("providers"), list)
+        or not all(
+            isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", name)
+            for name in profile["providers"]
+        )
+        or len(set(profile["providers"])) != len(profile["providers"])
+        or not isinstance(profile.get("support_repository"), str)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", profile["support_repository"])
+        or "rapp_brainstem/launch.py" not in modes
+        or KERNEL_PATH not in modes
+    ):
+        raise RenderError("incompatible provider runtime profile")
+    if hashlib.sha256((output / KERNEL_PATH).read_bytes()).hexdigest() != KERNEL_SHA256:
+        raise RenderError("kernel-drift: provider runtime must render the pinned kernel unchanged")
+    return (KERNEL_PATH,)
+
+
 def render(repo: Path, config_path: Path, output: Path) -> dict:
     status = _git(repo, "status", "--porcelain=v1", "--untracked-files=all")
     if status:
@@ -155,6 +204,7 @@ def render(repo: Path, config_path: Path, output: Path) -> dict:
         ),
     )
     applied = []
+    kernel_exclusions = _profile_exclusions(output, modes)
     excluded_prefixes = tuple(
         item.replace("\\", "/")
         for item in config.get("rewrite_excluded_prefixes", [])
@@ -162,7 +212,7 @@ def render(repo: Path, config_path: Path, output: Path) -> dict:
     for rule in config["rewrites"]:
         needle = rule["from"].encode("utf-8")
         replacement = rule["to"].encode("utf-8")
-        files = list(_text_files(output, excluded_prefixes))
+        files = list(_text_files(output, excluded_prefixes, kernel_exclusions))
         count = sum(data.count(needle) for _, data in files)
         if count != rule["expected_count"]:
             raise RenderError(
@@ -180,19 +230,22 @@ def render(repo: Path, config_path: Path, output: Path) -> dict:
         })
         remaining = sum(
             data.count(needle)
-            for _, data in _text_files(output, excluded_prefixes)
+            for _, data in _text_files(output, excluded_prefixes, kernel_exclusions)
         )
         if remaining:
             raise RenderError(
                 f"rewrite source remains in production files: {rule['from']!r}"
             )
-    return {
+    result = {
         "schema": "rapp-ring-render/1",
         "ring": config["name"],
         "source_commit": _git(repo, "rev-parse", "HEAD^{commit}").strip(),
         "rendered_sha256": _digest(output, modes),
         "rewrites": applied,
     }
+    if kernel_exclusions:
+        result["kernel_sha256"] = hashlib.sha256((output / KERNEL_PATH).read_bytes()).hexdigest()
+    return result
 
 
 def main():
