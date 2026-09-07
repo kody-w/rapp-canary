@@ -59,10 +59,6 @@ jobs:
           mkdir "$RUNNER_TEMP/site"
           cp -R "$RUNNER_TEMP/rendered/docs/." "$RUNNER_TEMP/site/"
           if [ -d .ring/pages ]; then cp .ring/pages/* "$RUNNER_TEMP/site/"; fi
-          python .ring/tools/publish_skills.py --rendered "$RUNNER_TEMP/rendered" \
-            --site "$RUNNER_TEMP/site" --config .ring/ring.json
-          test -s "$RUNNER_TEMP/site/skill.md"
-          test -s "$RUNNER_TEMP/site/skills/rapp-bootstrap/SKILL.md"
           # the ring's own one-liner must exist and carry ring identity
           grep -q "github.com/${GITHUB_REPOSITORY}" "$RUNNER_TEMP/site/install.sh"
 
