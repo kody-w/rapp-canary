@@ -170,17 +170,28 @@ do_start() {
             || die "no Copilot token found (use --no-auth for an unauthenticated soak)"
         cp "$token_source" "$state/.copilot_token"
         chmod 600 "$state/.copilot_token"
+        # The kernel has no BRAINSTEM_STATE_DIR support: it only ever reads
+        # .copilot_token/.copilot_session from its own directory
+        # (os.path.dirname(__file__)). Mirror the credentials there too, or
+        # every authenticated soak silently falls through to "Not
+        # authenticated" on the first real /chat call.
+        cp "$token_source" "$SOAK_HOME/render/rapp_brainstem/.copilot_token"
+        chmod 600 "$SOAK_HOME/render/rapp_brainstem/.copilot_token"
         for session_source in "$HOME/.brainstem/state/.copilot_session" \
                               "$HOME/.brainstem/src/rapp_brainstem/.copilot_session"; do
             if [ -f "$session_source" ]; then
                 cp "$session_source" "$state/.copilot_session"
                 chmod 600 "$state/.copilot_session"
+                cp "$session_source" "$SOAK_HOME/render/rapp_brainstem/.copilot_session"
+                chmod 600 "$SOAK_HOME/render/rapp_brainstem/.copilot_session"
                 break
             fi
         done
         say "real Copilot token installed (soak-local copy)"
     else
-        rm -f "$state/.copilot_token" "$state/.copilot_session"
+        rm -f "$state/.copilot_token" "$state/.copilot_session" \
+            "$SOAK_HOME/render/rapp_brainstem/.copilot_token" \
+            "$SOAK_HOME/render/rapp_brainstem/.copilot_session"
     fi
 
     say "launching on :$SOAK_PORT"
