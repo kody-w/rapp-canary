@@ -8,3 +8,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # This dir (tests/) → import soul_hash, the soul-refresh hasher that lives here
 # alongside its manifest and enforcing test (the engine root stays grail).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Mirror the normal entrypoint's startup discovery before Flask serves requests.
+import brainstem
+brainstem._load_agent_from_file(str(
+    Path(__file__).resolve().parent.parent / "agents" / "learn_new_agent.py"
+))

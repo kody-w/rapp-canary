@@ -1,0 +1,10 @@
+{
+  "repository": "kody-w/rapp-1",
+  "commit": "eb50008011447f5e69372ac22a1755f0978d15ed",
+  "license": "MIT",
+  "files": {
+    "rapp.py": "1a04362b02f14c1e37b70c6b4f72d79e92df1cc9c2b5b394e8e1b141fc0b6050",
+    "rapp_check.py": "a8dbc2dc242b2faabc959a917c23c37db3bd3d28b95dc57891cc8f623698b7c2"
+  },
+  "scope": "Canonical emitter and checker for local hash-linked skill receipts; not a claim of swarm authentication or a relabeling of legacy Brainstem HTTP responses."
+}
