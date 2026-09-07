@@ -14,7 +14,7 @@ plugin's repository source includes that file. If a host cannot access the local
 reference, read the canonical source at:
 
 ```text
-https://raw.githubusercontent.com/kody-w/rapp-installer/main/skill.md
+https://kody-w.github.io/rapp-installer/skill.md
 ```
 
 If neither source can be read, report that missing guidance rather than
