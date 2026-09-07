@@ -1027,7 +1027,7 @@
 
 <div id="drop-overlay">
   <span class="icon"><svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg></span>
-  Drop .py files into agents or .md files into skills
+  Drop .py files into agents
 </div>
 
 <div id="login-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="login-title">
@@ -1117,18 +1117,13 @@
       <div id="agents-panel">
         <h3>
           <span class="icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg></span>
-          Agents &amp; Skills
+          Agents
         </h3>
-        <div id="skills-section">
-          <div style="font-size:11px;color:#8b949e;margin-bottom:6px">Markdown skills</div>
-          <ul class="agent-list" id="skill-list-ul"></ul>
-          <div style="font-size:10px;color:#8b949e;margin:8px 0 12px">Stored in skills/. Files reload automatically; refresh does not remove them.</div>
-        </div>
         <ul class="agent-list" id="agent-list-ul">
           <!-- Populated by JS -->
         </ul>
         <div style="font-size:10px; color:#8b949e; margin-top:12px; text-align:center;">
-          .py files live in agents/. .md files live in skills/. Conversion to an agent is optional.
+          .py files live in agents/.
         </div>
       </div>
     </div>
@@ -1209,7 +1204,7 @@
 <div id="chat" role="log" aria-live="polite" aria-relevant="additions text">
   <!-- Subtle Drop Watermark -->
   <div id="chat-watermark">
-    Drag & Drop .py Agents or .md Skills Here
+    Drag & Drop .py Agents Here
     <svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
   </div>
 
@@ -1219,9 +1214,7 @@
       <p>I am your local assistant powered by Copilot. Here is a quick tour to get you started:</p>
       <ul>
         <li><strong>Chat</strong>: Just ask me questions below to start building and researching!</li>
-        <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>
-        <li><strong>Add Skills</strong>: Drop a <code>.md</code> file to store it in <code>skills/</code>, just like <code>.py</code> files in <code>agents/</code>. Skills survive refresh and reload when edited. Converting a skill to a Python agent is optional.</li>
-      </ul>
+        <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>      </ul>
       <p><em>Click one of the prompts below to get started!</em></p>
       <p class="tour-invite-wrap"><button class="starter-btn tour-invite" onclick="startTour()">New here? Take the 5-minute guided tour</button><button class="tour-invite-hide" onclick="hideTourInvite()" title="Hide this — you can still find the Training Quest in the toolbar"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor"><path d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z"/></svg></button></p>
     </div>
@@ -1731,30 +1724,24 @@
     if (!files || files.length === 0) return;
     
     for (const file of files) {
-      if (!/\.(py|md)$/i.test(file.name)) {
-        alert('Only .py agent files and .md skill files are supported.');
+      if (!/\.py$/i.test(file.name)) {
+        alert('Only .py agent files are supported.');
         continue;
       }
-      if (/\.py$/i.test(file.name) && !confirm(`Install ${file.name}? This executes Python code on your machine.`)) {
+      if (!confirm(`Install ${file.name}? This executes Python code on your machine.`)) {
         continue;
       }
       const formData = new FormData();
       formData.append('file', file);
       
       try {
-        const route = /\.md$/i.test(file.name) ? '/skills/import' : '/agents/import';
-        const res = await fetch(`${API}${route}`, {
+        const res = await fetch(`${API}/agents/import`, {
           method: 'POST',
           body: formData
         });
         const data = await res.json();
         if (data.status === 'ok') {
-          if (data.scope === 'skill') {
-            document.getElementById('agents-panel').classList.add('open');
-            alert(`Saved skill: ${data.filename}. It stays in skills/ and is available in every conversation.`);
-          } else {
-            alert(`Installed agent: ${data.filename || file.name}`);
-          }
+          alert(`Installed agent: ${data.filename || file.name}`);
           loadAgentsList();
         } else {
           alert(`Failed to import ${file.name}: ${data.error}`);
@@ -1778,74 +1765,6 @@
   }
 
   // ── Agents Panel (installed *_agent.py files) ──
-  async function loadSkillsList() {
-    const list = document.getElementById('skill-list-ul');
-    try {
-      const response = await fetch(`${API}/skills`);
-      const data = await response.json();
-      if (!response.ok || data.error) throw new Error(data.error || 'Could not load skills.');
-      list.innerHTML = '';
-      for (const skill of data.files) {
-        const row = document.createElement('li');
-        const label = document.createElement('div');
-        label.className = 'agent-name';
-        label.textContent = skill.name || skill.filename;
-        label.title = skill.error || `${skill.filename}: ${skill.description}`;
-        if (skill.error) label.style.color = '#f85149';
-        const controls = document.createElement('div');
-        controls.className = 'agent-controls';
-        const convert = document.createElement('button');
-        convert.className = 'export-btn';
-        convert.textContent = 'Convert to agent';
-        convert.disabled = !!skill.error;
-        convert.onclick = () => convertSkill(skill, convert);
-        const download = document.createElement('button');
-        download.className = 'export-btn';
-        download.textContent = 'Export';
-        download.onclick = () => window.open(`${API}/skills/export/${encodeURIComponent(skill.filename)}`, '_blank');
-        const remove = document.createElement('button');
-        remove.className = 'export-btn';
-        remove.textContent = 'Delete';
-        remove.onclick = async () => {
-          if (!confirm(`Delete ${skill.filename} from skills/?`)) return;
-          try {
-            const result = await fetch(`${API}/skills/${encodeURIComponent(skill.filename)}`, { method: 'DELETE' });
-            const data = await result.json();
-            if (!result.ok || data.status !== 'ok') throw new Error(data.error || 'Delete failed.');
-            await loadSkillsList();
-          } catch (error) { alert(`Could not delete ${skill.filename}: ${error.message}`); }
-        };
-        controls.append(convert, download, remove);
-        row.append(label, controls);
-        list.appendChild(row);
-      }
-      if (data.files.length === 0) list.textContent = 'No Markdown skills installed.';
-    } catch (error) {
-      list.textContent = `Could not load skills: ${error.message}`;
-    }
-  }
-
-  async function convertSkill(skill, button) {
-    button.disabled = true;
-    button.textContent = 'Converting...';
-    try {
-      const source = await fetch(`${API}/skills/export/${encodeURIComponent(skill.filename)}`);
-      if (!source.ok) throw new Error('Could not read the stored skill.');
-      const form = new FormData();
-      form.append('file', await source.blob(), skill.filename);
-      form.append('mode', 'agent');
-      const response = await fetch(`${API}/skills/import`, { method: 'POST', body: form });
-      const data = await response.json();
-      if (data.status !== 'ok') throw new Error(data.error || 'Could not convert the skill.');
-      loadAgentsList();
-    } catch (error) {
-      alert(`Could not convert ${skill.name}: ${error.message}`);
-    } finally {
-      button.disabled = false;
-      button.textContent = 'Convert to agent';
-    }
-  }
-
   function toggleAgentsPanel() {
     const p = document.getElementById('agents-panel');
     const open = p.classList.toggle('open');
@@ -1880,7 +1799,6 @@
   });
 
   async function loadAgentsList() {
-    loadSkillsList();
     try {
       const res = await fetch(`${API}/agents`);
       const data = await res.json();
@@ -1958,7 +1876,7 @@
 
   // ── RAR Registry Browser ──
   // Search a public catalog of agents and hot-load any of them into this
-  // brainstem by fetching verified .py or .md files and POSTing to /agents/import.
+  // brainstem by fetching verified .py files and POSTing to /agents/import.
   const RAR_REVISION = '241c6191736a856b6837ef2398447a25710b8d72';
   const RAR_BASE = `https://raw.githubusercontent.com/kody-w/RAR/${RAR_REVISION}`;
   // Same static files via the jsdelivr CDN mirror — used only when raw
@@ -1979,12 +1897,13 @@
   let rarLoading = null;      // in-flight promise, to dedupe concurrent loads
   let rarSearchTimer = null;
 
-  // Standalone *_agent.py files and Markdown skills share the import path.
-  // The registry also carries stacks/swarms and stub/card entries (.py.stub, .py.card,
-  // or scope-prefixed @ filenames) — none of those import cleanly, so drop them here.
+  // Standalone *_agent.py files share the import path. The registry also
+  // carries stacks/swarms and stub/card entries (.py.stub, .py.card, or
+  // scope-prefixed @ filenames) — none of those import cleanly, so drop
+  // them here.
   function isLoadableAgent(a) {
     const base = (a && a._file ? a._file : '').replace(/\\/g, '/').split('/').pop();
-    return (base.endsWith('_agent.py') || /\.md$/i.test(base)) && base !== 'basic_agent.py' && !base.startsWith('@')
+    return base.endsWith('_agent.py') && base !== 'basic_agent.py' && !base.startsWith('@')
       && /^[0-9a-f]{64}$/i.test(a._sha256 || '');
   }
 
@@ -2203,8 +2122,7 @@
     if (!path) { alert('This registry entry has no file path.'); return; }
     const filename = agent._install_filename || path.replace(/\\/g, '/').split('/').pop();
     const expectedDigest = (agent._sha256 || '').toLowerCase();
-    const isSkill = /\.md$/i.test(filename);
-    if ((!filename.endsWith('_agent.py') && !isSkill) || filename.includes('/') || filename.includes('\\')) {
+    if (!filename.endsWith('_agent.py') || filename.includes('/') || filename.includes('\\')) {
       alert('This registry entry has an invalid install filename.');
       return;
     }
@@ -2212,7 +2130,7 @@
       alert('This registry entry has no valid SHA-256 digest and cannot be installed.');
       return;
     }
-    if (!confirm(`Install ${filename}?\n\n${isSkill ? 'This stores a Markdown skill.' : 'This executes Python code on your machine.'} The source is pinned to RAR commit ${RAR_REVISION.slice(0, 12)} and its SHA-256 will be verified before installation.`)) {
+    if (!confirm(`Install ${filename}?\n\nThis executes Python code on your machine. The source is pinned to RAR commit ${RAR_REVISION.slice(0, 12)} and its SHA-256 will be verified before installation.`)) {
       return;
     }
     const orig = btn.textContent;
@@ -2228,13 +2146,13 @@
         throw new Error('integrity check failed — downloaded bytes do not match the pinned RAR catalog');
       }
       const fd = new FormData();
-      fd.append('file', new Blob([bytes], { type: isSkill ? 'text/markdown' : 'text/x-python' }), filename);
+      fd.append('file', new Blob([bytes], { type: 'text/x-python' }), filename);
       fd.append('sha256', expectedDigest);
       fd.append('source_revision', RAR_REVISION);
-      const res = await fetch(`${API}${isSkill ? '/skills/import' : '/agents/import'}`, { method: 'POST', body: fd });
+      const res = await fetch(`${API}/agents/import`, { method: 'POST', body: fd });
       const data = await res.json();
       if (data.status === 'ok') {
-        btn.textContent = data.scope === 'skill' ? 'Skill saved' : 'Added ✓';
+        btn.textContent = 'Added ✓';
         btn.classList.add('added');
         loadAgentsList();
       } else {
@@ -3000,9 +2918,14 @@
       revealedHeight = nextRevealHeight;
       lastRevealStartedAt = performance.now();
       const chat = document.getElementById('chat');
+      // Always fully catch up while the user is near the bottom — a small fixed
+      // step-per-tick let bursty reveals (e.g. numbered lists) outrun the
+      // scroll, leaving freshly-streamed text hidden behind the footer input
+      // bar until the stream finished. Never yank the view if they've
+      // scrolled up to read scrollback.
       const goal = chat.scrollHeight - chat.clientHeight;
       const gap = goal - chat.scrollTop;
-      if (gap > 0 && gap < 400) chat.scrollTop += Math.min(gap, 28);
+      if (gap > 0 && gap < 400) chat.scrollTop = goal;
     }
 
     function scheduleStreamRender() {
@@ -3671,7 +3594,7 @@
     chat.classList.remove('has-messages');
     chat.innerHTML = `
       <div id="chat-watermark">
-        Drag & Drop .py Agents or .md Skills Here
+        Drag & Drop .py Agents Here
         <svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
       </div>
       <div class="msg system">
@@ -3680,9 +3603,7 @@
           <p>I am your local assistant powered by Copilot. Here is a quick tour to get you started:</p>
           <ul>
             <li><strong>Chat</strong>: Just ask me questions below to start building and researching!</li>
-            <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>
-            <li><strong>Add Skills</strong>: Drop a <code>.md</code> file to store it in <code>skills/</code>, just like <code>.py</code> files in <code>agents/</code>. Skills survive refresh and reload when edited. Converting a skill to a Python agent is optional.</li>
-          </ul>
+            <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>          </ul>
           <p><em>Click one of the prompts below to get started!</em></p>
           <p class="tour-invite-wrap"><button class="starter-btn tour-invite" onclick="startTour()">New here? Take the 5-minute guided tour</button><button class="tour-invite-hide" onclick="hideTourInvite()" title="Hide this — you can still find the Training Quest in the toolbar"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor"><path d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z"/></svg></button></p>
         </div>
