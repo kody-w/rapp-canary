@@ -70,8 +70,16 @@ if [ ! -d "$FLIGHT_HOME/venv" ]; then python3 -m venv "$FLIGHT_HOME/venv"; fi
 
 (
     cd "$FLIGHT_HOME/render/rapp_brainstem"
+    entrypoint=brainstem.py
+    if [ -f launch.py ]; then
+        entrypoint=launch.py
+        HOME="$FLIGHT_HOME" PORT="$FLIGHT_PORT" "$FLIGHT_HOME/venv/bin/python" launch.py --check >/dev/null
+    elif [ -e runtime_profile.json ] || [ -e provider_plugins/plugins.json ]; then
+        echo "Provider runtime is incomplete; refusing a kernel-only flight." >&2
+        exit 1
+    fi
     HOME="$FLIGHT_HOME" PORT="$FLIGHT_PORT" \
-        nohup "$FLIGHT_HOME/venv/bin/python" brainstem.py > "$FLIGHT_HOME/flight.log" 2>&1 &
+        nohup "$FLIGHT_HOME/venv/bin/python" "$entrypoint" > "$FLIGHT_HOME/flight.log" 2>&1 &
     echo $! > "$FLIGHT_HOME/flight.pid"
 )
 SERVER_PID=$(cat "$FLIGHT_HOME/flight.pid")

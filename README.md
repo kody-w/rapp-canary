@@ -120,12 +120,25 @@ The brainstem is a Flask server that connects to GitHub Copilot's API for LLM in
 ```
 ~/.brainstem/src/rapp_brainstem/
 ├── brainstem.py       # the server
+├── launch.py          # normal startup; keeps the kernel unchanged
+├── provider_plugins/  # explicit, versioned provider protocol adapters
 ├── soul.md            # personality (system prompt)
 ├── agents/            # auto-discovered tools
 │   └── hello_agent.py
 ├── local_storage.py   # local-first storage shim
 └── .env               # config (model, paths, port)
 ```
+
+### Provider plugins
+
+Normal startup supports explicitly registered provider adapters outside the
+frozen kernel. The Responses adapter makes eligible models such as GPT-6 Astra
+available through the existing picker and Copilot authentication; existing
+Chat Completions models keep their current path. No separate model-provider
+API key is needed.
+
+See [ProviderTransport v1](rapp_brainstem/PROVIDERS.md) for activation, package
+entry points, compatibility, lifecycle, and the trusted-code boundary.
 
 ### Write an Agent
 

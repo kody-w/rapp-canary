@@ -523,7 +523,15 @@ if ! "$VENV_PYTHON" -c "import flask, flask_cors, requests, dotenv" 2>/dev/null;
     "$BRAINSTEM_HOME/venv/bin/pip" install -r requirements.txt --quiet 2>/dev/null || true
 fi
 
-exec "$VENV_PYTHON" brainstem.py "$@"
+entrypoint=brainstem.py
+if [ -f launch.py ]; then
+    entrypoint=launch.py
+    "$VENV_PYTHON" launch.py --check >/dev/null || exit $?
+elif [ -e provider_plugins/plugins.json ] || [ -e runtime_profile.json ]; then
+    echo "ERROR: Provider launcher is missing; reinstall this Brainstem release." >&2
+    exit 1
+fi
+exec "$VENV_PYTHON" "$entrypoint" "$@"
 WRAPPER
 
     chmod +x "$BRAINSTEM_BIN/brainstem"
@@ -732,6 +740,15 @@ with open(sys.argv[2], 'w') as f: json.dump(out, f)
 
     cd "$BRAINSTEM_HOME/src/rapp_brainstem"
 
+    local entrypoint=brainstem.py
+    if [ -f launch.py ]; then
+        entrypoint=launch.py
+        "$venv_python" launch.py --check >/dev/null
+    elif [ -e provider_plugins/plugins.json ] || [ -e runtime_profile.json ]; then
+        echo "ERROR: Provider launcher is missing; reinstall this Brainstem release." >&2
+        exit 1
+    fi
+
     # Kill any existing brainstem on port 7071 before starting
     local existing_pid
     existing_pid=$(lsof -ti:7071 2>/dev/null | head -1)
@@ -765,17 +782,17 @@ with open(sys.argv[2], 'w') as f: json.dump(out, f)
     # Use exec to replace shell — but only if stdin is a terminal.
     # When piped (curl | bash), exec can lose the TTY and hang.
     if [ -t 0 ]; then
-        exec "$venv_python" brainstem.py
+        exec "$venv_python" "$entrypoint"
     elif ( : </dev/tty ) 2>/dev/null; then
         # Piped installer with a USABLE controlling terminal — reattach stdin.
         # Test by opening it: the /dev/tty node exists even without a controlling
         # terminal (ssh without -t, CI), where only the open fails — a bare `-e`
         # check would take this branch and die on the redirect.
-        "$venv_python" brainstem.py </dev/tty
+        "$venv_python" "$entrypoint" </dev/tty
     else
         # No controlling terminal at all (ssh without -t, CI, a container). Reattaching
         # /dev/tty would error out; just run the server on the inherited stdin.
-        "$venv_python" brainstem.py
+        "$venv_python" "$entrypoint"
     fi
 }
 

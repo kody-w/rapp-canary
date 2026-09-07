@@ -13,6 +13,9 @@ Philosophy: "engine, not experience" — infrastructure only, no opinionated UI 
 ```bash
 # Start server
 ./start.sh                # macOS/Linux (creates venv, installs deps, runs)
+
+# Direct run with provider plugins (assumes dependencies installed)
+python launch.py                # macOS/Linux (creates venv, installs deps, runs)
 python brainstem.py       # Direct run (assumes deps installed)
 
 # Install dependencies
@@ -29,7 +32,15 @@ No build step, linter, or type checker is configured.
 
 ## Architecture
 
-**Entry point:** `brainstem.py` — a single-file Flask server (~2,000 lines) that handles auth, chat, agent orchestration, and the web UI.
+**Kernel:** `brainstem.py` is the immutable single-file Flask server containing
+auth, chat, agent orchestration, and the web UI. Do not edit it.
+
+**Normal startup:** `launch.py` uses the explicit bindings in `kernel_compat.py`
+and the versioned runtime profile. Provider transports implement the public
+contract in `provider_plugins/base.py`; registration, HTTP, and request lifetime
+belong to `provider_host.py`. See `PROVIDERS.md`. Never add global Requests
+patches, replace kernel functions, or load provider plugins through agent
+auto-discovery. Direct `python brainstem.py` is a legacy kernel-only path.
 
 **Request flow (POST /chat):**
 1. Load `soul.md` (system prompt) and fresh-discover agents from `agents/`

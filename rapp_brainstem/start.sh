@@ -59,4 +59,12 @@ for private_file in .copilot_token .copilot_session .copilot_pending .brainstem_
     fi
 done
 
-exec "$VENV_PYTHON" brainstem.py
+entrypoint=brainstem.py
+if [ -f launch.py ]; then
+    entrypoint=launch.py
+    "$VENV_PYTHON" launch.py --check >/dev/null
+elif [ -e provider_plugins/plugins.json ] || [ -e runtime_profile.json ]; then
+    echo "ERROR: Provider launcher is missing; reinstall this Brainstem release." >&2
+    exit 1
+fi
+exec "$VENV_PYTHON" "$entrypoint"

@@ -26,7 +26,7 @@ Philosophy: "engine, not experience" — this is infrastructure, not a consumer 
 cd rapp_brainstem && ./start.sh
 
 # Direct run (assumes deps installed)
-cd rapp_brainstem && python brainstem.py
+cd rapp_brainstem && python launch.py
 
 # Run all tests
 cd rapp_brainstem && python3 -m pytest test_local_agents.py -v
@@ -59,6 +59,11 @@ Each tier is self-contained. Users advance when they choose to.
 ## Brainstem Server (rapp_brainstem/)
 
 **Single-file server**: All logic lives in `brainstem.py` (~2,000 lines) — auth, routing, LLM calls, agent orchestration. Keep it that way.
+
+The kernel is immutable. Normal startup is composed by `launch.py` through
+`kernel_compat.py`; provider protocols belong in the external ProviderTransport
+v1 layer, not kernel edits. See `rapp_brainstem/PROVIDERS.md`. Existing agents and
+`system_context()` remain the tool/context extension points.
 
 **Request flow (POST /chat)**: Load soul.md -> discover agents from `agents/*_agent.py` -> call Copilot API with tools -> execute tool calls via agent `.perform()` -> loop up to 3 rounds -> return response.
 

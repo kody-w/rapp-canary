@@ -35,11 +35,32 @@ pid_matches() {
     esac
 }
 
+server_entrypoint() {
+    local path="$SOAK_HOME/render/rapp_brainstem/brainstem.py"
+    if [ -f "$SOAK_HOME/server-entrypoint" ]; then
+        path=$(cat "$SOAK_HOME/server-entrypoint")
+    fi
+    case "$path" in
+        "$SOAK_HOME/render/rapp_brainstem/brainstem.py"|"$SOAK_HOME/render/rapp_brainstem/launch.py")
+            printf '%s\n' "$path" ;;
+        *) die "invalid server entrypoint receipt; refusing process control" ;;
+    esac
+}
+
 pid_alive() {
+    local entrypoint
     [ -f "$SOAK_HOME/soak.pid" ] || return 1
+    entrypoint=$(server_entrypoint) || return 1
     pid_matches \
         "$(cat "$SOAK_HOME/soak.pid")" \
-        "$SOAK_HOME/render/rapp_brainstem/brainstem.py"
+        "$entrypoint"
+}
+
+stop_server() {
+    local entrypoint
+    entrypoint=$(server_entrypoint) || return 1
+    stop_owned_process "$SOAK_HOME/soak.pid" "$entrypoint" "server" || return 1
+    rm -f "$SOAK_HOME/server-entrypoint"
 }
 
 stop_owned_process() {
@@ -80,10 +101,7 @@ do_stop() {
         "rapp-soak-monitor:$SOAK_HOME" \
         "monitor" || return 1
     if [ -n "$server_pid" ]; then
-        stop_owned_process \
-            "$SOAK_HOME/soak.pid" \
-            "$SOAK_HOME/render/rapp_brainstem/brainstem.py" \
-            "server" || return 1
+        stop_server || return 1
         say "stopped pid $server_pid"
     else
         say "not running"
@@ -130,6 +148,16 @@ do_start() {
     "$SOAK_HOME/venv/bin/python" -I -m pip install --quiet \
         -r "$SOAK_HOME/render/rapp_brainstem/requirements.txt"
 
+    local entrypoint="$SOAK_HOME/render/rapp_brainstem/brainstem.py"
+    if [ -f "$SOAK_HOME/render/rapp_brainstem/launch.py" ]; then
+        entrypoint="$SOAK_HOME/render/rapp_brainstem/launch.py"
+        HOME="$SOAK_HOME" BRAINSTEM_STATE_DIR="$state" PORT="$SOAK_PORT" \
+            "$SOAK_HOME/venv/bin/python" "$entrypoint" --check >/dev/null
+    elif [ -e "$SOAK_HOME/render/rapp_brainstem/runtime_profile.json" ] \
+        || [ -e "$SOAK_HOME/render/rapp_brainstem/provider_plugins/plugins.json" ]; then
+        die "provider runtime is incomplete; refusing a kernel-only soak"
+    fi
+
     if [ "$auth" = "auth" ]; then
         local token_source="$TOKEN_SOURCE"
         if [ -z "$token_source" ]; then
@@ -160,16 +188,17 @@ do_start() {
     started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     rm -f "$SOAK_HOME/session.json" "$SOAK_HOME/probes.jsonl" \
         "$SOAK_HOME/monitor.pid"
+    printf '%s\n' "$entrypoint" > "$SOAK_HOME/server-entrypoint"
     (
         cd "$SOAK_HOME/render/rapp_brainstem"
         HOME="$SOAK_HOME" BRAINSTEM_STATE_DIR="$state" PORT="$SOAK_PORT" \
-            nohup "$SOAK_HOME/venv/bin/python" "$SOAK_HOME/render/rapp_brainstem/brainstem.py" \
+            nohup "$SOAK_HOME/venv/bin/python" "$entrypoint" \
             > "$SOAK_HOME/soak.log" 2>&1 &
         echo $! > "$SOAK_HOME/soak.pid"
     )
     trap 'status=$?; if [ "$status" -ne 0 ]; then
         stop_owned_process "$SOAK_HOME/monitor.pid" "rapp-soak-monitor:$SOAK_HOME" "monitor" || true
-        stop_owned_process "$SOAK_HOME/soak.pid" "$SOAK_HOME/render/rapp_brainstem/brainstem.py" "server" || true
+        stop_server || true
     fi' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM

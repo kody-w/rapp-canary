@@ -44,6 +44,12 @@ open http://localhost:7071
 
 If `gh` is not installed, the web UI at `localhost:7071` walks you through GitHub device-code login automatically.
 
+Normal startup uses `launch.py` to compose explicitly enabled provider plugins
+around the unchanged kernel. The Responses adapter supports eligible models
+such as GPT-6 Astra in the existing model picker with the same Copilot
+authentication. Direct `python brainstem.py` remains a legacy, kernel-only path.
+See [ProviderTransport v1](PROVIDERS.md) for the plugin contract and activation.
+
 ---
 
 ## API Reference
@@ -156,6 +162,7 @@ All config is via environment variables in `.env` (auto-created from `.env.examp
 |----------|---------|-------------|
 | `GITHUB_TOKEN` | *auto-detected* | GitHub PAT or Copilot token. Auto-detected from `gh auth token` if blank. |
 | `GITHUB_MODEL` | `auto` | `auto` picks the highest Claude Haiku your account can use — fastest responses (falling back to the highest Sonnet, then `gpt-4o`), or pin a specific id. A model picked in the web UI is remembered (`.brainstem_model`) and overrides this. Changeable at runtime via `/models/set` (`"model": "auto"` re-selects). |
+| `BRAINSTEM_PROVIDER_PLUGINS` | *runtime profile* | Optional comma-separated provider IDs; `none` disables provider plugins. Restart after changing it. Installed third-party plugins are never activated implicitly. |
 | `SOUL_PATH` | `./soul.md` | Path to the system prompt file. |
 | `AGENTS_PATH` | `./agents` | Directory to discover `*_agent.py` files from. |
 | `SKILLS_PATH` | `./skills` | Directory to discover Markdown skill files from. |

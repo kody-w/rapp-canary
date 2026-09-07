@@ -14,6 +14,13 @@ Everything else in the repo root (install scripts, index.html, docs/) is onboard
 
 `brainstem.py` is the single-file server containing auth, agent orchestration, the tool-calling loop, and all HTTP endpoints.
 
+The kernel is immutable. `launch.py` composes normal startup through the explicit
+bindings in `kernel_compat.py`. New provider protocols implement
+`provider_plugins/base.py`; `provider_host.py` owns registration, HTTP, and
+request-scoped state. See `rapp_brainstem/PROVIDERS.md`. Do not replace kernel
+functions, globally patch Requests, or use agent auto-discovery to install
+provider hooks.
+
 **Tool-calling loop** (`/chat`): Builds messages from soul + memory + conversation history, then runs up to **3 rounds** of LLM calls. Each round checks for `tool_calls` in the response, executes matching agents via `run_tool_calls()`, appends tool results, and loops. Falls back to `gpt-4o` if the configured model fails.
 
 **Agent auto-discovery**: `load_agents()` globs `*_agent.py` in `AGENTS_PATH`, dynamically imports each file, finds classes with a `perform` method (excluding `BasicAgent` itself), and instantiates them. Each agent's `to_tool()` generates its OpenAI function-calling schema.
