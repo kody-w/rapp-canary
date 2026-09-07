@@ -14,6 +14,7 @@ set -euo pipefail
 RING="${1:-canary}"
 BRANCH="${2:-main}"
 FLIGHT_PORT="${FLIGHT_PORT:-7075}"
+FLIGHT_SETUP_ONLY="${FLIGHT_SETUP_ONLY:-0}"
 HUB_RAW="https://raw.githubusercontent.com/kody-w/rapp-canary/main"
 
 case "$RING" in
@@ -27,10 +28,21 @@ command -v git >/dev/null || { echo "✗ git is required" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "✗ python3 is required" >&2; exit 1; }
 
 SLUG="$RING"; [ "$BRANCH" != "main" ] && SLUG="$RING-$(echo "$BRANCH" | tr '/' '-')"
-FLIGHT_HOME="$HOME/.rapp-flight/$SLUG"
+FLIGHT_HOME="${FLIGHT_HOME:-$HOME/.rapp-flight/$SLUG}"
 REPO_URL="https://github.com/kody-w/rapp-$RING.git"
 
 echo "🛫 flight: $RING @ $BRANCH -> $FLIGHT_HOME (port $FLIGHT_PORT)"
+if [ "$FLIGHT_SETUP_ONLY" != "0" ] && [ "$FLIGHT_SETUP_ONLY" != "1" ]; then
+    echo "FLIGHT_SETUP_ONLY must be 0 or 1" >&2
+    exit 2
+fi
+if [ "$FLIGHT_SETUP_ONLY" = "1" ]; then
+    if [ -e "$FLIGHT_HOME/src" ] || [ -e "$FLIGHT_HOME/render" ] || [ -e "$FLIGHT_HOME/flight.pid" ]; then
+        echo "Existing flight preserved. Choose an unused FLIGHT_HOME for setup-only mode." >&2
+        exit 1
+    fi
+    mkdir -p "$FLIGHT_HOME"
+else
 if [ -f "$FLIGHT_HOME/flight.pid" ] && kill -0 "$(cat "$FLIGHT_HOME/flight.pid")" 2>/dev/null; then
     kill "$(cat "$FLIGHT_HOME/flight.pid")"; sleep 1
 fi
@@ -45,6 +57,7 @@ if command -v lsof >/dev/null; then
     fi
 fi
 rm -rf "$FLIGHT_HOME/src" "$FLIGHT_HOME/render"; mkdir -p "$FLIGHT_HOME"
+fi
 
 git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$FLIGHT_HOME/src"
 SHA=$(git -C "$FLIGHT_HOME/src" rev-parse --short HEAD)
@@ -67,6 +80,15 @@ fi
 
 if [ ! -d "$FLIGHT_HOME/venv" ]; then python3 -m venv "$FLIGHT_HOME/venv"; fi
 "$FLIGHT_HOME/venv/bin/python" -m pip install --quiet -r "$FLIGHT_HOME/render/rapp_brainstem/requirements.txt"
+
+if [ "$FLIGHT_SETUP_ONLY" = "1" ]; then
+    (
+        cd "$FLIGHT_HOME/render/rapp_brainstem"
+        HOME="$FLIGHT_HOME" PORT="$FLIGHT_PORT" "$FLIGHT_HOME/venv/bin/python" launch.py --check
+    )
+    echo "Setup ready: $FLIGHT_HOME (not started; no existing process was stopped)."
+    exit 0
+fi
 
 (
     cd "$FLIGHT_HOME/render/rapp_brainstem"

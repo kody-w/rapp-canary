@@ -119,6 +119,25 @@ existing `~/.brainstem`. IMPORTANT: never point anyone at a ring repo's
 design and would install the wrong repo; the Pages copies are the only
 correct ring one-liners.
 
+### Agent-managed setup without replacing an existing flight
+
+The published onboarding entry points are `/skill.md` and
+`/skills/rapp-bootstrap/SKILL.md` on this ring's Pages site. Their public
+installer/playbook fallbacks use ring-rendered Pages URLs, not raw ring payloads.
+
+For a scoped setup test, fetch the published `flight.sh` and use
+`FLIGHT_SETUP_ONLY=1` with an unused absolute `FLIGHT_HOME`. This mode clones
+and renders the requested ring, installs its dependencies, and validates the
+provider launcher, but does not stop processes or start an unmanaged server.
+It refuses to replace an existing `src`, `render`, or PID file.
+
+After setup, start `render/rapp_brainstem/launch.py` with the flight's own
+`venv/bin/python`, `HOME=FLIGHT_HOME`, and an approved free `PORT`. Use the
+assistant host's managed process facility; detach only when the user explicitly
+requests persistence beyond that host session. Confirm the served kernel hash,
+provider headers, skills API, and actual auth/chat state before handing off.
+Never infer readiness from the setup command's exit status alone.
+
 ### Any device, zero-config, reported into an issue
 
 Real-device testing is PULL-based: no runner registration, no tailnet
