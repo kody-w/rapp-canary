@@ -99,6 +99,32 @@ def test_response_must_prove_the_selected_model_identity(plugin, actual):
         plugin.translate_response(response(model=actual), MODEL, {})
 
 
+@pytest.mark.parametrize("actual", ["gpt-6-astra-2026-05-01", "gpt-6-astra-2026-05-01-preview"])
+def test_response_accepts_a_more_specific_snapshot_of_the_requested_model(plugin, actual):
+    # Copilot may echo back the concrete dated/variant snapshot it actually
+    # served for a requested alias (e.g. gpt-5.5 -> gpt-5.5-2026-04-23).
+    # That must still be accepted as the same model, not rejected.
+    result = plugin.translate_response(response(model=actual), MODEL, {})
+    assert result["model"] == actual
+
+
+def test_response_accepts_a_shorter_canonical_alias_of_the_requested_model(plugin):
+    # The inverse case: requesting a variant alias (e.g. gpt-5.6-sol-fast)
+    # that Copilot serves and echoes back as its shorter canonical family
+    # name (gpt-5.6-sol) must also be accepted.
+    model = {**MODEL, "id": "gpt-6-astra-fast"}
+    result = plugin.translate_response(response(model="gpt-6-astra"), model, {})
+    assert result["model"] == "gpt-6-astra"
+
+
+@pytest.mark.parametrize("actual", ["gpt-6-astray", "gpt-6-astra-x-other"])
+def test_response_still_rejects_a_merely_similar_model_id(plugin, actual):
+    # Guard the relaxed check against false positives: a similar-looking but
+    # genuinely different model id must still be refused.
+    with pytest.raises(ProviderError, match="different model"):
+        plugin.translate_response(response(model=actual), MODEL, {})
+
+
 def test_stream_cannot_label_another_model_as_astra(plugin):
     events = [
         "event: response.created",
@@ -107,6 +133,18 @@ def test_stream_cannot_label_another_model_as_astra(plugin):
     ]
     with pytest.raises(ProviderError, match="different model"):
         list(plugin.translate_stream(events, MODEL, {}))
+
+
+def test_stream_accepts_a_more_specific_snapshot_of_the_requested_model(plugin):
+    events = [
+        "event: response.created",
+        'data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-6-astra-2026-05-01","status":"in_progress"}}',
+        "",
+        "event: response.completed",
+        'data: {"type":"response.completed","response":' + json.dumps(response(model="gpt-6-astra-2026-05-01")) + '}',
+        "",
+    ]
+    list(plugin.translate_stream(events, MODEL, {}))
 
 
 def test_copilot_wrapped_ids_can_rotate_but_final_ids_are_authoritative(plugin):

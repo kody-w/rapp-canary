@@ -53,6 +53,28 @@ def _identifier(value):
     return value
 
 
+_SNAPSHOT_SUFFIX = re.compile(r"^\d{4}-\d{2}-\d{2}(-[a-z0-9]+)*$")
+_ALIAS_SUFFIX = re.compile(r"^[a-z0-9]+$")
+
+
+def _matches_requested_model(actual, requested):
+    """The Responses API may echo back a more specific dated snapshot for a
+    requested alias (gpt-5.5 -> gpt-5.5-2026-04-23, gpt-5.4-mini ->
+    gpt-5.4-mini-2026-03-17), or the shorter canonical family name for a
+    requested variant alias (gpt-5.6-sol-fast -> gpt-5.6-sol). Accept only
+    those two specific, observed shapes; anything else — including a merely
+    similar-looking but unrelated id — is a genuine mismatch and must still
+    be refused.
+    """
+    if actual == requested:
+        return True
+    if actual.startswith(requested + "-"):
+        return bool(_SNAPSHOT_SUFFIX.match(actual[len(requested) + 1:]))
+    if requested.startswith(actual + "-"):
+        return bool(_ALIAS_SUFFIX.match(requested[len(actual) + 1:]))
+    return False
+
+
 def _same_identifier(previous, current):
     if previous == current:
         return True
@@ -305,7 +327,7 @@ def _usage(value):
 def _completed(payload, model, context):
     _object(payload)
     actual_model = _identifier(payload.get("model"))
-    if actual_model != model["id"]:
+    if not _matches_requested_model(actual_model, model["id"]):
         raise ProviderError("Responses returned a different model from the selected model")
     if payload.get("error") is not None:
         raise ProviderError("Responses provider reported a failed response")
@@ -469,7 +491,7 @@ class _Stream:
         for source, target in (("id", "id"), ("model", "model"), ("created_at", "created")):
             if source in response:
                 value = _integer(response[source]) if source == "created_at" else _identifier(response[source])
-                if source == "model" and value != self.requested_model:
+                if source == "model" and not _matches_requested_model(value, self.requested_model):
                     raise ProviderError("Responses returned a different model from the selected model")
                 if source in self.explicit_metadata and not (
                     _same_identifier(self.explicit_metadata[source], value) if source == "id"
