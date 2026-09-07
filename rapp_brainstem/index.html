@@ -2918,9 +2918,14 @@
       revealedHeight = nextRevealHeight;
       lastRevealStartedAt = performance.now();
       const chat = document.getElementById('chat');
+      // Always fully catch up while the user is near the bottom — a small fixed
+      // step-per-tick let bursty reveals (e.g. numbered lists) outrun the
+      // scroll, leaving freshly-streamed text hidden behind the footer input
+      // bar until the stream finished. Never yank the view if they've
+      // scrolled up to read scrollback.
       const goal = chat.scrollHeight - chat.clientHeight;
       const gap = goal - chat.scrollTop;
-      if (gap > 0 && gap < 400) chat.scrollTop += Math.min(gap, 28);
+      if (gap > 0 && gap < 400) chat.scrollTop = goal;
     }
 
     function scheduleStreamRender() {
