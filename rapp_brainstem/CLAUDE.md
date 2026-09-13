@@ -70,7 +70,7 @@ auto-discovery. Direct `python brainstem.py` is a legacy kernel-only path.
 | `local_storage.py` | Local shim for Azure File Storage |
 | `soul.md` | Default system prompt loaded every request |
 | `index.html` | Built-in web UI served at `/` |
-| `VERSION` | Semantic version string (currently 0.6.14) |
+| `VERSION` | Semantic version string (currently 0.6.17) |
 | `CONSTITUTION.md` | Governance doc defining what belongs in this repo |
 
 ## Writing Agents

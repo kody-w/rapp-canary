@@ -136,6 +136,13 @@ Switch the active model at runtime.
 { "model": "gpt-4o-mini" }
 ```
 
+Normal startup through `brainstem`, `start.sh`, or `launch.py` also enables
+Copilot's Responses models, including GPT-6 Astra. Select an enabled model in
+the picker or send `{"model":"gpt-6-astra"}` to `/models/set`. The provider
+adapter handles request/usage conversion, streaming, and agent tool rounds
+without changing the pinned Grail kernel or existing client contracts. Model
+availability still depends on your Copilot account.
+
 ### `POST /login`
 
 Starts GitHub device-code OAuth. Returns a `user_code` and `verification_uri` for the user to enter at github.com/login/device.

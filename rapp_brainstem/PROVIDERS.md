@@ -96,9 +96,10 @@ The existing kernel's model selection and fallback behavior remain unchanged.
 In particular, this layer does not provide per-conversation model selection,
 durable conversation storage, or exactly-once agent execution.
 
-The Responses adapter requires the final upstream `model` to exactly match the
-selected catalog ID. Missing or mismatched identity is an error, never an
-Astra-labeled success. Copilot can rewrap opaque Base64 response/item identifiers
+The Responses adapter accepts the selected catalog ID, its dated snapshot, or
+the canonical family ID returned for a serving variant such as Sol Fast.
+Unrelated or missing model identities are errors, never an Astra-labeled
+success. Copilot can rewrap opaque Base64 response/item identifiers
 between SSE snapshots; only those opaque identifiers may rotate. Clear-text
 identifiers, model identity, content order, function names/arguments, and final
 output consistency remain checked. Continuation uses the final output objects,
