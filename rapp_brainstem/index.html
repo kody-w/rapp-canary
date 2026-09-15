@@ -1027,7 +1027,7 @@
 
 <div id="drop-overlay">
   <span class="icon"><svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg></span>
-  Drop .py files into agents
+  Drop .py agent file to install
 </div>
 
 <div id="login-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="login-title">
@@ -1117,13 +1117,13 @@
       <div id="agents-panel">
         <h3>
           <span class="icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg></span>
-          Agents
+          Installed Agents
         </h3>
         <ul class="agent-list" id="agent-list-ul">
           <!-- Populated by JS -->
         </ul>
         <div style="font-size:10px; color:#8b949e; margin-top:12px; text-align:center;">
-          .py files live in agents/.
+          Drag & drop agent.py files anywhere to install new agents
         </div>
       </div>
     </div>
@@ -1214,7 +1214,9 @@
       <p>I am your local assistant powered by Copilot. Here is a quick tour to get you started:</p>
       <ul>
         <li><strong>Chat</strong>: Just ask me questions below to start building and researching!</li>
-        <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>      </ul>
+        <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>
+        <li><strong>Add Agents</strong>: Drag and drop any <code>agent.py</code> file directly onto this window to instantly teach me new things.</li>
+      </ul>
       <p><em>Click one of the prompts below to get started!</em></p>
       <p class="tour-invite-wrap"><button class="starter-btn tour-invite" onclick="startTour()">New here? Take the 5-minute guided tour</button><button class="tour-invite-hide" onclick="hideTourInvite()" title="Hide this — you can still find the Training Quest in the toolbar"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor"><path d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z"/></svg></button></p>
     </div>
@@ -1724,7 +1726,7 @@
     if (!files || files.length === 0) return;
     
     for (const file of files) {
-      if (!/\.py$/i.test(file.name)) {
+      if (!file.name.endsWith('.py')) {
         alert('Only .py agent files are supported.');
         continue;
       }
@@ -1741,7 +1743,7 @@
         });
         const data = await res.json();
         if (data.status === 'ok') {
-          alert(`Installed agent: ${data.filename || file.name}`);
+          alert(`Installed agent: ${file.name}`);
           loadAgentsList();
         } else {
           alert(`Failed to import ${file.name}: ${data.error}`);
@@ -1876,7 +1878,7 @@
 
   // ── RAR Registry Browser ──
   // Search a public catalog of agents and hot-load any of them into this
-  // brainstem by fetching verified .py files and POSTing to /agents/import.
+  // brainstem by fetching the raw .py and POSTing it to /agents/import.
   const RAR_REVISION = '241c6191736a856b6837ef2398447a25710b8d72';
   const RAR_BASE = `https://raw.githubusercontent.com/kody-w/RAR/${RAR_REVISION}`;
   // Same static files via the jsdelivr CDN mirror — used only when raw
@@ -1897,10 +1899,9 @@
   let rarLoading = null;      // in-flight promise, to dedupe concurrent loads
   let rarSearchTimer = null;
 
-  // Standalone *_agent.py files share the import path. The registry also
-  // carries stacks/swarms and stub/card entries (.py.stub, .py.card, or
-  // scope-prefixed @ filenames) — none of those import cleanly, so drop
-  // them here.
+  // Only standalone *_agent.py files can be hot-loaded. The registry also carries
+  // stacks/swarms (bundles, no single .py) and stub/card entries (.py.stub, .py.card,
+  // or scope-prefixed @ filenames) — none of those import cleanly, so drop them here.
   function isLoadableAgent(a) {
     const base = (a && a._file ? a._file : '').replace(/\\/g, '/').split('/').pop();
     return base.endsWith('_agent.py') && base !== 'basic_agent.py' && !base.startsWith('@')
@@ -2590,6 +2591,7 @@
   async function sendMessage() {
     const text = input.value.trim();
     if (!text) return;
+
     const inFlightTurns = new Set();
     for (const pending of activeRequests.values()) {
       if (pending.historyTurn) inFlightTurns.add(pending.historyTurn);
@@ -2738,7 +2740,6 @@
       } else {
         clog('chat.response', { response_len: d.response?.length, has_agents: !!d.agent_logs });
         sessionId = d.session_id;
-        if (d.agent_logs && d.agent_logs.includes('[LearnNew]')) loadAgentsList();
         const sidEl = document.getElementById('session-id');
         if (sidEl) sidEl.textContent = sessionId?.slice(0, 8) + '...';
         commitAssistantReply(requestState, d.response, {
@@ -2918,14 +2919,9 @@
       revealedHeight = nextRevealHeight;
       lastRevealStartedAt = performance.now();
       const chat = document.getElementById('chat');
-      // Always fully catch up while the user is near the bottom — a small fixed
-      // step-per-tick let bursty reveals (e.g. numbered lists) outrun the
-      // scroll, leaving freshly-streamed text hidden behind the footer input
-      // bar until the stream finished. Never yank the view if they've
-      // scrolled up to read scrollback.
       const goal = chat.scrollHeight - chat.clientHeight;
       const gap = goal - chat.scrollTop;
-      if (gap > 0 && gap < 400) chat.scrollTop = goal;
+      if (gap > 0 && gap < 400) chat.scrollTop += Math.min(gap, 28);
     }
 
     function scheduleStreamRender() {
@@ -2975,7 +2971,6 @@
             if (evt.logs) agentLogs = evt.logs;
           } else if (evt.type === 'done') {
             doneData = evt;
-            if (evt.agent_logs && evt.agent_logs.includes('[LearnNew]')) loadAgentsList();
           } else if (evt.type === 'error') {
             const streamError = new Error(evt.error || 'stream error');
             streamError.noCopilotAccess = !!evt.no_copilot_access;
@@ -3603,7 +3598,9 @@
           <p>I am your local assistant powered by Copilot. Here is a quick tour to get you started:</p>
           <ul>
             <li><strong>Chat</strong>: Just ask me questions below to start building and researching!</li>
-            <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>          </ul>
+            <li><strong>Agents Panel</strong>: Click the <svg class="iconify" style="vertical-align: middle; width: 1.25em; height: 1.25em;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v4h4v2h-4v4h-2v-4H7v-2h4z"/></svg> icon (top right) to view or remove installed tools.</li>
+            <li><strong>Add Agents</strong>: Drag and drop any <code>agent.py</code> file directly onto this window to instantly teach me new things.</li>
+          </ul>
           <p><em>Click one of the prompts below to get started!</em></p>
           <p class="tour-invite-wrap"><button class="starter-btn tour-invite" onclick="startTour()">New here? Take the 5-minute guided tour</button><button class="tour-invite-hide" onclick="hideTourInvite()" title="Hide this — you can still find the Training Quest in the toolbar"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor"><path d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z"/></svg></button></p>
         </div>

@@ -1,8 +1,0 @@
-{
-  "liveServer.settings.ignoreFiles": [
-    ".brainstem_data/**",
-    "**/__pycache__/**",
-    "*.pyc",
-    "*.log"
-  ]
-}

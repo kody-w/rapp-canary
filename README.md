@@ -1,58 +1,28 @@
 # 🧠 RAPP Brainstem
 
-> **Start with AI: [guided setup and learning](skill.md)**
-> Prefer to work manually? The [one-liner option](#manual-one-liner-option) is still available.
+> **👉 [Get Started at kody-w.github.io/rapp-installer](https://kody-w.github.io/rapp-installer/)**
 
-A local-first AI agent server powered by GitHub Copilot. Core chat needs a
-GitHub account with Copilot access, not a separate model-provider API key.
+A local-first AI agent server powered by GitHub Copilot. No API keys. No cloud setup. Just your GitHub account.
 
-## Use your agent
-
-Attach [skill.md](skill.md) to an approved AI assistant that can operate on your
-computer, or have it read the linked repository file. Then say:
-
-```text
-Read the attached skill.md.
-Help me get my Brainstem set up and learn to use it before office hours.
-Handle the technical work, explain one step at a time, and ask before making changes.
-Then guide me from a small business problem to a tested, reviewable local MVP.
-Do not deploy to the cloud, publish, or send anything without separate approval.
 ```
-
-The AI handles environment discovery, approved setup, diagnosis, agent/data
-preparation, and testing. You choose the outcome, sign in personally, approve
-changes, and judge the result. The guide follows a practical loop:
-**brief -> bounded MVP -> agents and synthetic data -> tests -> Brainstem ->
-evidence and feedback -> rehearsal**.
-Use the agent you already prefer; this path does not require a new runtime or
-an agent-specific plugin.
-
-If your assistant is chat-only or runs in a cloud sandbox, the skill makes that
-limitation explicit and guides the handoff instead of pretending it installed
-anything on your computer.
-
-## Manual one-liner option
-
-The manual path remains supported.
-
-**macOS / Linux:**
-```bash
 curl -fsSL https://kody-w.github.io/rapp-installer/install.sh | bash
 ```
 
-**Windows PowerShell:**
+**Windows (PowerShell — works on factory Windows 11):**
 ```powershell
 irm https://raw.githubusercontent.com/kody-w/rapp-installer/main/install.ps1 | iex
 ```
-The installer handles the local setup and opens the chat UI. Complete the
-Brainstem's GitHub sign-in flow when prompted, then return to the
-[baseline and practice checkpoints](skill.md#checkpoint-2---connect-and-establish-a-real-baseline).
-For later starts, ask your AI to open the existing instance or use the installed
-`brainstem` command.
+Auto-installs Python 3.11, Git, and GitHub CLI via winget if missing.
+
+Then:
+```bash
+gh auth login   # one-time GitHub auth
+brainstem       # start the server → localhost:7071
+```
 
 ---
 
-## Optional: existing plugin entry points
+## Install Brainstem + RAR from Scout or Copilot CLI
 
 RAPP Installer follows the same plugin-marketplace pattern used by Microsoft
 Power CAT Skills:
@@ -81,11 +51,9 @@ Add the kody-w/rapp-installer marketplace and install
 rapp@brainstem. Then install my local Brainstem and RAR.
 ```
 
-The `rapp-bootstrap` entry follows the same [end-to-end coaching skill](skill.md),
-including approval, real readiness checks, and a small working practice loop.
-On a supported plugin host, approved setup also registers `kody-w/RAR` and
-installs `rapp@rar`. Start a new conversation afterward so the host discovers
-the RAR skill manager.
+The `rapp-bootstrap` skill installs and verifies Brainstem, then registers the
+`kody-w/RAR` marketplace and installs `rapp@rar`. Start a new conversation
+afterward so Scout or Copilot CLI discovers the RAR skill manager.
 
 The `rapp@x` identity is governed by
 [MARKETPLACE_CHARTER.md](MARKETPLACE_CHARTER.md) and RAR Constitution Article
@@ -120,25 +88,12 @@ The brainstem is a Flask server that connects to GitHub Copilot's API for LLM in
 ```
 ~/.brainstem/src/rapp_brainstem/
 ├── brainstem.py       # the server
-├── launch.py          # normal startup; keeps the kernel unchanged
-├── provider_plugins/  # explicit, versioned provider protocol adapters
 ├── soul.md            # personality (system prompt)
 ├── agents/            # auto-discovered tools
 │   └── hello_agent.py
 ├── local_storage.py   # local-first storage shim
 └── .env               # config (model, paths, port)
 ```
-
-### Provider plugins
-
-Normal startup supports explicitly registered provider adapters outside the
-frozen kernel. The Responses adapter makes eligible models such as GPT-6 Astra
-available through the existing picker and Copilot authentication; existing
-Chat Completions models keep their current path. No separate model-provider
-API key is needed.
-
-See [ProviderTransport v1](rapp_brainstem/PROVIDERS.md) for activation, package
-entry points, compatibility, lifecycle, and the trusted-code boundary.
 
 ### Write an Agent
 

@@ -15,8 +15,3 @@ __pycache__/
 .remote_agents/
 .repos.json
 voice.zip
-
-# User-owned Markdown skills
-skills/*
-!skills/.gitkeep
-.brainstem_skill_frames/

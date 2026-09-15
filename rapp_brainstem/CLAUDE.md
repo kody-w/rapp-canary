@@ -13,9 +13,6 @@ Philosophy: "engine, not experience" — infrastructure only, no opinionated UI 
 ```bash
 # Start server
 ./start.sh                # macOS/Linux (creates venv, installs deps, runs)
-
-# Direct run with provider plugins (assumes dependencies installed)
-python launch.py                # macOS/Linux (creates venv, installs deps, runs)
 python brainstem.py       # Direct run (assumes deps installed)
 
 # Install dependencies
@@ -32,15 +29,7 @@ No build step, linter, or type checker is configured.
 
 ## Architecture
 
-**Kernel:** `brainstem.py` is the immutable single-file Flask server containing
-auth, chat, agent orchestration, and the web UI. Do not edit it.
-
-**Normal startup:** `launch.py` uses the explicit bindings in `kernel_compat.py`
-and the versioned runtime profile. Provider transports implement the public
-contract in `provider_plugins/base.py`; registration, HTTP, and request lifetime
-belong to `provider_host.py`. See `PROVIDERS.md`. Never add global Requests
-patches, replace kernel functions, or load provider plugins through agent
-auto-discovery. Direct `python brainstem.py` is a legacy kernel-only path.
+**Entry point:** `brainstem.py` — a single-file Flask server (~2,000 lines) that handles auth, chat, agent orchestration, and the web UI.
 
 **Request flow (POST /chat):**
 1. Load `soul.md` (system prompt) and fresh-discover agents from `agents/`
@@ -55,7 +44,6 @@ auto-discovery. Direct `python brainstem.py` is a legacy kernel-only path.
 - Optional `system_context()` injects text into the system prompt every turn
 - Agents are reloaded from disk on every request — edit and test without restart
 - Missing pip dependencies are auto-installed at import time
-- `LearnNew` is bundled. Markdown lives in `SKILLS_PATH` (default `skills/`), parallel to Python in `AGENTS_PATH`. Its normal `system_context()` advertises metadata; instructions load on demand. LearnNew registers `rapp_adapters.skills` at startup for protected `/skills` routes and explicit conversion. Do not edit the pinned kernel. Skill operations emit RAPP/1 receipts checked by the pinned canonical tools.
 
 **Local storage shim** (`local_storage.py`): Agents import `from utils.azure_file_storage import AzureFileStorageManager` — brainstem intercepts via `sys.modules` and provides a local JSON-file implementation under `.brainstem_data/`. This enables transparent migration to Azure later.
 
@@ -70,7 +58,7 @@ auto-discovery. Direct `python brainstem.py` is a legacy kernel-only path.
 | `local_storage.py` | Local shim for Azure File Storage |
 | `soul.md` | Default system prompt loaded every request |
 | `index.html` | Built-in web UI served at `/` |
-| `VERSION` | Semantic version string (currently 0.6.17) |
+| `VERSION` | Semantic version string (currently 0.6.14) |
 | `CONSTITUTION.md` | Governance doc defining what belongs in this repo |
 
 ## Writing Agents
@@ -87,4 +75,4 @@ The `agents/experimental/` subdirectory exists for agents that should not be aut
 Configuration via `.env` (auto-created from `.env.example` by `start.sh`):
 - `GITHUB_TOKEN` — auto-detected from `gh` CLI if blank
 - `GITHUB_MODEL` — default `auto` (auto-selects the highest Claude Haiku the account can use — fastest responses — else the highest Sonnet, else `gpt-4o`); or pin a specific id. A UI pick is persisted to `.brainstem_model` and overrides this. Switchable at runtime via `/models/set` (`auto` re-selects)
-- `SOUL_PATH`, `AGENTS_PATH`, `SKILLS_PATH`, `PORT`, `VOICE_MODE`
+- `SOUL_PATH`, `AGENTS_PATH`, `PORT`, `VOICE_MODE`
