@@ -15,7 +15,9 @@
 #   * PATH shims: `lsof` is a no-op (the installer can never kill your live server),
 #     `open` is a no-op (no browser popups), and `curl` fails fast for GitHub auth
 #     endpoints (exercising the graceful-degradation path, same as CI).
-#   * The server binds PORT 7091 (env var beats .env), so 7071 stays yours.
+#   * A free loopback port is selected per run; PREFLIGHT_PORT must be free if set.
+#   * Health is accepted only while this run's installer wrapper is still alive.
+#   * Cleanup signals only that tracked wrapper, never an unknown port owner.
 #
 # See RELEASING.md for where this fits in the release process.
 
@@ -32,7 +34,33 @@ for arg in "$@"; do
     esac
 done
 
-PORT="${PREFLIGHT_PORT:-7091}"
+# Probe before creating the sandbox or changing any git configuration.
+if ! PORT="$(python3 - <<'PY'
+import errno
+import os
+import socket
+import sys
+
+requested = os.environ.get("PREFLIGHT_PORT")
+if requested is not None and (
+    not requested.isascii() or not requested.isdecimal()
+    or not 1 <= int(requested) <= 65535
+):
+    sys.exit("PREFLIGHT_PORT must be an integer between 1 and 65535.")
+port = int(requested) if requested is not None else 0
+try:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", port))
+        print(probe.getsockname()[1])
+except OSError as exc:
+    if exc.errno == errno.EADDRINUSE:
+        sys.exit(f"Loopback port {port} is already in use; refusing to install.")
+    sys.exit(f"Cannot select loopback port {port}: {exc}")
+PY
+)"; then
+    exit 1
+fi
+BASE_URL="http://127.0.0.1:$PORT"
 SANDBOX="$(mktemp -d /tmp/brainstem-preflight-XXXXXX)"
 FAKE_HOME="$SANDBOX/home"
 BARE="$SANDBOX/fake-origin.git"
@@ -47,17 +75,51 @@ mkdir -p "$FAKE_HOME" "$SHIMS"
 # write the insteadOf rewrite into the user's REAL $XDG_CONFIG_HOME/git/config.
 export GIT_CONFIG_GLOBAL="$FAKE_HOME/.gitconfig"
 
+server_is_running() {
+    local pid
+    [ -n "$SERVER_PID" ] || return 1
+    # A live PID alone can have been reused. It must still be our running job.
+    for pid in $(jobs -pr); do
+        if [ "$pid" = "$SERVER_PID" ]; then
+            kill -0 "$SERVER_PID" 2>/dev/null
+            return $?
+        fi
+    done
+    return 1
+}
+
 cleanup() {
-    if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
-        kill "$SERVER_PID" 2>/dev/null || true
+    local result=$?
+    if server_is_running; then
+        if ! kill "$SERVER_PID" 2>/dev/null; then
+            echo "  ✗ could not stop installer wrapper $SERVER_PID" >&2
+            result=1
+        fi
     fi
-    # Belt & braces: kill anything still holding the SANDBOX port (never 7071).
-    /usr/sbin/lsof -ti:"$PORT" 2>/dev/null | xargs kill 2>/dev/null || true
     echo ""
     echo "  Sandbox kept for inspection: $SANDBOX"
     echo "  (installer log: $LOG — rm -rf when done)"
+    exit "$result"
 }
 trap cleanup EXIT
+
+startup_failure() {
+    echo "  ✗ $1" >&2
+    if [ -s "$LOG" ]; then
+        echo "  Last 40 installer log lines:" >&2
+        tail -40 "$LOG" >&2
+    fi
+    exit 1
+}
+
+require_candidate() {
+    if [ ! -s "$LOG" ]; then
+        startup_failure "installer log is empty or missing — refusing endpoint responses"
+    fi
+    if ! server_is_running; then
+        startup_failure "installer wrapper $SERVER_PID exited — refusing endpoint responses"
+    fi
+}
 
 echo "═══ brainstem local preflight ═══ scenario=$SCENARIO auth=$AUTH port=$PORT"
 echo "  sandbox: $SANDBOX"
@@ -130,10 +192,11 @@ echo "── running install.sh (log: $LOG) ──"
     export PORT="$PORT"          # env beats .env — server binds the sandbox port
     # `script` allocates a pty so the installer launches the server exactly as it
     # would in a user's terminal (its final exec needs a controlling tty).
+    # Flush each write so buffering cannot look like an empty installer log.
     if [ "$(uname)" = "Darwin" ]; then
-        exec script -q "$LOG" bash "$REPO_ROOT/install.sh" </dev/null >/dev/null 2>&1
+        exec script -qF "$LOG" bash "$REPO_ROOT/install.sh" </dev/null >/dev/null 2>&1
     else
-        exec script -qec "bash '$REPO_ROOT/install.sh'" "$LOG" </dev/null >/dev/null 2>&1
+        exec script -qefc "bash '$REPO_ROOT/install.sh'" "$LOG" </dev/null >/dev/null 2>&1
     fi
 ) &
 SERVER_PID=$!
@@ -142,13 +205,18 @@ SERVER_PID=$!
 BRANCH_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/rapp_brainstem/VERSION")"
 HEALTH="$SANDBOX/health.json"
 up=false
-for i in $(seq 1 60); do
+for ((i=0; i<60; i++)); do
     sleep 3
-    if /usr/bin/curl -sf "http://localhost:$PORT/health" -o "$HEALTH" 2>/dev/null; then up=true; break; fi
-    if ! kill -0 "$SERVER_PID" 2>/dev/null; then break; fi
+    require_candidate
+    if /usr/bin/curl --noproxy '*' -sf --max-time 2 "$BASE_URL/health" -o "$HEALTH" 2>/dev/null; then
+        require_candidate
+        up=true
+        break
+    fi
+    require_candidate
 done
 if [ "$up" != true ]; then
-    echo "  ✗ server never came up — last 40 log lines:"; tail -40 "$LOG"; exit 1
+    startup_failure "server never came up after 60 health attempts"
 fi
 
 # ── 6b. Optional: real token for an end-to-end /chat test ────────────────────
@@ -188,10 +256,10 @@ EOF
 
 # Fetch to a file, then grep — a `curl | grep -q` pipe makes grep close the pipe on
 # first match, SIGPIPE-ing curl, which `set -o pipefail` then reports as a failure.
-/usr/bin/curl -sf "http://localhost:$PORT/" -o "$SANDBOX/index.html" 2>/dev/null \
+/usr/bin/curl --noproxy '*' -sf "$BASE_URL/" -o "$SANDBOX/index.html" 2>/dev/null \
     && grep -q "RAPP Brainstem" "$SANDBOX/index.html" && ok "web UI serves" || bad "web UI"
-/usr/bin/curl -sf "http://localhost:$PORT/models" >/dev/null && ok "/models responds" || bad "/models"
-/usr/bin/curl -s -X POST "http://localhost:$PORT/chat" -H 'Content-Type: application/json' -d '{}' \
+/usr/bin/curl --noproxy '*' -sf "$BASE_URL/models" >/dev/null && ok "/models responds" || bad "/models"
+/usr/bin/curl --noproxy '*' -s -X POST "$BASE_URL/chat" -H 'Content-Type: application/json' -d '{}' \
     | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "error" in d' \
     && ok "/chat rejects bad input as JSON" || bad "/chat error contract"
 
@@ -202,7 +270,7 @@ if [ "$SCENARIO" = "upgrade" ]; then
         && ok "soul.md survived upgrade" || bad "soul.md lost in upgrade"
     grep -q "PREFLIGHT-ENV-MARKER" "$FAKE_HOME/.brainstem/src/rapp_brainstem/.env" \
         && ok ".env survived upgrade" || bad ".env lost in upgrade"
-    /usr/bin/curl -sf "http://localhost:$PORT/health" \
+    /usr/bin/curl --noproxy '*' -sf "$BASE_URL/health" \
         | python3 -c 'import json,sys; assert "PreflightCustom" in json.load(sys.stdin).get("agents",[])' \
         && ok "custom agent loads in upgraded server" || bad "custom agent not loaded"
     NEWVER="$(tr -d '[:space:]' < "$FAKE_HOME/.brainstem/src/rapp_brainstem/VERSION" 2>/dev/null)"
@@ -211,7 +279,7 @@ fi
 
 if [ "$AUTH" = true ]; then
     RESP="$SANDBOX/chat.json"
-    /usr/bin/curl -s -X POST "http://localhost:$PORT/chat" -H 'Content-Type: application/json' \
+    /usr/bin/curl --noproxy '*' -s -X POST "$BASE_URL/chat" -H 'Content-Type: application/json' \
         -d '{"user_input":"Reply with exactly the single word: pong"}' -o "$RESP" --max-time 120 || true
     python3 - "$RESP" <<'EOF' && ok "REAL /chat round-trip (authenticated)" || bad "real /chat round-trip"
 import json, sys
@@ -232,6 +300,7 @@ if "$FAKE_HOME/.brainstem/venv/bin/python" -m pytest --version >/dev/null 2>&1 |
     fi
 fi
 
+require_candidate
 echo ""
 echo "═══ preflight result: $PASS passed, $FAIL failed ═══"
 [ "$FAIL" -eq 0 ]
