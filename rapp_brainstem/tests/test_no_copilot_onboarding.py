@@ -91,6 +91,7 @@ class _AuthTestBase(unittest.TestCase):
             "_invalid_credential": dict(brainstem._invalid_github_credential),
             "_models_fetched": brainstem._models_fetched,
             "load_agents": brainstem.load_agents,
+            "subprocess_run": brainstem.subprocess.run,
             "GITHUB_TOKEN": os.environ.get("GITHUB_TOKEN"),
         }
 
@@ -103,6 +104,17 @@ class _AuthTestBase(unittest.TestCase):
         brainstem._invalid_github_credential = {"fingerprint": None, "status": None, "at": 0}
         brainstem.load_agents = lambda: {}
         os.environ.pop("GITHUB_TOKEN", None)
+
+        # Auth chain step 3 (`gh auth token`) must not leak the developer's own gh
+        # login into the tests either: report the gh CLI as signed out, as on CI.
+        real_run = self._orig["subprocess_run"]
+
+        def gh_signed_out(cmd, *args, **kwargs):
+            if isinstance(cmd, (list, tuple)) and list(cmd[:3]) == ["gh", "auth", "token"]:
+                return brainstem.subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+            return real_run(cmd, *args, **kwargs)
+
+        brainstem.subprocess.run = gh_signed_out
 
         # The exchange behaviour is driven by this flag; default: no Copilot.
         self.entitled = False
@@ -124,6 +136,7 @@ class _AuthTestBase(unittest.TestCase):
         brainstem._invalid_github_credential = self._orig["_invalid_credential"]
         brainstem._models_fetched = self._orig["_models_fetched"]
         brainstem.load_agents = self._orig["load_agents"]
+        brainstem.subprocess.run = self._orig["subprocess_run"]
         if self._orig["GITHUB_TOKEN"] is not None:
             os.environ["GITHUB_TOKEN"] = self._orig["GITHUB_TOKEN"]
         import shutil
