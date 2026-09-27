@@ -39,6 +39,12 @@ cd rapp_brainstem
 bash -n ../install.sh && bash ../tests/test_installer.sh
 ```
 
+The installer test suite includes `test_preflight_local.sh`, an offline regression:
+installer launch, port binding, HTTP responses, process liveness, and signals are
+stubbed. It does not install anything, open a listener, use real auth, or signal
+host processes. Run it alone from the repo root with
+`bash tests/test_preflight_local.sh`.
+
 If you touched a `.ps1`, parse it (any pwsh, or let CI's PS 5.1 analyzer catch it):
 
 ```powershell
@@ -54,14 +60,29 @@ bash tests/preflight_local.sh upgrade --auth   # + a REAL authenticated /chat ro
 ```
 
 This installs the current checkout through the real `install.sh` inside a throwaway
-`$HOME` in `/tmp`, on port 7091. It cannot touch your real `~/.brainstem` and cannot
-kill a server on 7071 (the installer's `lsof` is shimmed out inside the sandbox).
+`$HOME` in `/tmp`, on a per-run free IPv4 loopback port. Set `PREFLIGHT_PORT=7091`
+to request a specific port; an invalid or occupied port fails **before** sandbox
+setup or installation. Probes use `127.0.0.1` directly and bypass HTTP proxies.
+The installer's `lsof` is shimmed out inside the sandbox, and git's global config
+is pinned to a sandbox file rather than your real HOME or XDG config.
+
+An empty installer log or a dead installer wrapper fails preflight, even if a
+stale server answers `/health`. The exact launched wrapper must still be a running
+child before and after a successful health probe, and before the final result.
+The PTY wrapper flushes each log write so buffered output is not mistaken for an
+empty installer log.
 It asserts: server boots, `/health` reports the candidate version and bundled agents,
 the web UI serves, `/chat` fails as JSON (never a crash), and — in `upgrade` — that a
 custom agent, an edited `soul.md`, and an edited `.env` all **survive the upgrade**.
 
 `--auth` copies your real Copilot token into the sandbox for one true end-to-end
 `/chat` answer. The token never leaves the sandbox; the sandbox is disposable.
+
+Cleanup signals only the still-tracked installer wrapper; it never finds or kills
+a process by port. If the wrapper exits or a descendant detaches, preflight cannot
+portably prove ownership of the orphan and leaves it alone. Inspect retained logs
+and stop only processes you can independently identify. The free-port check
+releases its socket before launch, so it is not an atomic port reservation.
 
 ## 4. Push the branch → CI preflight (~10 minutes, 7 real machines)
 
@@ -91,8 +112,9 @@ again. `main` was never at risk.
 For risky changes, before merging:
 
 - Drive the candidate's web UI by hand. `bash tests/preflight_local.sh fresh` keeps
-  the sandbox **files** on disk (its path is printed at the end) but stops the
-  server on exit — relaunch it, then click around:
+  the sandbox **files** on disk (its path is printed at the end) and signals its
+  tracked installer wrapper on exit. After confirming the requested port is free,
+  relaunch the sandbox server, then click around:
 
   ```bash
   S=/tmp/brainstem-preflight-XXXXXX/home   # printed by the preflight run

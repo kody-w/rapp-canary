@@ -49,6 +49,17 @@ fi
 
 echo ""
 
+# ── local preflight regression (no real install or server) ─────────────────────
+
+echo "--- local preflight (offline) ---"
+if bash "$REPO_ROOT/tests/test_preflight_local.sh"; then
+    pass "local preflight rejects stale servers and limits cleanup to its own wrapper"
+else
+    fail "local preflight regression failed"
+fi
+
+echo ""
+
 # ── install.ps1 tests ────────────────────────────────────────────────────────
 
 echo "--- install.ps1 ---"
