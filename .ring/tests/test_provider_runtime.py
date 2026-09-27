@@ -19,6 +19,16 @@ import preprod_gate as GATE
 import render_ring as RENDER
 
 
+PROVIDER_PROFILE_FIXTURE = {
+    "schema": "brainstem-runtime-profile/1",
+    "entrypoint": "launch.py",
+    "kernel_sha256": "bd55a7f0bcf5efd3f7966ca39bb146da3c25fda9a0b1ce5ba587919d3c3775f4",
+    "provider_api": 1,
+    "providers": ["responses"],
+    "support_repository": "kody-w/rapp-support",
+}
+
+
 def _git(repo, *args):
     environment = {
         **os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
@@ -47,9 +57,10 @@ class ProviderRenderTests(unittest.TestCase):
         self.kernel = (ROOT / "rapp_brainstem" / "brainstem.py").read_bytes()
         (engine / "brainstem.py").write_bytes(self.kernel)
         (engine / "launch.py").write_text("# renderer fixture; never executed\n")
-        self.profile = json.loads(
-            (ROOT / "rapp_brainstem" / "runtime_profile.json").read_text(encoding="utf-8")
-        )
+        # A self-contained copy of the last shipped provider profile (rapp-canary 4290a82).
+        # The payload's own profile was removed by the 2026-09-15 Grail sync (7ac5c77), so
+        # the fixture must not depend on whatever the current payload happens to carry.
+        self.profile = json.loads(json.dumps(PROVIDER_PROFILE_FIXTURE))
         (engine / "runtime_profile.json").write_text(json.dumps(self.profile))
         ring_dir = self.repo / ".ring"
         ring_dir.mkdir()
