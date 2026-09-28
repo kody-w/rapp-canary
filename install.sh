@@ -11,6 +11,8 @@ VENV_DIR="$BRAINSTEM_HOME/venv"
 REPO_URL="https://github.com/kody-w/rapp-installer.git"
 REMOTE_VERSION_URL="https://raw.githubusercontent.com/kody-w/rapp-installer/main/rapp_brainstem/VERSION"
 PIN_VERSION=""
+SOURCE_SYNCED_THIS_RUN=false
+GITHUB_UNREACHABLE=false
 
 # Colors
 RED='\033[0;31m'
@@ -89,7 +91,11 @@ install_python() {
         export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
     elif [[ "$os_type" == "linux" ]]; then
         if command -v apt-get &> /dev/null; then
-            sudo apt-get update && sudo apt-get install -y python3.11 python3.11-venv python3-pip
+            # Ubuntu 24.04+ ships no python3.11 package (python3 there is 3.12+), so
+            # fall back to the distro default — find_python accepts any 3.11+.
+            sudo apt-get update || true
+            sudo apt-get install -y python3.11 python3.11-venv python3-pip \
+                || sudo apt-get install -y python3 python3-venv python3-pip
         elif command -v dnf &> /dev/null; then
             sudo dnf install -y python3.11 python3-pip
         else
@@ -98,6 +104,21 @@ install_python() {
             exit 1
         fi
     fi
+}
+
+# Debian/Ubuntu split `venv` out of the interpreter package: `python3 -m venv` fails
+# with "ensurepip is not available" until pythonX.Y-venv is installed. Returns 1 where
+# apt is absent so the caller can fall back to a plain ensurepip attempt.
+apt_install_python_venv() {
+    command -v apt-get &> /dev/null || return 1
+    local pyver=""
+    if [[ -n "${PYTHON_CMD:-}" ]]; then
+        pyver=$("$PYTHON_CMD" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || pyver=""
+    fi
+    echo -e "  ${YELLOW}Installing the Debian/Ubuntu venv package for Python ${pyver:-3}...${NC}"
+    sudo apt-get update || true
+    if [[ -n "$pyver" ]] && sudo apt-get install -y "python${pyver}-venv"; then return 0; fi
+    sudo apt-get install -y python3-venv
 }
 
 # Compare two semver strings. Returns 0 if $1 > $2, 1 otherwise.
@@ -126,9 +147,21 @@ check_for_upgrade() {
 
     # Fetch remote version
     local remote_version
-    remote_version=$(curl -fsSL "$REMOTE_VERSION_URL" 2>/dev/null | tr -d '[:space:]') || true
+    # Bounded: without --max-time a black-holed GitHub (packets dropped, not refused)
+    # parks this curl on the OS connect timeout. A timeout (28) means GitHub itself
+    # is black-holed, so every later git fetch/pull would hang the same way (measured
+    # 133s) — keep the installed version and launch it. A fast failure (refused, DNS,
+    # TLS) keeps today's behavior: git fails just as fast, so try the upgrade anyway.
+    local curl_rc=0
+    remote_version=$(curl -fsSL --connect-timeout 10 --max-time 20 "$REMOTE_VERSION_URL" 2>/dev/null) || curl_rc=$?
+    remote_version=$(printf '%s' "$remote_version" | tr -d '[:space:]')
 
     if [[ -z "$remote_version" ]]; then
+        if [[ "$curl_rc" == 28 ]]; then
+            GITHUB_UNREACHABLE=true
+            echo -e "  ${YELLOW}⚠${NC} GitHub is not reachable right now — keeping the installed version"
+            return 1
+        fi
         echo -e "  ${YELLOW}⚠${NC} Could not check remote version — upgrading anyway"
         return 0
     fi
@@ -294,7 +327,7 @@ install_brainstem() {
             # Strip leading 'v' for comparison (v0.6.0 → 0.6.0)
             TARGET_VER="${PIN_VERSION#v}"
         else
-            TARGET_VER=$(curl -sf "$REMOTE_VERSION_URL" 2>/dev/null || echo "0.0.0")
+            TARGET_VER=$(curl -sf --connect-timeout 10 --max-time 20 "$REMOTE_VERSION_URL" 2>/dev/null || echo "0.0.0")
         fi
 
         echo "  Local:  v${LOCAL_VER}"
@@ -321,6 +354,8 @@ install_brainstem() {
             # Guard the fetch: offline (or a black-holed github) must not abort the
             # whole script under `set -e` — we fall back to whatever is already local.
             cd "$BRAINSTEM_HOME/src"
+            local OLD_HEAD=""
+            OLD_HEAD=$(git rev-parse HEAD 2>/dev/null) || OLD_HEAD=""
             git stash --quiet 2>/dev/null || true
             git fetch origin --tags --quiet 2>/dev/null || true
             if [ -n "$PIN_VERSION" ]; then
@@ -358,11 +393,18 @@ install_brainstem() {
                 # otherwise bundled agents (context_memory, manage_memory, hacker_news)
                 # get reverted to the backed-up copies on every upgrade (issue #2), so
                 # bundled-agent fixes never reach existing users.
+                # "Shipped" means tracked by git in the fresh checkout. Listing the
+                # directory instead also counts the user's own untracked agents (a
+                # reset/pull leaves them in place) and so flagged every one of them,
+                # plus every bundled agent, as a "collision" on each upgrade.
                 local SHIPPED=""
-                for shipped_file in "$AGENTS_DIR"/*.py; do
-                    [ -f "$shipped_file" ] || continue
-                    SHIPPED="$SHIPPED $(basename "$shipped_file")"
-                done
+                SHIPPED=$(cd "$AGENTS_DIR" && git ls-files -- '*.py' 2>/dev/null | tr '\n' ' ')
+                if [ -z "${SHIPPED// /}" ]; then
+                    for shipped_file in "$AGENTS_DIR"/*.py; do
+                        [ -f "$shipped_file" ] || continue
+                        SHIPPED="$SHIPPED $(basename "$shipped_file")"
+                    done
+                fi
                 for agent_file in "$BACKUP/agents"/*.py; do
                     [ -f "$agent_file" ] || continue
                     local fname=$(basename "$agent_file")
@@ -371,7 +413,19 @@ install_brainstem() {
                         basic_agent.py|__init__.py) continue ;;
                     esac
                     # Skip anything shipped in the fresh checkout (bundled agents)
-                    case " $SHIPPED " in *" $fname "*) continue ;; esac
+                    case " $SHIPPED " in
+                        *" $fname "*)
+                            # Bundled agent: the fresh checkout wins (issue #2). Keep a copy
+                            # only when it differs from what the OLD checkout shipped —
+                            # identical means the previous release, not user work.
+                            if [ -n "$OLD_HEAD" ] \
+                                && git show "$OLD_HEAD:rapp_brainstem/agents/$fname" 2>/dev/null | cmp -s - "$agent_file"; then
+                                continue
+                            fi
+                            preserve_agent_collision "$agent_file"
+                            continue
+                            ;;
+                    esac
                     # Genuinely user-added agent — keep it
                     cp "$agent_file" "$AGENTS_DIR/$fname"
                 done
@@ -432,6 +486,7 @@ install_brainstem() {
         fi
     fi
     echo -e "  ${GREEN}✓${NC} Source code ready"
+    SOURCE_SYNCED_THIS_RUN=true
 }
 
 setup_venv() {
@@ -449,16 +504,26 @@ setup_venv() {
 
     echo "  Creating virtual environment..."
     "$PYTHON_CMD" -m venv "$VENV_DIR" 2>/dev/null || {
-        # Some systems need ensurepip first
-        "$PYTHON_CMD" -m ensurepip 2>/dev/null || true
+        rm -rf "$VENV_DIR"
+        # Debian/Ubuntu ship venv separately (pythonX.Y-venv); without it `-m venv`
+        # fails with "ensurepip is not available". Install it, then retry. Elsewhere
+        # a bare ensurepip run is the usual cure.
+        if ! apt_install_python_venv; then
+            "$PYTHON_CMD" -m ensurepip 2>/dev/null || true
+        fi
         "$PYTHON_CMD" -m venv "$VENV_DIR" || {
             echo -e "  ${RED}✗${NC} Failed to create virtual environment"
-            echo "    Try: $PYTHON_CMD -m pip install virtualenv"
+            if command -v apt-get &> /dev/null; then
+                echo "    Try: sudo apt-get install -y python3-venv, then rerun this command"
+            else
+                echo "    Try: $PYTHON_CMD -m ensurepip --upgrade, then rerun this command"
+            fi
             exit 1
         }
     }
-    # Ensure pip is up to date inside the venv
-    "$VENV_DIR/bin/python" -m pip install --upgrade pip --quiet 2>/dev/null || true
+    # No `pip install --upgrade pip` here: every Python 3.11+ venv already carries
+    # a pip new enough for these wheels, and the upgrade cost a network round trip
+    # (~3s measured) plus one more way to fail before the first dependency lands.
     echo -e "  ${GREEN}✓${NC} Virtual environment ready"
 }
 
@@ -467,7 +532,7 @@ setup_deps() {
     echo "Installing dependencies..."
     local req_file="$BRAINSTEM_HOME/src/rapp_brainstem/requirements.txt"
     "$VENV_DIR/bin/pip" install -r "$req_file" --quiet 2>/dev/null || \
-        "$VENV_DIR/bin/pip" install -r "$req_file"
+        "$VENV_DIR/bin/pip" install -r "$req_file" || true
 
     # Verify the critical imports actually work
     if ! "$VENV_DIR/bin/python" -c "import flask, flask_cors, requests, dotenv" 2>/dev/null; then
@@ -488,7 +553,7 @@ ensure_deps() {
     echo -e "  ${YELLOW}⚠${NC} Missing dependencies — installing..."
     local req_file="$BRAINSTEM_HOME/src/rapp_brainstem/requirements.txt"
     "$VENV_DIR/bin/pip" install -r "$req_file" --quiet 2>/dev/null || \
-        "$VENV_DIR/bin/pip" install -r "$req_file"
+        "$VENV_DIR/bin/pip" install -r "$req_file" || true
 
     if ! "$VENV_DIR/bin/python" -c "import flask, flask_cors, requests, dotenv" 2>/dev/null; then
         echo -e "  ${RED}✗${NC} Dependencies failed — try: $VENV_DIR/bin/pip install -r $req_file"
@@ -555,8 +620,12 @@ create_env() {
 launch_brainstem() {
     export PATH="$BRAINSTEM_BIN:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-    # Always pull latest code before launching
-    if [ -d "$BRAINSTEM_HOME/src/.git" ]; then
+    # Pull latest code before launching — unless this very run already fetched
+    # and checked out the source, in which case a pull is one more round trip to
+    # GitHub for nothing, and never when GitHub was already found unreachable (a
+    # pull would hang on the OS timeout). A pinned checkout is never moved.
+    if [ -d "$BRAINSTEM_HOME/src/.git" ] && [[ "$SOURCE_SYNCED_THIS_RUN" != true ]] \
+        && [[ "$GITHUB_UNREACHABLE" != true ]] && [ -z "$PIN_VERSION" ]; then
         cd "$BRAINSTEM_HOME/src"
         git pull --quiet 2>/dev/null || true
     fi
