@@ -47,6 +47,33 @@ else
     fail "install.sh should clone public rapp-installer repo"
 fi
 
+# Terminal chat fallback: tui.py runs only when no GUI browser can open, a real
+# terminal is attached and textual imports; every other launch (and any TUI that
+# exits non-zero) still reaches the unchanged `python brainstem.py` path below it.
+TUI_GATE=$(awk '/# Mouse-first terminal fallback/,/# Use exec to replace shell/' "$REPO_ROOT/install.sh")
+if printf '%s' "$TUI_GATE" | grep -q '"\$gui_available" != true' \
+    && printf '%s' "$TUI_GATE" | grep -q '"\$has_usable_tty" == true' \
+    && printf '%s' "$TUI_GATE" | grep -q 'TERM:-dumb' \
+    && printf '%s' "$TUI_GATE" | grep -q 'import textual' \
+    && printf '%s' "$TUI_GATE" | grep -q 'rapp_brainstem/tui.py' \
+    && printf '%s' "$TUI_GATE" | grep -q 'if \[ "\$tui_status" -eq 0 \]; then'; then
+    pass "install.sh gates the terminal UI on no GUI + a real terminal + textual"
+else
+    fail "install.sh terminal UI gate is missing a condition"
+fi
+gate_line=$(grep -n '# Mouse-first terminal fallback' "$REPO_ROOT/install.sh" | head -1 | cut -d: -f1)
+raw_line=$(grep -n 'exec "\$venv_python" brainstem.py' "$REPO_ROOT/install.sh" | head -1 | cut -d: -f1)
+if [ -n "$gate_line" ] && [ -n "$raw_line" ] && [ "$raw_line" -gt "$gate_line" ]; then
+    pass "install.sh keeps the plain brainstem.py launch as the fallback after the terminal UI"
+else
+    fail "install.sh must fall through to the plain brainstem.py launch"
+fi
+if grep -q 'if \[\[ "\$gui_available" == true \]\]; then' "$REPO_ROOT/install.sh"; then
+    pass "install.sh opens the browser only when a GUI is available"
+else
+    fail "install.sh should open the browser only when a GUI is available"
+fi
+
 echo ""
 
 # ── local preflight regression (no real install or server) ─────────────────────
