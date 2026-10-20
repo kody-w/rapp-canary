@@ -270,7 +270,7 @@ echo "--- bundled agents ---"
 
 # Each bundled agent file must define a class that loads and exposes a valid tool
 # schema. This is the contract every *_agent.py must satisfy to be discoverable.
-for agent_file in manage_memory_agent context_memory_agent hacker_news_agent; do
+for agent_file in manage_memory_agent context_memory_agent hacker_news_agent first_hour_agent; do
     if [ -f "$REPO_ROOT/rapp_brainstem/agents/${agent_file}.py" ]; then
         pass "bundled agent present: ${agent_file}.py"
     else
@@ -300,7 +300,7 @@ sys.path.insert(0, '.')
 import brainstem
 agents = brainstem.load_agents()
 names = set(agents)
-assert 'ManageMemory' in names and 'ContextMemory' in names, names
+assert {'ManageMemory', 'ContextMemory', 'FirstHour'} <= names, names
 for a in agents.values():
     t = a.to_tool()
     assert t['type'] == 'function' and t['function']['name'], t

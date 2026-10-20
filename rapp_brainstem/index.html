@@ -1218,7 +1218,7 @@
         <li><strong>Add Agents</strong>: Drag and drop any <code>agent.py</code> file directly onto this window to instantly teach me new things.</li>
       </ul>
       <p><em>Click one of the prompts below to get started!</em></p>
-      <p class="tour-invite-wrap"><button class="starter-btn tour-invite" onclick="startTour()">New here? Take the 5-minute guided tour</button><button class="tour-invite-hide" onclick="hideTourInvite()" title="Hide this — you can still find the Training Quest in the toolbar"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor"><path d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z"/></svg></button></p>
+      <p class="tour-invite-wrap"><button class="starter-btn tour-invite" onclick="startTour()">New here? Take the 5-minute guided tour</button><button class="tour-invite-hide" onclick="hideTourInvite()" title="Hide this — you can still find the Tutorial in the toolbar"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor"><path d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z"/></svg></button></p>
     </div>
   </div>
 </div>
@@ -1241,7 +1241,7 @@
       <button class="toolbar-link" onclick="document.getElementById('chat-import').click()" title="Import transcript">Import</button>
       <input type="file" id="chat-import" accept=".json" style="display:none" onchange="importChat(event)">
       <button class="toolbar-link" onclick="clearChat()">Clear</button>
-      <a class="toolbar-link" href="https://blazingbeard.github.io/quests/rapp-brainstem.html" target="_blank" title="Guided training quest with checkpoints" onclick="showTourInvite()">📚 Tutorial</a>
+      <button class="toolbar-link" onclick="startFirstHour()" title="Your first hour, one step at a time">📚 Tutorial</button>
       <button class="toolbar-link" onclick="shareWithAdmin()" title="Share diagnostics with admin for help" style="color:#f0883e">🆘 Get Help</button>
       <button class="toolbar-link dev-only" onclick="toggleDevMode()" id="dev-toggle">Dev</button>
     </div>
@@ -3587,6 +3587,17 @@
   }).catch(() => {});
 
   // ── Actions ──
+  // Toolbar Tutorial: hand the chat to the bundled FirstHour agent. It only fills
+  // and focuses the box; the user presses Send. Asking to learn also brings the
+  // dismissed tour invite back.
+  function startFirstHour() {
+    input.value = 'Teach me my first hour';
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    input.focus();
+    if (window.showTourInvite) window.showTourInvite();
+  }
+
   function clearChat() {
     conversationEpoch += 1;
     cancelActiveRequests(true);
@@ -3613,7 +3624,7 @@
             <li><strong>Add Agents</strong>: Drag and drop any <code>agent.py</code> file directly onto this window to instantly teach me new things.</li>
           </ul>
           <p><em>Click one of the prompts below to get started!</em></p>
-          <p class="tour-invite-wrap"><button class="starter-btn tour-invite" onclick="startTour()">New here? Take the 5-minute guided tour</button><button class="tour-invite-hide" onclick="hideTourInvite()" title="Hide this — you can still find the Training Quest in the toolbar"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor"><path d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z"/></svg></button></p>
+          <p class="tour-invite-wrap"><button class="starter-btn tour-invite" onclick="startTour()">New here? Take the 5-minute guided tour</button><button class="tour-invite-hide" onclick="hideTourInvite()" title="Hide this — you can still find the Tutorial in the toolbar"><svg viewBox="0 0 16 16" style="width:10px;height:10px;fill:currentColor"><path d="M3.72 3.72a.75.75 0 011.06 0L8 6.94l3.22-3.22a.75.75 0 111.06 1.06L9.06 8l3.22 3.22a.75.75 0 11-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 01-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 010-1.06z"/></svg></button></p>
         </div>
       </div>
     `;
@@ -4146,7 +4157,7 @@
             <p class="tc-punch">Interview it. Teach it. Correct it. Trade agents.</p>
             <p>That method never changes, no matter how good the models get.</p>
             <p>Ready for the deep end? The <strong>VS Code button</strong> up top opens the workshop — GitHub Copilot builds new agents on this brainstem while you watch. It can't even tell Copilot and you apart.</p>
-            <p><em>Want to go further? The <a href="https://blazingbeard.github.io/quests/rapp-brainstem.html" target="_blank" style="color:#58a6ff">full Training Quest</a> picks up where this tour ends.</em></p>`,
+            <p><em>Want to go further? Click <strong>Tutorial</strong> in the toolbar and I'll teach you your first hour, one step at a time.</em></p>`,
           last: true
         }
       ];

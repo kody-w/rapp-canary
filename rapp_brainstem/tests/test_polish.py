@@ -220,6 +220,18 @@ def test_prompt_param_prefills_the_box_without_sending():
     assert "sendMessage" not in block and ".click()" not in block
 
 
+def test_tutorial_fills_the_first_hour_prompt_without_sending():
+    index = open(os.path.join(bs._BASE_DIR, "index.html"), encoding="utf-8").read()
+    button = re.search(r'<[^>]*onclick="startFirstHour\(\)"[^>]*>[^<]*Tutorial<', index).group(0)
+    assert button.startswith("<button") and "href=" not in button
+    start = index.index("function startFirstHour()")
+    body = index[start:index.index("\n  }\n", start)]
+    assert "input.value = 'Teach me my first hour';" in body
+    assert "input.focus();" in body and "showTourInvite" in body
+    assert "sendMessage" not in body and ".click()" not in body
+    assert os.path.exists(os.path.join(bs._BASE_DIR, "agents", "first_hour_agent.py"))
+
+
 def test_core_chat_controls_have_accessible_semantics():
     index = open(os.path.join(bs._BASE_DIR, "index.html"), encoding="utf-8").read()
     assert 'role="dialog" aria-modal="true"' in index

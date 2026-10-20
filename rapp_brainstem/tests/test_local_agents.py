@@ -709,6 +709,34 @@ class TestMemoryAgentIntegration(unittest.TestCase):
         )
 
 
+class TestFirstHourAgent(unittest.TestCase):
+    """The Tutorial button hands the chat to this bundled agent."""
+
+    def _agents_dir(self):
+        import brainstem
+
+        return os.path.join(os.path.dirname(os.path.abspath(brainstem.__file__)), "agents")
+
+    def test_loads_through_the_kernel_loader(self):
+        import brainstem
+
+        agents = brainstem._load_agent_from_file(
+            os.path.join(self._agents_dir(), "first_hour_agent.py"))
+        self.assertEqual(list(agents), ["FirstHour"])
+        tool = agents["FirstHour"].to_tool()
+        self.assertEqual(tool["function"]["name"], "FirstHour")
+
+    def test_walks_six_steps_and_clamps_bad_input(self):
+        import brainstem
+
+        agent = brainstem._load_agent_from_file(
+            os.path.join(self._agents_dir(), "first_hour_agent.py"))["FirstHour"]
+        self.assertTrue(agent.perform().startswith("Step 1 of 6:"))
+        self.assertTrue(agent.perform(step=6).startswith("Step 6 of 6:"))
+        self.assertTrue(agent.perform(step=99).startswith("Step 6 of 6:"))
+        self.assertTrue(agent.perform(step="next").startswith("Step 1 of 6:"))
+
+
 class TestHackerNewsAgent(unittest.TestCase):
 
     def _load(self):
