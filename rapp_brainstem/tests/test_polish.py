@@ -199,6 +199,13 @@ def test_chat_uses_normal_near_bottom_scrolling_without_first_exchange_repositio
     assert "const goal = chat.scrollHeight - chat.clientHeight" in stream
 
 
+def test_vscode_button_opens_outside_the_chat_tab():
+    index = open(os.path.join(bs._BASE_DIR, "index.html"), encoding="utf-8").read()
+    link = re.search(r'<a [^>]*id="vscode-link"[^>]*>', index).group(0)
+    assert 'target="_blank"' in link
+    assert 'rel="noopener noreferrer"' in link
+
+
 def test_core_chat_controls_have_accessible_semantics():
     index = open(os.path.join(bs._BASE_DIR, "index.html"), encoding="utf-8").read()
     assert 'role="dialog" aria-modal="true"' in index
