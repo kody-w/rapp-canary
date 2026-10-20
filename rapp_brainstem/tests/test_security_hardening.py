@@ -181,6 +181,36 @@ def test_diagnostics_report_scrubs_all_published_content(client, monkeypatch):
     )
 
 
+@pytest.mark.parametrize("value, expected", [
+    (None, "kody-w/rapp-support"),
+    ("", "kody-w/rapp-support"),
+    ("  acme/help-desk  ", "acme/help-desk"),
+    ("acme/help.desk_2", "acme/help.desk_2"),
+    ("acme/../evil", "kody-w/rapp-support"),
+    ("acme/..", "kody-w/rapp-support"),
+    ("https://github.com/acme/help", "kody-w/rapp-support"),
+    ("acme/help?x=1", "kody-w/rapp-support"),
+    ("-acme/help", "kody-w/rapp-support"),
+    ("acme", "kody-w/rapp-support"),
+])
+def test_support_repo_setting_accepts_only_owner_repo(value, expected):
+    assert bs._support_repo(value) == expected
+
+
+def test_support_repo_setting_drives_the_help_link(client, monkeypatch):
+    monkeypatch.setattr(bs, "SUPPORT_REPO", "acme/help-desk")
+    monkeypatch.setattr(bs, "_tlog_save", lambda: None)
+    monkeypatch.setattr(bs, "load_agents", lambda: {})
+    monkeypatch.setattr(bs, "_flight_log", [])
+    monkeypatch.setattr(
+        bs.requests, "post",
+        lambda *args, **kwargs: pytest.fail("Get Help must not create an issue"),
+    )
+    r = client.post("/diagnostics/report", json={"description": "x"})
+    assert r.status_code == 200
+    assert r.get_json()["issue_url"].startswith("https://github.com/acme/help-desk/issues/new?")
+
+
 def test_support_report_synthesis_uses_scrubbed_transcript_without_tools(monkeypatch):
     captured = {}
 

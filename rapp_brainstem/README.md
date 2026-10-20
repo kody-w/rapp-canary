@@ -161,6 +161,7 @@ All config is via environment variables in `.env` (auto-created from `.env.examp
 | `PORT` | `7071` | Server port. |
 | `BRAINSTEM_LAN_MODE` | `false` | Set `true` to bind all interfaces. Non-loopback capability routes require the per-install secret. |
 | `BRAINSTEM_ALLOWED_HOSTS` | *(empty)* | Optional comma-separated LAN hostnames. Loopback and private IP literals are handled automatically. |
+| `BRAINSTEM_SUPPORT_REPO` | *(built-in support repo)* | GitHub `owner/repo` that the Get Help button files issues to. Anything that is not a plain `owner/repo` uses the built-in default. |
 | `VOICE_ZIP_PASSWORD` | *(empty)* | Optional password used to unlock the encrypted `voice.zip` config for Azure Speech or ElevenLabs at startup. |
 
 ### LAN access

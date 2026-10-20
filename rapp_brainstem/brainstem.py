@@ -464,8 +464,21 @@ VERSION = open(_version_file, encoding="utf-8").read().strip() if os.path.exists
 
 COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
 # Where the in-app "Get Help" flow files issues. Users' help requests go to the
-# support repo, keeping the engineering tracker (this repo) clean.
-SUPPORT_REPO = "kody-w/rapp-support"
+# support repo, keeping the engineering tracker (this repo) clean. A distro can
+# point it at its own tracker with BRAINSTEM_SUPPORT_REPO; anything that isn't a
+# plain owner/repo falls back to the default so the link can never be bent.
+_DEFAULT_SUPPORT_REPO = "kody-w/rapp-support"
+_SUPPORT_REPO_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$")
+
+
+def _support_repo(value):
+    value = (value or "").strip()
+    if _SUPPORT_REPO_RE.match(value) and value.split("/", 1)[1] not in {".", ".."}:
+        return value
+    return _DEFAULT_SUPPORT_REPO
+
+
+SUPPORT_REPO = _support_repo(os.getenv("BRAINSTEM_SUPPORT_REPO"))
 # Immutable RAR release used by the built-in catalog. The browser verifies each
 # downloaded agent against the registry's SHA-256, and the import route verifies
 # the same digest before writing or importing any bytes.
