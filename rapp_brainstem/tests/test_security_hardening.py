@@ -346,6 +346,80 @@ def test_cors_allows_localhost_blocks_other_origins(client):
     assert bad.headers.get("Access-Control-Allow-Origin") is None
 
 
+def test_public_health_allows_default_origin_without_secret(client, monkeypatch):
+    def unexpected_secret_load():
+        raise AssertionError("public health must not load the LAN secret")
+
+    monkeypatch.setattr(bs, "_load_or_create_secret", unexpected_secret_load)
+    origin = "https://kody-w.github.io"
+    r = client.get(
+        "/health/public",
+        headers={"Origin": origin, "Sec-Fetch-Site": "cross-site"},
+        environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+    )
+
+    assert r.status_code == 200
+    assert r.get_json() == {"status": "ok", "version": bs.VERSION}
+    assert r.headers.get("Access-Control-Allow-Origin") == origin
+
+
+def test_public_health_does_not_allow_untrusted_origin_to_read(client):
+    r = client.get(
+        "/health/public",
+        headers={
+            "Origin": "https://attacker.example",
+            "Sec-Fetch-Site": "cross-site",
+        },
+        environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+    )
+
+    assert r.status_code == 200
+    assert r.headers.get("Access-Control-Allow-Origin") is None
+    assert set(r.get_json()) == {"status", "version"}
+
+
+def test_public_health_is_get_only_and_full_health_stays_guarded(client):
+    origin = "https://kody-w.github.io"
+    post = client.post("/health/public", headers={"Origin": origin, "Sec-Fetch-Site": "cross-site"})
+    assert post.status_code == 403  # the CSRF guard still refuses foreign unsafe methods
+    assert client.post("/health/public").status_code == 405
+    full = client.get(
+        "/health",
+        headers={"Origin": origin, "Sec-Fetch-Site": "cross-site"},
+        environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+    )
+    assert full.status_code == 403
+    assert full.headers.get("Access-Control-Allow-Origin") is None
+
+
+@pytest.mark.parametrize("value, expected", [
+    (None, ["https://kody-w.github.io"]),
+    ("  ", ["https://kody-w.github.io"]),
+    ("https://a.example, https://B.example:8443", ["https://a.example", "https://b.example:8443"]),
+    ("http://a.example,https://a.example/path,javascript:alert(1),*,https://ok.example",
+     ["https://ok.example"]),
+    ("https://a.example,https://a.example", ["https://a.example"]),
+    ("not-an-origin", []),
+])
+def test_public_origins_setting_accepts_only_https_origins(value, expected):
+    assert bs._public_origins(value) == expected
+
+
+def test_distro_settings_are_read_from_the_environment():
+    import subprocess
+    import sys
+    env = dict(os.environ,
+               BRAINSTEM_SUPPORT_REPO="acme/help-desk",
+               BRAINSTEM_PUBLIC_ORIGINS="https://acme.example,http://bad.example")
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import brainstem as b; print(b.SUPPORT_REPO); print(','.join(b._PUBLIC_ORIGINS))"],
+        cwd=bs._BASE_DIR, env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split() == ["acme/help-desk", "https://acme.example"]
+
+
 def test_foreign_origin_cannot_post_to_loopback(client, monkeypatch):
     called = {"chat": False}
 

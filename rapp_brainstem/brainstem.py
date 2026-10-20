@@ -36,7 +36,7 @@ from urllib.parse import urlencode, urlsplit
 
 import requests
 from flask import Flask, request, jsonify, redirect, send_from_directory, Response
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 from dotenv import load_dotenv
 
 # Banner/log lines contain emoji and em-dashes. On Windows a cp1252 console (or any
@@ -85,6 +85,28 @@ _LOCALHOST_ORIGIN_RE = re.compile(
     r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$", re.IGNORECASE
 )
 CORS(app, origins=_LOCALHOST_ORIGIN_RE)
+
+# /health/public (status + version, nothing else) may also be read cross-origin by
+# a few static install pages. BRAINSTEM_PUBLIC_ORIGINS overrides the list
+# (comma-separated); only bare https:// origins are accepted, the rest are ignored.
+_DEFAULT_PUBLIC_ORIGINS = "https://kody-w.github.io"
+_PUBLIC_ORIGIN_RE = re.compile(
+    r"^https://[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::\d{1,5})?$"
+)
+
+
+def _public_origins(value):
+    if value is None or not value.strip():
+        value = _DEFAULT_PUBLIC_ORIGINS
+    origins = []
+    for item in value.split(","):
+        origin = item.strip().lower()
+        if _PUBLIC_ORIGIN_RE.match(origin) and origin not in origins:
+            origins.append(origin)
+    return origins
+
+
+_PUBLIC_ORIGINS = _public_origins(os.getenv("BRAINSTEM_PUBLIC_ORIGINS"))
 
 # Cap request bodies so one giant POST can't exhaust memory (OOM). 16 MiB dwarfs any
 # real agent .py, voice.zip, or chat payload while blocking abuse; Flask returns 413.
@@ -3187,6 +3209,18 @@ def health():
             "quarantined": _quarantine_snapshot(),
             "auth_error": "invalid_credentials" if invalid_credential else None,
         })
+
+
+@app.route("/health/public", methods=["GET"])
+@cross_origin(origins=_PUBLIC_ORIGINS + [_LOCALHOST_ORIGIN_RE], methods=["GET"])
+def public_health():
+    """Minimal readiness signal for static install pages: no agents, auth or paths,
+    so it needs no secret and is safe to share with _PUBLIC_ORIGINS."""
+    return jsonify({
+        "status": "ok",
+        "version": VERSION,
+    })
+
 
 @app.route("/debug/auth", methods=["GET"])
 def debug_auth():

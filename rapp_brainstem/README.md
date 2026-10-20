@@ -100,6 +100,16 @@ Returns server status, loaded agents, model, and auth state.
 
 Returns `"status": "unauthenticated"` (still 200) if the Copilot token is missing — the web UI detects this and shows the login overlay.
 
+### `GET /health/public`
+
+Readiness only, for static web pages (such as an install page) that check whether a
+brainstem is running. Needs no secret and never reports agents, auth, or paths.
+Cross-origin reads are allowed for localhost and `BRAINSTEM_PUBLIC_ORIGINS`.
+
+```json
+{ "status": "ok", "version": "0.1.0" }
+```
+
 ### `GET /version`
 
 ```json
@@ -162,6 +172,7 @@ All config is via environment variables in `.env` (auto-created from `.env.examp
 | `BRAINSTEM_LAN_MODE` | `false` | Set `true` to bind all interfaces. Non-loopback capability routes require the per-install secret. |
 | `BRAINSTEM_ALLOWED_HOSTS` | *(empty)* | Optional comma-separated LAN hostnames. Loopback and private IP literals are handled automatically. |
 | `BRAINSTEM_SUPPORT_REPO` | *(built-in support repo)* | GitHub `owner/repo` that the Get Help button files issues to. Anything that is not a plain `owner/repo` uses the built-in default. |
+| `BRAINSTEM_PUBLIC_ORIGINS` | `https://kody-w.github.io` | Comma-separated `https://` origins (no path) that may read `GET /health/public` from a web page. Invalid entries are ignored. |
 | `VOICE_ZIP_PASSWORD` | *(empty)* | Optional password used to unlock the encrypted `voice.zip` config for Azure Speech or ElevenLabs at startup. |
 
 ### LAN access
