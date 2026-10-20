@@ -206,6 +206,20 @@ def test_vscode_button_opens_outside_the_chat_tab():
     assert 'rel="noopener noreferrer"' in link
 
 
+def test_prompt_param_prefills_the_box_without_sending():
+    index = open(os.path.join(bs._BASE_DIR, "index.html"), encoding="utf-8").read()
+    start = index.index("const prefilledPrompt")
+    block = index[start:index.index("input.addEventListener('input'", start)]
+    assert ".get('prompt')" in block
+    assert "input.value = prefilledPrompt.slice(0, 4000);" in block
+    assert "input.focus();" in block
+    assert "searchParams.delete('prompt')" in block
+    # `history` is the chat-history array in this script; only window.history works.
+    assert "window.history.replaceState(" in block
+    assert re.search(r"(?<![.\w])history\.replaceState", block) is None
+    assert "sendMessage" not in block and ".click()" not in block
+
+
 def test_core_chat_controls_have_accessible_semantics():
     index = open(os.path.join(bs._BASE_DIR, "index.html"), encoding="utf-8").read()
     assert 'role="dialog" aria-modal="true"' in index
