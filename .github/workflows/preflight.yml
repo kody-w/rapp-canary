@@ -14,6 +14,9 @@
 #   fresh-nopip — Windows only: Python exists but has NO pip module (corp-managed
 #             images, stripped installs — the machine class behind the v0.6.2
 #             field failure). The installer must bootstrap pip itself.
+#   fresh-badvenv — Windows only: the first `python3` on PATH makes venvs with no
+#             pip and cannot repair them (issue #43, the Store-Python class). The
+#             installer must rebuild the venv from another Python, never say [OK].
 #
 # See RELEASING.md for the full release process this belongs to.
 
@@ -119,15 +122,42 @@ jobs:
         include:
           - os: windows-latest
             scenario: fresh-nopip
+          - os: windows-latest
+            scenario: fresh-badvenv
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # existing-install scenarios need real origin/main as the baseline
 
+      - id: py312
+        if: matrix.scenario == 'fresh-badvenv'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      # Issue #43 machine class: a Python that runs and reports a version but makes
+      # venvs without pip and cannot repair them. A copy of 3.12 with ensurepip
+      # removed, exposed only as `python3` and first on PATH (installers try
+      # python3 first, as they would hit the Store alias).
+      - name: put a venv-breaking python3 first on PATH (fresh-badvenv)
+        if: matrix.scenario == 'fresh-badvenv'
+        shell: powershell
+        run: |
+          $src = Split-Path -Parent "${{ steps.py312.outputs.python-path }}"
+          $bad = Join-Path $env:RUNNER_TEMP 'badpy'
+          Copy-Item -Recurse $src $bad
+          Remove-Item -Recurse -Force (Join-Path $bad 'Lib\ensurepip')
+          Copy-Item (Join-Path $bad 'python.exe') (Join-Path $bad 'python3.exe')
+          Remove-Item (Join-Path $bad 'python.exe'), (Join-Path $bad 'pythonw.exe') -ErrorAction SilentlyContinue
+          & (Join-Path $bad 'python3.exe') -m venv (Join-Path $env:RUNNER_TEMP 'probe') 2>&1 | Out-String | Write-Host
+          if (Test-Path (Join-Path $env:RUNNER_TEMP 'probe\Scripts\pip.exe')) { Write-Host 'probe venv has pip: setup did not break venvs'; exit 1 }
+          Write-Host 'python3 now makes venvs without pip, as on the issue #43 machine'
+          Add-Content -Path $env:GITHUB_PATH -Value $bad
 
       # Recreate the machine class behind the v0.6.2 field failure (2026-07-02):
       # Python is present and healthy but `python -m pip` fails with "No module
@@ -261,6 +291,16 @@ jobs:
           curl -sf http://localhost:7071/models >/dev/null
           curl -s -X POST http://localhost:7071/chat -H 'Content-Type: application/json' \
             -d '{"user_input":"preflight ping"}' | python3 -c "import json,sys; d=json.load(sys.stdin); print('chat contract OK:', list(d)[:3])"
+
+      - name: assert the venv was rebuilt from a working Python (fresh-badvenv)
+        if: matrix.scenario == 'fresh-badvenv'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          grep -a "Rebuilt the virtual environment" "$RUNNER_TEMP/install.log"
+          cfg="$HOME/.brainstem/venv/pyvenv.cfg"; cat "$cfg"
+          ! grep -qi badpy "$cfg"
+          "$HOME/.brainstem/venv/Scripts/python.exe" -m pip --version
 
       - name: assert user files survived the upgrade
         if: matrix.scenario == 'upgrade'
