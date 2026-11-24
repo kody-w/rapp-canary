@@ -7,6 +7,14 @@ PASS=0
 FAIL=0
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Python for the checks that need the Brainstem's packages (requests, pytest).
+# Order: $PYTHON if set, python3 if it has them, else the installed Brainstem's own.
+PY="${PYTHON:-python3}"
+if [ -z "${PYTHON:-}" ] && ! python3 -c "import requests, pytest" 2>/dev/null \
+   && [ -x "$HOME/.brainstem/venv/bin/python" ]; then
+    PY="$HOME/.brainstem/venv/bin/python"
+fi
+
 pass() { PASS=$((PASS + 1)); echo "  ✓ $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1"; }
 
@@ -294,7 +302,7 @@ done
 if ! ls "$TMP_AGENTS"/*_agent.py >/dev/null 2>&1; then
     cp "$REPO_ROOT"/rapp_brainstem/agents/*.py "$TMP_AGENTS/" 2>/dev/null || true
 fi
-AGENT_TEST=$(cd "$REPO_ROOT/rapp_brainstem" && AGENTS_PATH="$TMP_AGENTS" python3 -c "
+AGENT_TEST=$(cd "$REPO_ROOT/rapp_brainstem" && AGENTS_PATH="$TMP_AGENTS" "$PY" -c "
 import sys
 sys.path.insert(0, '.')
 import brainstem
@@ -349,7 +357,7 @@ echo ""
 
 echo "--- unit tests (tests/) ---"
 cd "$REPO_ROOT/rapp_brainstem"
-if python3 -m pytest tests/ -x --tb=short -q 2>&1; then
+if "$PY" -m pytest tests/ -x --tb=short -q 2>&1; then
     pass "unit tests passed"
 else
     fail "unit tests failed"
