@@ -13,6 +13,17 @@ pushes to it. Two rules prevent the classic staged-train failures:
 that edge **when an operator runs it** — there is no scheduled automation and
 no workflow holds write credentials. The Grail edge refuses the tool entirely.
 
+## 0. THE CLIMB RULES (every change, every ring)
+
+Every change follows the kernel climb in rapp-1 (`KERNEL-CLIMB.md`): the kernel stays
+frozen by hash; improvements live at the edges; one ring at a time with that ring's CI
+plus a hands-on check; every climb runs one identical check list on the Grail and each
+ring and keeps one line per Brainstem; a red stops the climb and is fixed where it
+lives, never retried past; every step records its go or no-go and why; Grail entry
+needs a reason a user would feel, and the owner decides. Keep each climb's record
+(change, before/after scores, undo, run links, decision, reason) outside this repo in
+the owner's private loop record.
+
 ## 1. DEVELOP (all work starts here)
 
 ```bash
