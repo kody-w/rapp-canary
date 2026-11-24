@@ -7,7 +7,7 @@
 #   --quick skips the sandboxed fresh install (the slow check).
 set -uo pipefail
 
-WORK="${1:-${TMPDIR:-/tmp}/compare-brainstems}"
+WORK="${TMPDIR:-/tmp}/compare-brainstems"; for a in "$@"; do case "$a" in --*) ;; *) WORK="$a" ;; esac; done
 QUICK=0; for a in "$@"; do [ "$a" = "--quick" ] && QUICK=1; done
 PY="${PYTHON:-}"
 if [ -z "$PY" ]; then
