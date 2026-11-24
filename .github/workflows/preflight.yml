@@ -154,7 +154,9 @@ jobs:
           Remove-Item -Recurse -Force (Join-Path $bad 'Lib\ensurepip')
           Copy-Item (Join-Path $bad 'python.exe') (Join-Path $bad 'python3.exe')
           Remove-Item (Join-Path $bad 'python.exe'), (Join-Path $bad 'pythonw.exe') -ErrorAction SilentlyContinue
+          & (Join-Path $bad 'python3.exe') -c "import sys,importlib.util as u; print('prefix', sys.prefix); print('base', sys.base_prefix); print('ensurepip', u.find_spec('ensurepip'))" 2>&1 | Out-String | Write-Host
           & (Join-Path $bad 'python3.exe') -m venv (Join-Path $env:RUNNER_TEMP 'probe') 2>&1 | Out-String | Write-Host
+          Get-Content (Join-Path $env:RUNNER_TEMP 'probe\pyvenv.cfg') -ErrorAction SilentlyContinue | Write-Host
           if (Test-Path (Join-Path $env:RUNNER_TEMP 'probe\Scripts\pip.exe')) { Write-Host 'probe venv has pip: setup did not break venvs'; exit 1 }
           Write-Host 'python3 now makes venvs without pip, as on the issue #43 machine'
           Add-Content -Path $env:GITHUB_PATH -Value $bad
