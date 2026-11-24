@@ -210,6 +210,8 @@ function Setup-Venv {
         & $venvPy -c "import sys" 2>&1 | Out-Null
         $ok = ($LASTEXITCODE -eq 0)
         $ErrorActionPreference = $prev
+        # A venv that runs but has no pip is broken too (issue #43).
+        if ($ok -and -not (Test-PipWorks $venvPy)) { $ok = $false }
         if ($ok) {
             Write-Host "  [OK] Virtual environment OK" -ForegroundColor Green
             return
@@ -233,6 +235,57 @@ function Setup-Venv {
     if (-not (Test-Path (Get-VenvPython))) {
         Write-Host "  [X] Failed to create virtual environment at $VENV_DIR" -ForegroundColor Red
         throw "venv creation failed"
+    }
+
+    # The venv must have a working pip before it counts as ready (issue #43): a
+    # genuinely installed Microsoft Store Python runs and reports a version but can
+    # produce a venv with no pip. Prime pip once; if that fails, rebuild the venv from
+    # the next Python found, skipping the Store copy.
+    if (-not (Test-PipWorks (Get-VenvPython))) {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        & (Get-VenvPython) -m ensurepip --upgrade --default-pip 2>&1 | Out-Null
+        $ErrorActionPreference = $prev
+    }
+    if (-not (Test-PipWorks (Get-VenvPython))) {
+        Write-Host "  [..] Virtual environment from '$sysPy' has no pip - trying another Python..." -ForegroundColor Yellow
+        $tried = @($sysPy)
+        $candidates = @()
+        foreach ($cmd in @("python", "python3")) {
+            foreach ($c in @(Get-Command $cmd -All -ErrorAction SilentlyContinue)) {
+                if ($c.Source) { $candidates += $c.Source }
+            }
+        }
+        $candidates += @(
+            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+            "$env:ProgramFiles\Python312\python.exe",
+            "$env:ProgramFiles\Python311\python.exe"
+        )
+        $fixed = $false
+        foreach ($cand in $candidates) {
+            if (-not $cand -or ($tried -contains $cand)) { continue }
+            if ($cand -like "*\WindowsApps\*") { continue }
+            if (-not (Test-Path $cand)) { continue }
+            $tried += $cand
+            $prev = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            Remove-Item -Recurse -Force $VENV_DIR -ErrorAction SilentlyContinue
+            & $cand -m venv $VENV_DIR 2>&1 | Out-Null
+            $ErrorActionPreference = $prev
+            if ((Test-Path (Get-VenvPython)) -and (Test-PipWorks (Get-VenvPython))) {
+                $script:PythonExe = $cand
+                Write-Host "  [OK] Rebuilt the virtual environment from $cand" -ForegroundColor Green
+                $fixed = $true
+                break
+            }
+        }
+        if (-not $fixed) {
+            Write-Host "  [X] The virtual environment has no pip, and no other Python made one that does." -ForegroundColor Red
+            Write-Host "      Tried: $($tried -join ', ')" -ForegroundColor Yellow
+            Write-Host "      Install Python from https://python.org (not the Microsoft Store), then re-run." -ForegroundColor Yellow
+            throw "venv has no pip"
+        }
     }
 
     # Upgrade pip inside the venv (best-effort; venv already ships pip).
