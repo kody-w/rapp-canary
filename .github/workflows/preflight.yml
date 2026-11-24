@@ -119,6 +119,10 @@ jobs:
         include:
           - os: windows-latest
             scenario: fresh-nopip
+          - os: windows-latest
+            scenario: fresh-blocked
+          - os: ubuntu-latest
+            scenario: fresh-blocked
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -143,6 +147,27 @@ jobs:
           if ($LASTEXITCODE -eq 0) { Write-Host 'strip failed — pip still importable'; exit 1 }
           Write-Host 'pip stripped: python -m pip now fails, as on the field machine'
           exit 0
+
+      # A company network that blocks the Python package server (files.pythonhosted.org).
+      # The installer must fall back to the offline bundle. github.com is blocked later for every
+      # scenario, so the real release zip is fetched now and served locally at the same path.
+      - name: block the package server, serve the offline bundle (fresh-blocked)
+        if: matrix.scenario == 'fresh-blocked'
+        shell: bash
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          set -euxo pipefail
+          plat=$(python -c "import platform,sys;print(platform.system().lower()+'-'+platform.machine().lower()+'-py%d.%d'%sys.version_info[:2])")
+          mkdir -p "$RUNNER_TEMP/whsrv"
+          gh release download wheelhouse -R "$GITHUB_REPOSITORY" -p "wheelhouse-$plat.zip" -D "$RUNNER_TEMP/whsrv"
+          (cd "$RUNNER_TEMP/whsrv" && nohup python -m http.server 8765 >/dev/null 2>&1 &)
+          echo "BRAINSTEM_WHEELHOUSE_URL=http://127.0.0.1:8765" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = Windows ]; then
+            echo "0.0.0.0 files.pythonhosted.org" >> /c/Windows/System32/drivers/etc/hosts
+          else
+            echo "0.0.0.0 files.pythonhosted.org" | sudo tee -a /etc/hosts
+          fi
+          python -m pip download --no-cache-dir --no-deps -d "$RUNNER_TEMP/x" requests==2.32.3 && { echo "package server still reachable"; exit 1; } || echo "package server blocked, as on the field network"
 
       # The fake origin: a bare repo whose `main` IS the candidate commit.
       # url.insteadOf makes the unmodified installers clone/fetch it instead of GitHub.
@@ -261,6 +286,11 @@ jobs:
           curl -sf http://localhost:7071/models >/dev/null
           curl -s -X POST http://localhost:7071/chat -H 'Content-Type: application/json' \
             -d '{"user_input":"preflight ping"}' | python3 -c "import json,sys; d=json.load(sys.stdin); print('chat contract OK:', list(d)[:3])"
+
+      - name: assert the offline bundle was used (fresh-blocked)
+        if: matrix.scenario == 'fresh-blocked'
+        shell: bash
+        run: grep -a "Installed from the offline bundle" "$RUNNER_TEMP/install.log"
 
       - name: assert user files survived the upgrade
         if: matrix.scenario == 'upgrade'
