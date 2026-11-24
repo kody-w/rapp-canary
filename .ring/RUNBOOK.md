@@ -24,6 +24,13 @@ needs a reason a user would feel, and the owner decides. Keep each climb's recor
 (change, before/after scores, undo, run links, decision, reason) outside this repo in
 the owner's private loop record.
 
+Rule 4 in one command (read-only; shallow clones and sandboxed installs only):
+
+```bash
+.ring/tools/compare_brainstems.sh /tmp/compare-brainstems          # full, ~10 min
+.ring/tools/compare_brainstems.sh /tmp/compare-brainstems --quick  # skip sandbox installs
+```
+
 ## 1. DEVELOP (all work starts here)
 
 ```bash
