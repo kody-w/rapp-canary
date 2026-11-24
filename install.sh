@@ -462,12 +462,37 @@ setup_venv() {
     echo -e "  ${GREEN}✓${NC} Virtual environment ready"
 }
 
+# Install the Brainstem's Python packages. If the package server is blocked (common on company
+# networks), fall back to the offline bundle on GitHub, built per OS/chip/Python by wheelhouse.yml.
+WHEELHOUSE_URL="${BRAINSTEM_WHEELHOUSE_URL:-https://github.com/kody-w/rapp-canary/releases/download/wheelhouse}"
+install_requirements() {
+    local req_file="$1"
+    "$VENV_DIR/bin/pip" install -r "$req_file" --quiet --disable-pip-version-check --retries 1 --timeout 15 2>/dev/null && return 0
+    if curl -s -o /dev/null --max-time 8 https://files.pythonhosted.org/ 2>/dev/null; then
+        "$VENV_DIR/bin/pip" install -r "$req_file" || true
+        return 0
+    fi
+    local plat zip tmp
+    plat=$("$VENV_DIR/bin/python" -c "import platform,sys;print(platform.system().lower()+'-'+platform.machine().lower().replace('amd64','amd64')+'-py%d.%d'%sys.version_info[:2])")
+    zip="wheelhouse-$plat.zip"; tmp=$(mktemp -d)
+    echo -e "  ${YELLOW}!${NC} This network blocks the Python package server; using the offline bundle ($zip)..."
+    if curl -fsSL --max-time 120 "$WHEELHOUSE_URL/$zip" -o "$tmp/$zip" \
+        && "$VENV_DIR/bin/python" -m zipfile -e "$tmp/$zip" "$tmp/wh" \
+        && "$VENV_DIR/bin/pip" install -q --no-index --find-links "$tmp/wh" -r "$req_file"; then
+        echo -e "  ${GREEN}✓${NC} Installed from the offline bundle"
+    else
+        echo -e "  ${RED}✗${NC} This computer cannot reach the Python package download server (files.pythonhosted.org),"
+        echo "    and no offline bundle fits it ($zip). Connect to another network or ask IT to allow it, then run the installer again."
+    fi
+    rm -rf "$tmp"
+    return 0
+}
+
 setup_deps() {
     echo ""
     echo "Installing dependencies..."
     local req_file="$BRAINSTEM_HOME/src/rapp_brainstem/requirements.txt"
-    "$VENV_DIR/bin/pip" install -r "$req_file" --quiet 2>/dev/null || \
-        "$VENV_DIR/bin/pip" install -r "$req_file"
+    install_requirements "$req_file"
 
     # Verify the critical imports actually work
     if ! "$VENV_DIR/bin/python" -c "import flask, flask_cors, requests, dotenv" 2>/dev/null; then
@@ -487,8 +512,7 @@ ensure_deps() {
 
     echo -e "  ${YELLOW}⚠${NC} Missing dependencies — installing..."
     local req_file="$BRAINSTEM_HOME/src/rapp_brainstem/requirements.txt"
-    "$VENV_DIR/bin/pip" install -r "$req_file" --quiet 2>/dev/null || \
-        "$VENV_DIR/bin/pip" install -r "$req_file"
+    install_requirements "$req_file"
 
     if ! "$VENV_DIR/bin/python" -c "import flask, flask_cors, requests, dotenv" 2>/dev/null; then
         echo -e "  ${RED}✗${NC} Dependencies failed — try: $VENV_DIR/bin/pip install -r $req_file"
