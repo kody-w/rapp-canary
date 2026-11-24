@@ -290,7 +290,10 @@ jobs:
       - name: assert the offline bundle was used (fresh-blocked)
         if: matrix.scenario == 'fresh-blocked'
         shell: bash
-        run: grep -a "Installed from the offline bundle" "$RUNNER_TEMP/install.log"
+        run: |
+          # the pty recorder flushes in chunks; give the line up to 30s to land
+          for i in $(seq 1 30); do grep -aq "Installed from the offline bundle" "$RUNNER_TEMP/install.log" && { echo "offline bundle used"; exit 0; }; sleep 1; done
+          tail -40 "$RUNNER_TEMP/install.log"; exit 1
 
       - name: assert user files survived the upgrade
         if: matrix.scenario == 'upgrade'
