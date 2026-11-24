@@ -159,7 +159,7 @@ jobs:
           set -euxo pipefail
           plat=$(python -c "import platform,sys;print(platform.system().lower()+'-'+platform.machine().lower()+'-py%d.%d'%sys.version_info[:2])")
           mkdir -p "$RUNNER_TEMP/whsrv"
-          gh release download wheelhouse -R "$GITHUB_REPOSITORY" -p "wheelhouse-$plat.zip" -D "$RUNNER_TEMP/whsrv"
+          gh release download wheelhouse -R kody-w/rapp-canary -p "wheelhouse-$plat.zip" -D "$RUNNER_TEMP/whsrv"
           (cd "$RUNNER_TEMP/whsrv" && nohup python -m http.server 8765 >/dev/null 2>&1 &)
           echo "BRAINSTEM_WHEELHOUSE_URL=http://127.0.0.1:8765" >> "$GITHUB_ENV"
           if [ "$RUNNER_OS" = Windows ]; then
