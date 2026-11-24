@@ -691,6 +691,27 @@ function Install-Brainstem {
     Write-Host "  [OK] Source code ready" -ForegroundColor Green
 }
 
+# When the package server is blocked (common on company networks), install from the offline
+# bundle on GitHub, built per OS/chip/Python by .github/workflows/wheelhouse.yml.
+function Install-FromWheelhouse($py, $reqFile) {
+    $base = if ($env:BRAINSTEM_WHEELHOUSE_URL) { $env:BRAINSTEM_WHEELHOUSE_URL } else { "https://github.com/kody-w/rapp-canary/releases/download/wheelhouse" }
+    try { Invoke-WebRequest -Uri "https://files.pythonhosted.org/" -Method Head -TimeoutSec 8 -UseBasicParsing | Out-Null; return } catch { }
+    $plat = (& $py -c "import platform,sys;print(platform.system().lower()+'-'+platform.machine().lower()+'-py%d.%d'%sys.version_info[:2])").Trim()
+    $zip = "wheelhouse-$plat.zip"
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("wh-" + [guid]::NewGuid())
+    New-Item -ItemType Directory -Path $tmp | Out-Null
+    Write-Host "  [!] This network blocks the Python package server; using the offline bundle ($zip)..." -ForegroundColor Yellow
+    try {
+        Invoke-WebRequest -Uri "$base/$zip" -OutFile "$tmp\$zip" -TimeoutSec 120 -UseBasicParsing
+        Expand-Archive -Path "$tmp\$zip" -DestinationPath "$tmp\wh" -Force
+        & $py -m pip install -q --no-index --find-links "$tmp\wh" -r $reqFile 2>&1 | ForEach-Object { "$_" }
+        if ($LASTEXITCODE -eq 0) { Write-Host "  [OK] Installed from the offline bundle" -ForegroundColor Green }
+    } catch {
+        Write-Host "  [X] This computer cannot reach the Python package download server (files.pythonhosted.org)," -ForegroundColor Red
+        Write-Host "      and no offline bundle fits it ($zip). Connect to another network or ask IT to allow it, then run the installer again."
+    } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+}
+
 function Run-PipInstall {
     $reqFile = "$BRAINSTEM_HOME\src\rapp_brainstem\requirements.txt"
     # Install into the venv (issue #29). The venv created by Setup-Venv already ships
@@ -716,6 +737,7 @@ function Run-PipInstall {
         if ($LASTEXITCODE -ne 0 -and $py -ne (Get-VenvPython)) {
             & $py -m pip install -r $reqFile --user 2>&1 | ForEach-Object { "$_" }
         }
+        if ($LASTEXITCODE -ne 0) { Install-FromWheelhouse $py $reqFile }
     } finally {
         $ErrorActionPreference = $prev
     }
