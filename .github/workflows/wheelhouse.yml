@@ -1,0 +1,39 @@
+name: wheelhouse
+# Offline package bundle for networks that block the Python package server (installer climb item 1).
+# Wheels are per OS, chip and Python version, so each runner builds its own (lesson from pip/VS Code offline installs).
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/wheelhouse]
+    paths: [rapp_brainstem/requirements.txt, .github/workflows/wheelhouse.yml]
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+        py: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.py }}" }
+      - name: Download every package and its dependencies
+        shell: bash
+        run: |
+          python -m pip download -r rapp_brainstem/requirements.txt pip setuptools wheel -d wheelhouse
+          python -m venv proof && P=proof/bin/python; [ -x "$P" ] || P=proof/Scripts/python.exe
+          "$P" -m pip install --no-index --find-links wheelhouse -r rapp_brainstem/requirements.txt
+          "$P" -c "import flask, flask_cors, requests, dotenv, pyzipper; print('offline install ok')"
+          python -c "import platform,sys;print(platform.system().lower()+'-'+platform.machine().lower()+'-py'+'%d.%d'%sys.version_info[:2])" > wheelhouse/PLATFORM
+          ls wheelhouse | wc -l
+      - name: Publish to the wheelhouse release (one zip per OS/chip/Python)
+        shell: bash
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          name="wheelhouse-$(cat wheelhouse/PLATFORM).zip"
+          python -c "import shutil;shutil.make_archive('out','zip','wheelhouse')" && mv out.zip "$name"
+          gh release view wheelhouse >/dev/null 2>&1 || gh release create wheelhouse --title "Offline package bundles" --notes "Python packages for networks that block the package server. One zip per OS, chip and Python version." --prerelease || true
+          gh release upload wheelhouse "$name" --clobber
